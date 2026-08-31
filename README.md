@@ -1,7 +1,7 @@
 # OpenVaultDB Cloud
 
-This repository contains the public OpenVaultDB Cloud control plane and browser
-authorization service deployed at `https://cloud.openvaultdb.com`.
+This repository contains the public OpenVaultDB Cloud browser surface and API
+facade deployed at `https://cloud.openvaultdb.com`.
 
 The first implemented surface is OAuth 2.0 Device Authorization Grant support
 for first-party command-line clients:
@@ -13,12 +13,18 @@ for first-party command-line clients:
 - `GET /oauth/userinfo` verifies the stored bearer token and reports its grant;
 - `POST /oauth/revoke` revokes a credential immediately.
 
-Pending authorizations and revocable access-token digests live in Cloudflare
-D1. Raw device codes and access tokens are never stored. Access tokens default
-to one year and every API use checks current revocation state. Cloudflare rate
-limit bindings protect public code creation, lookup, and polling endpoints.
-An isolated daily job expires pending grants and removes authorization/token
-state after a bounded retention window.
+Pending authorizations and revocable access-token digests live in the existing
+Sneat Co. Firestore database and are owned by `github.com/sneat-co/ovdb/backend`.
+Raw device codes and access tokens are never stored. HMAC-derived lookup IDs
+make the short user code non-enumerable without the backend pepper. Access
+tokens default to one year and every API use checks current revocation state.
+Cloudflare rate-limit bindings protect public code creation, lookup, and
+polling endpoints.
+
+The Worker contains no authorization business state. It serves `/device`,
+publishes the stable OAuth paths used by the CLI, and proxies them to the OVDB
+backend with a dedicated shared secret. The backend rejects direct calls that
+do not carry that secret, preventing callers from bypassing the edge limits.
 
 OpenVaultDB Cloud uses the verified `sneat-eur3-1` Firebase UID directly as the
 Sneat Co. `userID`; it does not create a second OpenVaultDB account identifier.
@@ -40,11 +46,6 @@ npm run check
 npm run dev
 ```
 
-Apply D1 migrations locally before manual browser testing:
-
-```sh
-npx wrangler d1 migrations apply openvaultdb-cloud --local
-```
-
 The Firebase browser configuration is public by design. Firebase authorization
-and D1 data access are enforced by the Worker, not by hiding browser config.
+is verified by the Sneat Co. backend. Put `OVDB_DEVICE_AUTH_PROXY_SECRET` in a
+local `.dev.vars` file for manual Worker development; never commit it.

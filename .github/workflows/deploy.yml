@@ -34,8 +34,5 @@ jobs:
       - name: Verify the exact deployment candidate
         run: npm run check
 
-      - name: Apply remote D1 migrations
-        run: npx wrangler d1 migrations apply openvaultdb-cloud --remote
-
-      - name: Deploy Worker, assets, schedule, and custom domain
+      - name: Deploy Worker, assets, and custom domain
         run: npm run deploy

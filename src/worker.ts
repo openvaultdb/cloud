@@ -1,21 +1,15 @@
-import { verifyFirebaseIdentity, type VerifyIdentity } from "./firebase";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import {
-  authorizationServerMetadata,
-  cleanupExpiredState,
-  handleAuthorizationDecision,
-  handleAuthorizationPreview,
-  handleDeviceAuthorization,
-  handleTokenExchange,
-  handleTokenRevocation,
-  handleUserInfo,
-} from "./oauth";
+  proxyDeviceAuthorization,
+  type DeviceAuthEnv,
+  type UpstreamFetch,
+} from "./proxy";
 
 export function createWorker(
-  verifyIdentity: VerifyIdentity = verifyFirebaseIdentity,
+  upstreamFetch: UpstreamFetch = fetch,
 ): ExportedHandler<Env> {
   return {
-    async fetch(request, env, ctx): Promise<Response> {
+    async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
         if (url.pathname === "/.well-known/oauth-authorization-server") {
@@ -31,7 +25,12 @@ export function createWorker(
               429,
             );
           }
-          return handleDeviceAuthorization(request, env);
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/code",
+            upstreamFetch,
+          );
         }
         if (url.pathname === "/oauth/token") {
           if (request.method !== "POST") return methodNotAllowed("POST");
@@ -41,29 +40,60 @@ export function createWorker(
               429,
             );
           }
-          return handleTokenExchange(request, env);
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/token",
+            upstreamFetch,
+          );
         }
         if (url.pathname === "/oauth/userinfo") {
-          return request.method === "GET"
-            ? handleUserInfo(request, env, ctx)
-            : methodNotAllowed("GET");
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "userinfo"))) {
+            return jsonResponse({ error: "temporarily_unavailable" }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/userinfo",
+            upstreamFetch,
+          );
         }
         if (url.pathname === "/oauth/revoke") {
-          return request.method === "POST"
-            ? handleTokenRevocation(request, env)
-            : methodNotAllowed("POST");
+          if (request.method !== "POST") return methodNotAllowed("POST");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "revoke"))) {
+            return jsonResponse({ error: "temporarily_unavailable" }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/revoke",
+            upstreamFetch,
+          );
         }
         if (url.pathname === "/api/device-authorization") {
           if (request.method !== "GET") return methodNotAllowed("GET");
           if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "preview"))) {
             return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
           }
-          return handleAuthorizationPreview(request, env);
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/preview",
+            upstreamFetch,
+          );
         }
         if (url.pathname === "/api/device-authorization/decision") {
-          return request.method === "POST"
-            ? handleAuthorizationDecision(request, env, verifyIdentity)
-            : methodNotAllowed("POST");
+          if (request.method !== "POST") return methodNotAllowed("POST");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "decision"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/decision",
+            upstreamFetch,
+          );
         }
 
         if (request.method !== "GET" && request.method !== "HEAD") {
@@ -90,10 +120,20 @@ export function createWorker(
         return jsonResponse({ error: "The service could not complete the request." }, 500);
       }
     },
-    scheduled(_controller, env, ctx): void {
-      ctx.waitUntil(cleanupExpiredState(env.DB));
-    },
   };
+}
+
+function authorizationServerMetadata(env: Env): Response {
+  const grantType = "urn:ietf:params:oauth:grant-type:device_code";
+  return jsonResponse({
+    issuer: env.PUBLIC_ORIGIN,
+    device_authorization_endpoint: `${env.PUBLIC_ORIGIN}/oauth/device/code`,
+    token_endpoint: `${env.PUBLIC_ORIGIN}/oauth/token`,
+    revocation_endpoint: `${env.PUBLIC_ORIGIN}/oauth/revoke`,
+    grant_types_supported: [grantType],
+    token_endpoint_auth_methods_supported: ["none"],
+    scopes_supported: ["account:read"],
+  });
 }
 
 async function allowRequest(

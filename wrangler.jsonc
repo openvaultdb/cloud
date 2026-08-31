@@ -17,14 +17,6 @@
     "run_worker_first": true,
     "not_found_handling": "404-page"
   },
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "openvaultdb-cloud",
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "migrations"
-    }
-  ],
   "ratelimits": [
     {
       "name": "DEVICE_START_LIMITER",
@@ -44,11 +36,8 @@
     }
   ],
   "vars": {
-    "FIREBASE_PROJECT_ID": "sneat-eur3-1",
-    "PUBLIC_ORIGIN": "https://cloud.openvaultdb.com"
-  },
-  "triggers": {
-    "crons": ["0 4 * * *"]
+    "PUBLIC_ORIGIN": "https://cloud.openvaultdb.com",
+    "SNEAT_API_ORIGIN": "https://api.sneat.cloud"
   },
   "observability": {
     "enabled": true,

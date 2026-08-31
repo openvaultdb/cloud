@@ -93,7 +93,7 @@ async function lookupAuthorization(rawCode) {
       `/api/device-authorization?user_code=${encodeURIComponent(userCode)}`,
       { headers: { Accept: "application/json" } },
     );
-    const body = await response.json();
+    const body = await readResponseBody(response);
     if (!response.ok) {
       throw new Error(body.error || "That device code could not be checked.");
     }
@@ -202,7 +202,7 @@ async function decide(decision) {
         decision,
       }),
     });
-    const body = await response.json();
+    const body = await readResponseBody(response);
     if (!response.ok) {
       throw new Error(body.error || "The authorization could not be completed.");
     }
@@ -266,4 +266,14 @@ function friendlyError(error) {
   }
   if (code.includes("weak-password")) return "Password should be at least six characters.";
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
+}
+
+async function readResponseBody(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text };
+  }
 }
