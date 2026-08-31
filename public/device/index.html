@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Authorize an OpenVaultDB command-line device." />
+    <title>Authorize device · OpenVaultDB Cloud</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <a class="brand" href="https://openvaultdb.com" aria-label="OpenVaultDB home">
+        <span class="brand-mark" aria-hidden="true">OV</span>
+        <span>OpenVaultDB Cloud</span>
+      </a>
+
+      <section class="card" aria-labelledby="page-title">
+        <p class="eyebrow">Device authorization</p>
+        <h1 id="page-title">Connect your command line</h1>
+        <p class="lede">
+          Enter the code shown by <code>ovdb cloud login</code>. Only approve a
+          request you started yourself.
+        </p>
+
+        <form class="code-form" data-code-form>
+          <label for="user-code">Device code</label>
+          <div class="code-row">
+            <input
+              id="user-code"
+              name="user_code"
+              inputmode="text"
+              autocomplete="one-time-code"
+              autocapitalize="characters"
+              spellcheck="false"
+              maxlength="9"
+              placeholder="ABCD-EFGH"
+              required
+              data-code-input
+            />
+            <button class="button primary" type="submit" data-code-submit>Continue</button>
+          </div>
+        </form>
+
+        <div class="notice error" role="alert" hidden data-error></div>
+
+        <section class="request" hidden data-request aria-labelledby="request-title">
+          <div class="request-heading">
+            <div class="client-icon" aria-hidden="true">⌘</div>
+            <div>
+              <p class="request-label">Authorization request from</p>
+              <h2 id="request-title" data-client-name></h2>
+            </div>
+          </div>
+          <p class="request-code">Code <strong data-code-display></strong></p>
+          <div class="scope-panel">
+            <p>This device is asking permission to:</p>
+            <ul data-scope-list></ul>
+          </div>
+        </section>
+
+        <section class="auth-panel" hidden data-sign-in aria-labelledby="sign-in-title">
+          <h2 id="sign-in-title">Sign in to decide</h2>
+          <p>Use the OpenVaultDB account you want this command line to access.</p>
+          <div class="provider-grid">
+            <button class="button provider" type="button" data-provider="github">
+              Continue with GitHub
+            </button>
+            <button class="button provider" type="button" data-provider="google">
+              Continue with Google
+            </button>
+          </div>
+          <div class="divider"><span>or use email</span></div>
+          <form class="email-form" data-email-form>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required />
+            <label for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="6"
+              required
+            />
+            <button class="button primary full" type="submit" data-email-submit>Sign in</button>
+          </form>
+          <button class="link-button" type="button" data-email-toggle>Create an account instead</button>
+        </section>
+
+        <section class="consent" hidden data-consent aria-labelledby="consent-title">
+          <h2 id="consent-title">Grant access?</h2>
+          <p>
+            Signed in as <strong data-account-name></strong>.
+            <button class="link-button inline" type="button" data-sign-out>Use another account</button>
+          </p>
+          <div class="decision-row">
+            <button class="button secondary" type="button" data-decision="deny">Deny</button>
+            <button class="button primary" type="button" data-decision="approve">
+              Approve device
+            </button>
+          </div>
+        </section>
+
+        <section class="complete" hidden data-complete tabindex="-1">
+          <div class="complete-mark" aria-hidden="true">✓</div>
+          <h2 data-complete-title>Device authorized</h2>
+          <p data-complete-message>Return to your terminal to continue.</p>
+        </section>
+
+        <noscript>
+          <p class="notice error">JavaScript is required to authorize a command-line device.</p>
+        </noscript>
+      </section>
+
+      <p class="footer-note">
+        The command line receives a revocable token. Your password is never shared with it.
+      </p>
+    </main>
+    <script type="module" src="/device.js"></script>
+  </body>
+</html>
