@@ -74,8 +74,8 @@ export function withAssetSecurityHeaders(response: Response): Response {
     "Content-Security-Policy",
     "default-src 'self'; script-src 'self' https://www.gstatic.com; " +
       "connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com " +
-      "https://identitytoolkit.googleapis.com https://openvaultdb.firebaseapp.com; " +
-      "frame-src https://openvaultdb.firebaseapp.com; img-src 'self' data:; " +
+      "https://identitytoolkit.googleapis.com https://auth.sneat.co; " +
+      "frame-src https://auth.sneat.co; img-src 'self' data:; " +
       "style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   );
   return new Response(response.body, {

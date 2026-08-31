@@ -13,12 +13,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAabfgXuWV9QyLaigMjOQqHlMzqpoNNhzQ",
-  authDomain: "openvaultdb.firebaseapp.com",
-  projectId: "openvaultdb",
-  storageBucket: "openvaultdb.firebasestorage.app",
-  messagingSenderId: "323159488879",
-  appId: "1:323159488879:web:6410a6a14fe2633505909a",
+  apiKey: "AIzaSyCeQu1WC182yD0VHrRm4nHUxVf27fY-MLQ",
+  authDomain: "auth.sneat.co",
+  projectId: "sneat-eur3-1",
+  messagingSenderId: "588648831063",
+  appId: "1:588648831063:web:303af7e0c5f8a7b10d6b12",
 };
 
 const auth = getAuth(initializeApp(firebaseConfig));
@@ -132,7 +131,7 @@ function renderNextStep() {
   elements.consent.hidden = !currentUser;
   if (currentUser) {
     elements.accountName.textContent =
-      currentUser.displayName || currentUser.email || "your OpenVaultDB account";
+      currentUser.displayName || currentUser.email || "your Sneat Co. account";
   }
 }
 
@@ -174,12 +173,12 @@ function toggleEmailMode() {
   emailMode = emailMode === "signin" ? "signup" : "signin";
   const password = elements.emailForm.elements.password;
   if (emailMode === "signup") {
-    elements.emailSubmit.textContent = "Create account";
+    elements.emailSubmit.textContent = "Create Sneat Co. account";
     elements.emailToggle.textContent = "Sign in to an existing account";
     password.autocomplete = "new-password";
   } else {
     elements.emailSubmit.textContent = "Sign in";
-    elements.emailToggle.textContent = "Create an account instead";
+    elements.emailToggle.textContent = "Create a Sneat Co. account instead";
     password.autocomplete = "current-password";
   }
   showError("");

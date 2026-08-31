@@ -44,7 +44,7 @@
     }
   ],
   "vars": {
-    "FIREBASE_PROJECT_ID": "openvaultdb",
+    "FIREBASE_PROJECT_ID": "sneat-eur3-1",
     "PUBLIC_ORIGIN": "https://cloud.openvaultdb.com"
   },
   "triggers": {

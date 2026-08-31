@@ -8,7 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { verifyFirebaseIdentityWithKeySet } from "../src/firebase";
 
-const projectID = "openvaultdb";
+const projectID = "sneat-eur3-1";
 let privateKey: CryptoKey;
 let keySet: ReturnType<typeof createLocalJWKSet>;
 
@@ -34,7 +34,7 @@ describe("Firebase ID token verification", () => {
     await expect(
       verifyFirebaseIdentityWithKeySet(token, projectID, keySet),
     ).resolves.toEqual({
-      subject: "firebase-user-1",
+      subject: "sneat-user-1",
       email: "alex@example.com",
       name: "Alex",
     });
@@ -42,12 +42,15 @@ describe("Firebase ID token verification", () => {
 
   it("rejects the wrong audience and a future authentication time", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const wrongAudience = await signedToken(
+    const independentProjectToken = await signedToken(
       { auth_time: now - 10 },
-      { audience: "another-project" },
+      {
+        audience: "openvaultdb",
+        issuer: "https://securetoken.google.com/openvaultdb",
+      },
     );
     await expect(
-      verifyFirebaseIdentityWithKeySet(wrongAudience, projectID, keySet),
+      verifyFirebaseIdentityWithKeySet(independentProjectToken, projectID, keySet),
     ).rejects.toThrow();
 
     const futureAuthentication = await signedToken({ auth_time: now + 60 });
@@ -66,7 +69,7 @@ async function signedToken(
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(options.issuer ?? `https://securetoken.google.com/${projectID}`)
     .setAudience(options.audience ?? projectID)
-    .setSubject(options.subject ?? "firebase-user-1")
+    .setSubject(options.subject ?? "sneat-user-1")
     .setIssuedAt(now)
     .setExpirationTime(now + 3600)
     .sign(privateKey);

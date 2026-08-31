@@ -7,11 +7,11 @@ import { createWorker } from "../src/worker";
 
 const baseURL = "https://cloud.openvaultdb.com";
 const worker = createWorker(async (token, projectID) => {
-  if (token !== "valid-firebase-token" || projectID !== "openvaultdb") {
+  if (token !== "valid-firebase-token" || projectID !== "sneat-eur3-1") {
     throw new Error("invalid test identity");
   }
   return {
-    subject: "firebase-user-1",
+    subject: "sneat-user-1",
     email: "alex@example.com",
     name: "Alex",
   };
@@ -38,10 +38,12 @@ describe("device authorization", () => {
     const page = await call("/device/");
     expect(page.status).toBe(200);
     expect(page.headers.get("Content-Security-Policy")).toContain(
-      "frame-src https://openvaultdb.firebaseapp.com",
+      "frame-src https://auth.sneat.co",
     );
     expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
-    expect(await page.text()).toContain("Connect your command line");
+    const pageHTML = await page.text();
+    expect(pageHTML).toContain("Connect your command line");
+    expect(pageHTML).toContain("OpenVaultDB is a Sneat Co. product");
   });
 
   it("approves, exchanges once, authenticates, and revokes", async () => {
@@ -107,7 +109,7 @@ describe("device authorization", () => {
     );
     expect(userInfo.status).toBe(200);
     expect(await userInfo.json()).toMatchObject({
-      sub: "firebase-user-1",
+      sub: "sneat-user-1",
       email: "alex@example.com",
       name: "Alex",
       client_id: "ovdb-cli",
