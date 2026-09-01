@@ -22,6 +22,13 @@ const upstreamFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
       });
     case "/v0/ovdb/device_auth/decision":
       return Response.json({ decision: "approve", user_code: "BCDF-GHJK" });
+    case "/v0/ovdb/device_auth/devices":
+      return Response.json({
+        devices: [{ id: "dvc_test", status: "active", can_revoke: true }],
+        has_more: false,
+      });
+    case "/v0/ovdb/device_auth/devices/revoke":
+      return Response.json({ device_id: "dvc_test", status: "revoked" });
     case "/v0/ovdb/device_auth/token":
       return Response.json(
         { error: "authorization_pending", error_description: "authorization is still pending" },
@@ -66,6 +73,14 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(pageHTML).toContain("Sign in with Google");
     expect(pageHTML).toContain("Sign in with email");
     expect(pageHTML).not.toContain("Continue with GitHub");
+    expect(pageHTML).toContain("View authorized devices");
+
+    const devicesRedirect = await call("/devices");
+    expect(devicesRedirect.status).toBe(302);
+    expect(devicesRedirect.headers.get("Location")).toBe(`${baseURL}/devices/`);
+    const devicesPage = await call("/devices/");
+    expect(devicesPage.status).toBe(200);
+    expect(await devicesPage.text()).toContain("Authorized devices");
   });
 
   it("publishes stable OAuth discovery metadata", async () => {
@@ -84,6 +99,10 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     const start = await formPost("/oauth/device/code", {
       client_id: "ovdb-cli",
       scope: "account:read",
+      device_name: "Test Mac",
+      os: "darwin",
+      arch: "arm64",
+      client_version: "0.2.0",
     });
     expect(start.status).toBe(200);
     await expect(start.json()).resolves.toMatchObject({ user_code: "BCDF-GHJK" });
@@ -92,9 +111,12 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(upstreamStart.url).toBe("https://api.sneat.cloud/v0/ovdb/device_auth/code");
     expect(upstreamStart.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
     expect(upstreamStart.headers.get("Origin")).toBeNull();
-    expect(new TextDecoder().decode(await upstreamStart.arrayBuffer())).toContain(
-      "client_id=ovdb-cli",
+    const startBody = new URLSearchParams(
+      new TextDecoder().decode(await upstreamStart.arrayBuffer()),
     );
+    expect(startBody.get("client_id")).toBe("ovdb-cli");
+    expect(startBody.get("device_name")).toBe("Test Mac");
+    expect(startBody.get("client_version")).toBe("0.2.0");
 
     const decision = await call("/api/device-authorization/decision", {
       method: "POST",
@@ -111,6 +133,36 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(new URL(upstreamRequests[1].url).pathname).toBe(
       "/v0/ovdb/device_auth/decision",
     );
+  });
+
+  it("proxies authenticated device listing and revocation", async () => {
+    const list = await call("/api/devices", {
+      headers: { Authorization: "Bearer firebase-id-token" },
+    });
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      devices: [{ id: "dvc_test", status: "active" }],
+    });
+    expect(upstreamRequests[0].headers.get("Authorization")).toBe(
+      "Bearer firebase-id-token",
+    );
+    expect(new URL(upstreamRequests[0].url).pathname).toBe(
+      "/v0/ovdb/device_auth/devices",
+    );
+
+    const revoke = await call("/api/devices/revoke", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer firebase-id-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ device_id: "dvc_test" }),
+    });
+    expect(revoke.status).toBe(200);
+    expect(new URL(upstreamRequests[1].url).pathname).toBe(
+      "/v0/ovdb/device_auth/devices/revoke",
+    );
+    expect(await upstreamRequests[1].text()).toContain("dvc_test");
   });
 
   it("preserves backend OAuth errors and no-store headers", async () => {

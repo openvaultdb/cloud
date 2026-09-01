@@ -95,6 +95,30 @@ export function createWorker(
             upstreamFetch,
           );
         }
+        if (url.pathname === "/api/devices") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "devices"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/devices",
+            upstreamFetch,
+          );
+        }
+        if (url.pathname === "/api/devices/revoke") {
+          if (request.method !== "POST") return methodNotAllowed("POST");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "device-revoke"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/device_auth/devices/revoke",
+            upstreamFetch,
+          );
+        }
 
         if (request.method !== "GET" && request.method !== "HEAD") {
           return jsonResponse({ error: "Not found." }, 404);
@@ -105,6 +129,10 @@ export function createWorker(
         }
         if (url.pathname === "/device") {
           url.pathname = "/device/";
+          return Response.redirect(url.toString(), 302);
+        }
+        if (url.pathname === "/devices") {
+          url.pathname = "/devices/";
           return Response.redirect(url.toString(), 302);
         }
         return withAssetSecurityHeaders(await env.ASSETS.fetch(request));

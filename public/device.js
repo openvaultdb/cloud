@@ -1,44 +1,33 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
 import {
-  GithubAuthProvider,
-  GoogleAuthProvider,
-  browserLocalPersistence,
-  createUserWithEmailAndPassword,
-  getAuth,
+  accountName,
+  auth,
+  authenticateWithEmail,
+  authenticateWithProvider,
   onAuthStateChanged,
-  setPersistence,
-  signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
-} from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
+} from "/firebase-auth.js";
+import { devicePresentation } from "/device-presentation.js";
 import { deviceView } from "/device-view.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyCeQu1WC182yD0VHrRm4nHUxVf27fY-MLQ",
-  authDomain: "auth.sneat.co",
-  projectId: "sneat-eur3-1",
-  messagingSenderId: "588648831063",
-  appId: "1:588648831063:web:303af7e0c5f8a7b10d6b12",
-};
-
-const auth = getAuth(initializeApp(firebaseConfig));
-await setPersistence(auth, browserLocalPersistence).catch(() => undefined);
 
 const elements = {
   accountName: document.querySelector("[data-account-name]"),
-  clientName: document.querySelector("[data-client-name]"),
   codeDisplay: document.querySelector("[data-code-display]"),
   codeForm: document.querySelector("[data-code-form]"),
   codeInput: document.querySelector("[data-code-input]"),
   codeSubmit: document.querySelector("[data-code-submit]"),
   complete: document.querySelector("[data-complete]"),
   completeMessage: document.querySelector("[data-complete-message]"),
+  completeReceipt: document.querySelector("[data-complete-receipt]"),
   completeTitle: document.querySelector("[data-complete-title]"),
   consent: document.querySelector("[data-consent]"),
   emailForm: document.querySelector("[data-email-form]"),
   emailSubmit: document.querySelector("[data-email-submit]"),
   emailToggle: document.querySelector("[data-email-toggle]"),
   error: document.querySelector("[data-error]"),
+  deviceName: document.querySelector("[data-device-name]"),
+  deviceMeta: document.querySelector("[data-device-meta]"),
+  grantedDevice: document.querySelector("[data-granted-device]"),
+  grantedScopeList: document.querySelector("[data-granted-scope-list]"),
   request: document.querySelector("[data-request]"),
   scopeList: document.querySelector("[data-scope-list]"),
   signIn: document.querySelector("[data-sign-in]"),
@@ -101,18 +90,11 @@ async function lookupAuthorization(rawCode) {
     currentAuthorization = body;
     elements.codeInput.value = formatCode(body.user_code);
     elements.codeDisplay.textContent = formatCode(body.user_code);
-    elements.clientName.textContent = body.client.name;
-    elements.scopeList.replaceChildren(
-      ...body.scopes.map((scope) => {
-        const item = document.createElement("li");
-        const title = document.createElement("strong");
-        const description = document.createElement("span");
-        title.textContent = scope.name;
-        description.textContent = scope.description;
-        item.append(title, description);
-        return item;
-      }),
-    );
+    const presentation = devicePresentation(body);
+    elements.deviceName.textContent = presentation.title;
+    elements.deviceMeta.textContent = presentation.details;
+    elements.deviceMeta.hidden = !presentation.details;
+    renderScopes(elements.scopeList, body.scopes);
     renderNextStep();
   } catch (error) {
     currentAuthorization = null;
@@ -135,8 +117,7 @@ function renderNextStep() {
   elements.consent.hidden = !view.showConsent;
   elements.complete.hidden = !view.showComplete;
   if (currentUser) {
-    elements.accountName.textContent =
-      currentUser.displayName || currentUser.email || "your Sneat Co. account";
+    elements.accountName.textContent = accountName(currentUser);
   }
 }
 
@@ -144,9 +125,7 @@ async function signInWithProvider(providerName) {
   setBusy(true);
   showError("");
   try {
-    const provider =
-      providerName === "github" ? new GithubAuthProvider() : new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    await authenticateWithProvider(providerName);
   } catch (error) {
     showError(friendlyError(error));
   } finally {
@@ -162,11 +141,7 @@ async function signInWithEmail(event) {
   setBusy(true);
   showError("");
   try {
-    if (emailMode === "signup") {
-      await createUserWithEmailAndPassword(auth, email, password);
-    } else {
-      await signInWithEmailAndPassword(auth, email, password);
-    }
+    await authenticateWithEmail(email, password, emailMode === "signup");
   } catch (error) {
     showError(friendlyError(error));
   } finally {
@@ -217,6 +192,12 @@ async function decide(decision) {
       decision === "approve"
         ? "Return to your terminal. The OpenVaultDB CLI will finish signing in."
         : "No access was granted. You can close this page.";
+    elements.completeReceipt.hidden = decision !== "approve";
+    if (decision === "approve") {
+      const presentation = devicePresentation(currentAuthorization);
+      elements.grantedDevice.textContent = presentation.title;
+      renderScopes(elements.grantedScopeList, currentAuthorization.scopes);
+    }
     elements.complete.hidden = false;
     renderNextStep();
     elements.complete.focus();
@@ -225,6 +206,20 @@ async function decide(decision) {
   } finally {
     setBusy(false);
   }
+}
+
+function renderScopes(list, scopes) {
+  list.replaceChildren(
+    ...(scopes || []).map((scope) => {
+      const item = document.createElement("li");
+      const title = document.createElement("strong");
+      const description = document.createElement("span");
+      title.textContent = scope.name;
+      description.textContent = scope.description;
+      item.append(title, description);
+      return item;
+    }),
+  );
 }
 
 function hideTerminalState() {
