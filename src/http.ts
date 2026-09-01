@@ -72,8 +72,8 @@ export function withAssetSecurityHeaders(response: Response): Response {
   headers.set("X-Frame-Options", "DENY");
   headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' https://www.gstatic.com; " +
-      "connect-src 'self' https://*.googleapis.com https://securetoken.googleapis.com " +
+    "default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; " +
+      "connect-src 'self' https://www.gstatic.com https://*.googleapis.com https://securetoken.googleapis.com " +
       "https://identitytoolkit.googleapis.com https://auth.sneat.co; " +
       "frame-src https://auth.sneat.co; img-src 'self' data:; " +
       "style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
