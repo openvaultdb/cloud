@@ -1,0 +1,23 @@
+{
+  "name": "@openvaultdb/cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "npm run types && npm run typecheck && npm test && npm run deploy:dry",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "dev": "wrangler dev --local",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "types": "wrangler types"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.2",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.127.1"
+  }
+}
