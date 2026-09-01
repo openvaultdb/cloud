@@ -28,5 +28,5 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Verify Worker, D1 protocol, assets, and deployment bundle
+      - name: Verify Worker facade, assets, and deployment bundle
         run: npm run check
