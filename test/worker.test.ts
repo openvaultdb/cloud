@@ -50,10 +50,15 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
 
     const page = await call("/device/");
     expect(page.status).toBe(200);
-    expect(page.headers.get("Content-Security-Policy")).toContain(
-      "frame-src https://auth.sneat.co",
+    const contentSecurityPolicy = page.headers.get("Content-Security-Policy");
+    expect(contentSecurityPolicy).toContain(
+      "script-src 'self' https://www.gstatic.com https://apis.google.com",
     );
-    expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+    expect(contentSecurityPolicy).toContain(
+      "connect-src 'self' https://www.gstatic.com https://*.googleapis.com",
+    );
+    expect(contentSecurityPolicy).toContain("frame-src https://auth.sneat.co");
+    expect(contentSecurityPolicy).toContain("frame-ancestors 'none'");
     const pageHTML = await page.text();
     expect(pageHTML).toContain("Connect your command line");
     expect(pageHTML).toContain("OpenVaultDB is a Sneat Co. product");
