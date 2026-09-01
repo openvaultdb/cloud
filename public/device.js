@@ -11,6 +11,7 @@ import {
   signInWithPopup,
   signOut,
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
+import { deviceView } from "/device-view.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCeQu1WC182yD0VHrRm4nHUxVf27fY-MLQ",
@@ -112,13 +113,10 @@ async function lookupAuthorization(rawCode) {
         return item;
       }),
     );
-    elements.request.hidden = false;
     renderNextStep();
   } catch (error) {
     currentAuthorization = null;
-    elements.request.hidden = true;
-    elements.signIn.hidden = true;
-    elements.consent.hidden = true;
+    renderNextStep();
     showError(friendlyError(error));
   } finally {
     setBusy(false);
@@ -126,9 +124,16 @@ async function lookupAuthorization(rawCode) {
 }
 
 function renderNextStep() {
-  if (!currentAuthorization || !elements.complete.hidden) return;
-  elements.signIn.hidden = Boolean(currentUser);
-  elements.consent.hidden = !currentUser;
+  const view = deviceView({
+    hasAuthorization: Boolean(currentAuthorization),
+    isSignedIn: Boolean(currentUser),
+    isComplete: !elements.complete.hidden,
+  });
+  elements.codeForm.hidden = !view.showCodeForm;
+  elements.request.hidden = !view.showRequest;
+  elements.signIn.hidden = !view.showSignIn;
+  elements.consent.hidden = !view.showConsent;
+  elements.complete.hidden = !view.showComplete;
   if (currentUser) {
     elements.accountName.textContent =
       currentUser.displayName || currentUser.email || "your Sneat Co. account";
@@ -177,7 +182,7 @@ function toggleEmailMode() {
     elements.emailToggle.textContent = "Sign in to an existing account";
     password.autocomplete = "new-password";
   } else {
-    elements.emailSubmit.textContent = "Sign in";
+    elements.emailSubmit.textContent = "Sign in with email";
     elements.emailToggle.textContent = "Create a Sneat Co. account instead";
     password.autocomplete = "current-password";
   }
@@ -206,10 +211,6 @@ async function decide(decision) {
     if (!response.ok) {
       throw new Error(body.error || "The authorization could not be completed.");
     }
-    elements.codeForm.hidden = true;
-    elements.request.hidden = true;
-    elements.signIn.hidden = true;
-    elements.consent.hidden = true;
     elements.completeTitle.textContent =
       decision === "approve" ? "Device authorized" : "Request denied";
     elements.completeMessage.textContent =
@@ -217,6 +218,7 @@ async function decide(decision) {
         ? "Return to your terminal. The OpenVaultDB CLI will finish signing in."
         : "No access was granted. You can close this page.";
     elements.complete.hidden = false;
+    renderNextStep();
     elements.complete.focus();
   } catch (error) {
     showError(friendlyError(error));
@@ -227,7 +229,7 @@ async function decide(decision) {
 
 function hideTerminalState() {
   elements.complete.hidden = true;
-  elements.codeForm.hidden = false;
+  renderNextStep();
 }
 
 function setBusy(value) {
