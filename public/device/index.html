@@ -49,7 +49,8 @@
             <div class="client-icon" aria-hidden="true">⌘</div>
             <div>
               <p class="request-label">Authorization request from</p>
-              <h2 id="request-title" data-client-name></h2>
+              <h2 id="request-title" data-device-name></h2>
+              <p class="request-device-meta" data-device-meta hidden></p>
             </div>
           </div>
           <p class="request-code">Code <strong data-code-display></strong></p>
@@ -113,6 +114,14 @@
           <div class="complete-mark" aria-hidden="true">✓</div>
           <h2 data-complete-title>Device authorized</h2>
           <p data-complete-message>Return to your terminal to continue.</p>
+          <div class="permission-receipt" data-complete-receipt hidden>
+            <p>Granted to <strong data-granted-device></strong></p>
+            <h3>Granted permissions</h3>
+            <ul data-granted-scope-list></ul>
+            <a class="button secondary full receipt-link" href="/devices">
+              View authorized devices
+            </a>
+          </div>
         </section>
 
         <noscript>

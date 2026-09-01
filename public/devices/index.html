@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="Review devices authorized for OpenVaultDB." />
+    <title>Authorized devices · OpenVaultDB Cloud</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell devices-shell">
+      <a class="brand" href="https://openvaultdb.com" aria-label="OpenVaultDB home">
+        <span class="brand-mark" aria-hidden="true">OV</span>
+        <span>OpenVaultDB Cloud</span>
+      </a>
+
+      <section class="card" aria-labelledby="page-title">
+        <p class="eyebrow">Security</p>
+        <h1 id="page-title">Authorized devices</h1>
+        <p class="lede">
+          Review current and past command-line device grants for your OpenVaultDB account,
+          and revoke access you no longer recognize or need.
+        </p>
+
+        <div class="notice error" role="alert" hidden data-error></div>
+        <p class="loading-state" data-loading>Checking your Sneat Co. account…</p>
+
+        <section class="auth-panel standalone" hidden data-sign-in aria-labelledby="sign-in-title">
+          <h2 id="sign-in-title">Sign in to view devices</h2>
+          <p>Use the Sneat Co. account connected to OpenVaultDB.</p>
+          <div class="provider-grid">
+            <button class="button provider" type="button" data-provider="github">
+              Sign in with GitHub
+            </button>
+            <button class="button provider" type="button" data-provider="google">
+              Sign in with Google
+            </button>
+          </div>
+          <div class="divider"><span>or use email</span></div>
+          <form class="email-form" data-email-form>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required />
+            <label for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="6"
+              required
+            />
+            <button class="button primary full" type="submit">Sign in with email</button>
+          </form>
+        </section>
+
+        <section hidden data-devices>
+          <div class="account-row">
+            <p>Signed in as <strong data-account-name></strong></p>
+            <button class="link-button inline" type="button" data-sign-out>Sign out</button>
+          </div>
+          <div class="empty-state" hidden data-empty>
+            <h2>No authorized devices</h2>
+            <p>Run <code>ovdb cloud login</code> when you want to connect one.</p>
+          </div>
+          <div class="device-list" data-device-list></div>
+          <p class="notice" hidden data-truncated>
+            Showing the first 100 grants. Revoke unused devices to keep this list manageable.
+          </p>
+        </section>
+
+        <noscript>
+          <p class="notice error">JavaScript is required to review authorized devices.</p>
+        </noscript>
+      </section>
+
+      <p class="footer-note">
+        OpenVaultDB is a Sneat Co. product. Device details are supplied by the CLI;
+        authorization state and timestamps come from OpenVaultDB Cloud.
+      </p>
+    </main>
+    <script type="module" src="/devices.js"></script>
+  </body>
+</html>

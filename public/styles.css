@@ -126,11 +126,15 @@ input:focus, button:focus-visible, a:focus-visible {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 2.9rem;
   padding: 0.68rem 1rem;
   border: 1px solid transparent;
   border-radius: 0.62rem;
   font-weight: 700;
+  text-decoration: none;
 }
 .button.primary { color: #fff; background: var(--accent); }
 .button.primary:hover:not(:disabled) { background: var(--accent-hover); }
@@ -143,6 +147,8 @@ input:focus, button:focus-visible, a:focus-visible {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+.button.danger { border-color: rgb(169 43 43 / 34%); color: var(--danger); background: var(--card); }
+.button.danger:hover:not(:disabled) { background: var(--danger-soft); }
 .button.full { width: 100%; margin-top: 0.35rem; }
 
 .notice { margin-top: 1rem; padding: 0.8rem 0.9rem; border-radius: 0.6rem; line-height: 1.45; }
@@ -166,6 +172,7 @@ input:focus, button:focus-visible, a:focus-visible {
   font-weight: 800;
 }
 .request-label { margin: 0 0 0.15rem; color: var(--muted); font-size: 0.78rem; }
+.request-device-meta { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.83rem; }
 .request-code { color: var(--muted); }
 .request-code strong { color: var(--text); font-family: ui-monospace, monospace; letter-spacing: 0.08em; }
 .scope-panel { padding: 0.9rem 1rem; border-radius: 0.7rem; background: var(--accent-soft); }
@@ -198,6 +205,68 @@ input:focus, button:focus-visible, a:focus-visible {
   font-weight: 800;
 }
 .complete p { margin-bottom: 0; color: var(--muted); }
+.permission-receipt {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--accent-soft);
+  text-align: left;
+}
+.permission-receipt > p { margin: 0 0 0.9rem; }
+.permission-receipt h3 { margin: 0 0 0.6rem; font-size: 0.9rem; }
+.permission-receipt ul { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+.permission-receipt li { display: grid; gap: 0.12rem; }
+.permission-receipt li span { color: var(--muted); font-size: 0.83rem; line-height: 1.4; }
+.receipt-link { margin-top: 1rem; background: var(--card); }
+
+.devices-shell { width: min(100% - 2rem, 760px); }
+.loading-state { margin: 1.25rem 0 0; color: var(--muted); }
+.auth-panel.standalone { margin-top: 1.2rem; padding-top: 0; border-top: 0; }
+.account-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+.account-row p { margin: 0; color: var(--muted); }
+.empty-state { padding: 2.25rem 0 1rem; text-align: center; }
+.empty-state p { color: var(--muted); }
+.device-list { display: grid; gap: 0.9rem; margin-top: 1.25rem; }
+.device-item {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+}
+.device-item-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.device-item-heading h2 { font-size: 1.05rem; }
+.device-meta { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
+.status-chip {
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+.status-active { color: var(--accent); background: var(--accent-soft); }
+.status-revoked { color: var(--danger); background: var(--danger-soft); }
+.device-scopes { display: flex; gap: 0.5rem; color: var(--muted); font-size: 0.84rem; }
+.device-scopes strong { color: var(--text); }
+.device-times {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 0.8rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+.device-times dt { color: var(--muted); }
+.device-times dd { margin: 0; text-align: right; }
+.device-item > .button.danger { justify-self: end; min-height: 2.5rem; }
 .footer-note { margin: 1rem 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; text-align: center; }
 [hidden] { display: none !important; }
 
@@ -207,6 +276,10 @@ input:focus, button:focus-visible, a:focus-visible {
   .code-row, .provider-grid { grid-template-columns: 1fr; }
   .decision-row { flex-direction: column-reverse; }
   .decision-row .button { width: 100%; }
+  .account-row, .device-item-heading { align-items: flex-start; flex-direction: column; }
+  .device-times { grid-template-columns: 1fr; }
+  .device-times dd { margin: -0.2rem 0 0.35rem; text-align: left; }
+  .device-item > .button.danger { width: 100%; justify-self: stretch; }
 }
 
 @media (prefers-color-scheme: dark) {

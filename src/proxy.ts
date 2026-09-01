@@ -29,10 +29,10 @@ export async function proxyDeviceAuthorization(
     if (value) headers.set(name, value);
   }
 
-  let body: ArrayBuffer | undefined;
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    body = await request.arrayBuffer();
-  }
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : request.body ?? undefined;
 
   try {
     const upstream = await upstreamFetch(upstreamURL, {
