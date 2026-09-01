@@ -62,6 +62,10 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     const pageHTML = await page.text();
     expect(pageHTML).toContain("Connect your command line");
     expect(pageHTML).toContain("OpenVaultDB is a Sneat Co. product");
+    expect(pageHTML).toContain("Sign in with GitHub");
+    expect(pageHTML).toContain("Sign in with Google");
+    expect(pageHTML).toContain("Sign in with email");
+    expect(pageHTML).not.toContain("Continue with GitHub");
   });
 
   it("publishes stable OAuth discovery metadata", async () => {
