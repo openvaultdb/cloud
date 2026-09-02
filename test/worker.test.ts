@@ -376,7 +376,7 @@ describe("Listus demo session relay", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
     expect(response.headers.get("X-OVDB-Demo-Control-Secret")).toBeNull();
     expect(received).toHaveLength(1);
-    expect(new URL(received[0].url).pathname).toBe("/ovdb/v1/databases/demo-sneat-space/v1/records");
+    expect(new URL(received[0].url).pathname).toBe("/v1/databases/demo-sneat-space/records/lists/do%3Ademo");
     expect(received[0].headers.get("Authorization")).toBe("Bearer database-secret");
     expect(received[0].headers.get("Cookie")).toBeNull();
     const badAudience = await signedFirebaseToken(key.privateKey, { sub: "owner_1", aud: "attacker" });
@@ -385,6 +385,23 @@ describe("Listus demo session relay", () => {
     const otherOwner = await signedFirebaseToken(key.privateKey, { sub: "owner_2" });
     const forbidden = await demoCall(demoWorker, kv, stablePath, { headers: { Authorization: `Bearer ${otherOwner}` } });
     expect(forbidden.status).toBe(403);
+    const nonNumericAuthTime = await signedFirebaseToken(key.privateKey, { sub: "owner_1", auth_time: "not-a-time" });
+    const malformed = await demoCall(demoWorker, kv, stablePath, { headers: { Authorization: `Bearer ${nonNumericAuthTime}` } });
+    expect(malformed.status).toBe(401);
+  });
+
+  it("refreshes JWKs once for a rotated key rather than trusting a stale cache miss", async () => {
+    const kv = new MemoryKV(); let calls = 0;
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const worker = createWorker(async () => Response.json({ ok: true }), {
+      now: () => demoNow - 1,
+      firebaseJwksFetch: async () => Response.json(calls++ === 0 ? { keys: [] } : await firebaseJwks(key.publicKey)),
+    });
+    await putSession(worker, kv, session("session-demo-000001"));
+    const token = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
+    const response = await demoCall(worker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
   });
 
   it("applies the same lease and owner checks to the exact origin hostname", async () => {
@@ -395,13 +412,33 @@ describe("Listus demo session relay", () => {
       now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
     });
     await putSession(worker, kv, session("session-demo-000001"));
-    const directWithoutIdentity = await demoCall(worker, kv, "/v1/records", { host: "ovdb-demo-session-demo-000001.openvaultdb.com" });
+    const directWithoutIdentity = await demoCall(worker, kv, "/v1/databases/demo-sneat-space/records/lists/do%3Ademo", { host: "ovdb-demo-session-demo-000001.openvaultdb.com" });
     expect(directWithoutIdentity.status).toBe(401);
     expect(proxied).toBe(0);
     const owner = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
-    const directOwner = await demoCall(worker, kv, "/v1/records", { host: "ovdb-demo-session-demo-000001.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
+    const directOwner = await demoCall(worker, kv, "/v1/databases/demo-sneat-space/records/lists/do%3Ademo", { host: "ovdb-demo-session-demo-000001.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
     expect(directOwner.status).toBe(200);
     expect(proxied).toBe(1);
+    const adminPath = await demoCall(worker, kv, "/admin/tokens", { host: "ovdb-demo-session-demo-000001.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
+    expect(adminPath.status).toBe(404);
+    expect(proxied).toBe(1);
+  });
+
+  it("keeps a valid near-expiry session in KV for the platform minimum without extending its lease", async () => {
+    const kv = new MemoryKV();
+    const worker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });
+    await putSession(worker, kv, session("session-demo-000001", undefined, new Date(demoNow + 40_000).toISOString()));
+    expect(kv.expirations.get("demo:session:session-demo-000001")).toBeGreaterThanOrEqual(Math.floor(demoNow / 1000) + 60);
+  });
+
+  it("fails closed for disabled or unconfigured exact origin hostnames", async () => {
+    const request = new Request("https://ovdb-demo-session-demo-000001.openvaultdb.com/v1/databases/demo-sneat-space/records/lists/do%3Ademo");
+    const disabled = createWorker(async () => Response.json({ asset: true }));
+    const disabledResponse = await (disabled.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(request, env, createExecutionContext());
+    expect(disabledResponse.status).toBe(503);
+    const unconfigured = { ...env, OVDB_DEMO_ENABLED: "true" } as unknown as Env;
+    const unconfiguredResponse = await (disabled.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(request, unconfigured, createExecutionContext());
+    expect(unconfiguredResponse.status).toBe(503);
   });
 
   it("bounds origin failures without exposing a redirect or timing out forever", async () => {
@@ -425,7 +462,8 @@ describe("Listus demo session relay", () => {
   it("accepts native bodyless write acknowledgements and refuses an arbitrary origin URL", async () => {
     const kv = new MemoryKV();
     const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-    const worker = createWorker(async () => new Response(null, { status: 204 }), {
+    const nativePaths: string[] = [];
+    const worker = createWorker(async input => { nativePaths.push(new URL(input.toString()).pathname); return new Response(null, { status: 204 }); }, {
       now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
     });
     const invalidOrigin = await demoCall(worker, kv, "/internal/demo/sessions/session-demo-000001", {
@@ -437,6 +475,7 @@ describe("Listus demo session relay", () => {
     const write = await demoCall(worker, kv, stablePath, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" });
     expect(write.status).toBe(204);
     expect(write.headers.get("Content-Type")).toBeNull();
+    expect(nativePaths).toEqual(["/v1/databases/demo-sneat-space/records/lists/do%3Ademo"]);
   });
 
   it("adds strict Listus CORS to safe browser metadata control responses", async () => {
@@ -465,12 +504,13 @@ describe("Listus demo session relay", () => {
   );
 });
 
-const stablePath = "/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/v1/records";
+const stablePath = "/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/records/lists/do%3Ademo";
 
 class MemoryKV {
   readonly values = new Map<string, string>();
+  readonly expirations = new Map<string, number>();
   async get(key: string): Promise<string | null> { return this.values.get(key) ?? null; }
-  async put(key: string, value: string): Promise<void> { this.values.set(key, value); }
+  async put(key: string, value: string, options?: { expiration?: number }): Promise<void> { this.values.set(key, value); if (options?.expiration) this.expirations.set(key, options.expiration); }
   async delete(key: string): Promise<void> { this.values.delete(key); }
 }
 

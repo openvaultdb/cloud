@@ -54,11 +54,11 @@ export async function handleDemoRequest(
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   if (!isDemoEnabled(env)) {
-    if (isDemoPath(url.pathname)) return jsonResponse({ error: "demo_unavailable" }, 503);
+    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return jsonResponse({ error: "demo_unavailable" }, 503);
     return undefined;
   }
   if (!demoConfigured(env)) {
-    if (isDemoPath(url.pathname)) return jsonResponse({ error: "demo_unavailable" }, 503);
+    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return jsonResponse({ error: "demo_unavailable" }, 503);
     return undefined;
   }
 
@@ -70,6 +70,7 @@ export async function handleDemoRequest(
   }
   const sessionID = await env.OVDB_DEMO_SESSIONS!.get(originKey(url.hostname));
   if (sessionID) return handleOriginHostRequest(request, env, sessionID, dependencies);
+  if (isPotentialDemoOriginHost(url.hostname)) return jsonResponse({ error: "session_unavailable" }, 503);
   return undefined;
 }
 
@@ -90,6 +91,10 @@ function demoConfigured(env: DemoEnv): boolean {
 
 function isDemoPath(pathname: string): boolean {
   return pathname.startsWith("/internal/demo/") || pathname.startsWith(stablePrefix);
+}
+
+function isPotentialDemoOriginHost(hostname: string): boolean {
+  return /^ovdb-demo-[a-z0-9-]+\.openvaultdb\.com$/u.test(hostname.toLowerCase());
 }
 
 async function handleInternalSession(
@@ -124,7 +129,7 @@ async function handleInternalSession(
     return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
 
-  const expirySeconds = Math.floor(Date.parse(session.expiresAt) / 1000);
+  const expirySeconds = kvExpirationSeconds(Date.parse(session.expiresAt), (dependencies.now ?? Date.now)());
   const replacedSessionID = await env.OVDB_DEMO_SESSIONS!.get(ownerKey(session.ownerUserId));
   if (replacedSessionID && replacedSessionID !== sessionID) await deleteSession(env, replacedSessionID);
   await env.OVDB_DEMO_SESSIONS!.put(sessionKey(sessionID), JSON.stringify(session), { expiration: expirySeconds });
@@ -179,6 +184,9 @@ async function handleOriginHostRequest(
   sessionID: string,
   dependencies: DemoDependencies,
 ): Promise<Response> {
+  if (!isNativeDatabaseRecordPath(new URL(request.url).pathname)) {
+    return withDemoCors(jsonResponse({ error: "not_found" }, 404), request, env);
+  }
   const session = await loadAuthorizedSession(request, env, sessionID, dependencies);
   if (session instanceof Response) return withDemoCors(session, request, env);
   return withDemoCors(await proxySessionRequest(request, env, session, new URL(request.url).pathname, dependencies), request, env);
@@ -268,15 +276,19 @@ async function proxySessionRequest(
 
 function parseStablePath(pathname: string): { ownerUserId: string; suffix: string } | undefined {
   const prefix = "/users/";
-  const marker = "/demo-sneat-space";
+  const marker = "/demo-sneat-space/ovdb";
   if (!pathname.startsWith(prefix)) return undefined;
   const markerIndex = pathname.indexOf(marker, prefix.length);
   if (markerIndex < 0) return undefined;
   const ownerUserId = pathname.slice(prefix.length, markerIndex);
   const suffix = pathname.slice(markerIndex + marker.length);
-  if (!suffix.startsWith("/ovdb/v1/databases/demo-sneat-space/")) return undefined;
+  if (!isNativeDatabaseRecordPath(suffix)) return undefined;
   if (!safeID(ownerUserId) || !safePathSuffix(suffix)) return undefined;
   return { ownerUserId, suffix };
+}
+
+function isNativeDatabaseRecordPath(pathname: string): boolean {
+  return pathname.startsWith(`/v1/databases/${stableDatabaseID}/records/`);
 }
 
 function sessionIDFromInternalPath(pathname: string): string | undefined {
@@ -386,8 +398,12 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
     const nowSeconds = Math.floor((dependencies.now ?? Date.now)() / 1000);
     const project = env.OVDB_DEMO_FIREBASE_PROJECT_ID!;
     if (header.alg !== "RS256" || !header.kid || claims.aud !== project || claims.iss !== `https://securetoken.google.com/${project}` || !safeID(claims.sub) || !validNumericDate(claims.exp) || !validNumericDate(claims.iat) || !validNumericDate(claims.auth_time) || claims.exp <= nowSeconds || claims.exp <= claims.iat || claims.exp - claims.iat > 3600 || claims.iat > nowSeconds + 60 || claims.auth_time > nowSeconds + 60) throw new Error("invalid claims");
-    const keys = await loadFirebaseJwks(dependencies);
-    const jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
+    let keys = await loadFirebaseJwks(dependencies);
+    let jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
+    if (!jwk) {
+      keys = await loadFirebaseJwks(dependencies, true);
+      jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
+    }
     if (!jwk) throw new Error("unknown key");
     const publicKey = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
     const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, toArrayBuffer(base64UrlDecode(parts[2])), new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
@@ -398,18 +414,21 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
 
 function decodeJSON<T>(value: string): T { return JSON.parse(new TextDecoder().decode(base64UrlDecode(value))) as T; }
 function validNumericDate(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
-async function loadFirebaseJwks(dependencies: DemoDependencies): Promise<FirebaseJwkSet> {
+async function loadFirebaseJwks(dependencies: DemoDependencies, refresh = false): Promise<FirebaseJwkSet> {
   if (dependencies.firebaseJwksFetch) return readJwks(await dependencies.firebaseJwksFetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) }));
   const cacheKey = new Request(FIREBASE_JWKS_URL);
   const cache = await caches.open("ovdb-demo-jwks");
-  const cached = await cache.match(cacheKey);
+  const cached = refresh ? undefined : await cache.match(cacheKey);
   if (cached) return readJwks(cached);
   const response = await fetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
   const body = await readJwksBody(response);
   const parsed = parseJwks(body);
-  const headers = new Headers(response.headers);
-  headers.set("Cache-Control", "public, max-age=3600");
-  await cache.put(cacheKey, new Response(toArrayBuffer(body), { status: response.status, headers }));
+  const maxAge = cacheMaxAgeSeconds(response.headers.get("Cache-Control"));
+  if (maxAge > 0) {
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", `public, max-age=${maxAge}`);
+    await cache.put(cacheKey, new Response(toArrayBuffer(body), { status: response.status, headers }));
+  }
   return parsed;
 }
 async function readJwks(response: Response): Promise<FirebaseJwkSet> {
@@ -425,6 +444,10 @@ function parseJwks(body: Uint8Array): FirebaseJwkSet {
   const parsed = JSON.parse(new TextDecoder().decode(body)) as FirebaseJwkSet;
   if (!Array.isArray(parsed.keys) || parsed.keys.length > 32) throw new Error("invalid keys");
   return parsed;
+}
+function cacheMaxAgeSeconds(cacheControl: string | null): number {
+  const match = /(?:^|,)\s*max-age=(\d+)/iu.exec(cacheControl ?? "");
+  return match ? Math.min(Number(match[1]), 3600) : 0;
 }
 function base64Decode(value: string): Uint8Array { return Uint8Array.from(atob(value), char => char.charCodeAt(0)); }
 function base64UrlDecode(value: string): Uint8Array { return base64Decode(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4)); }
@@ -482,3 +505,6 @@ function sessionKey(id: string): string { return `${SESSION_KEY_PREFIX}${id}`; }
 function spaceKey(id: string): string { return `${SPACE_KEY_PREFIX}${id}`; }
 function ownerKey(id: string): string { return `${OWNER_KEY_PREFIX}${id}`; }
 function originKey(host: string): string { return `${ORIGIN_KEY_PREFIX}${host}`; }
+function kvExpirationSeconds(expiresAt: number, now: number): number {
+  return Math.max(Math.floor(expiresAt / 1000), Math.floor(now / 1000) + 60);
+}
