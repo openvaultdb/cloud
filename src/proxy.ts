@@ -11,15 +11,41 @@ export type UpstreamFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+const FORWARDED_RESPONSE_HEADERS = [
+  "Content-Type",
+  "Retry-After",
+  "WWW-Authenticate",
+] as const;
+
 export async function proxyDeviceAuthorization(
   request: Request,
   env: DeviceAuthEnv,
   upstreamPath: string,
   upstreamFetch: UpstreamFetch,
 ): Promise<Response> {
+  return proxyRequest(request, env, upstreamPath, new URL(request.url).search, upstreamFetch);
+}
+
+export async function proxyCloudDatabase(
+  request: Request,
+  env: DeviceAuthEnv,
+  upstreamPath: string,
+  upstreamSearch: string,
+  upstreamFetch: UpstreamFetch,
+): Promise<Response> {
+  return proxyRequest(request, env, upstreamPath, upstreamSearch, upstreamFetch);
+}
+
+async function proxyRequest(
+  request: Request,
+  env: DeviceAuthEnv,
+  upstreamPath: string,
+  upstreamSearch: string,
+  upstreamFetch: UpstreamFetch,
+): Promise<Response> {
   const upstreamURL = new URL(env.SNEAT_API_ORIGIN);
   upstreamURL.pathname = upstreamPath;
-  upstreamURL.search = new URL(request.url).search;
+  upstreamURL.search = upstreamSearch;
 
   const headers = new Headers();
   headers.set("Accept", request.headers.get("Accept") ?? "application/json");
@@ -47,7 +73,7 @@ export async function proxyDeviceAuthorization(
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
     });
-    for (const name of ["Content-Type", "Retry-After", "WWW-Authenticate"] as const) {
+    for (const name of FORWARDED_RESPONSE_HEADERS) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }

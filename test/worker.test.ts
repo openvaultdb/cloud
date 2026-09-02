@@ -34,6 +34,19 @@ const upstreamFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
         { error: "authorization_pending", error_description: "authorization is still pending" },
         { status: 400 },
       );
+    case "/v0/ovdb/cloud/databases":
+      return Response.json(
+        { databases: [] },
+        {
+          headers: {
+            Authorization: "Bearer backend-secret",
+            [PROXY_SECRET_HEADER]: "backend-proxy-secret",
+            "X-Untrusted": "discard",
+          },
+        },
+      );
+    case "/v0/ovdb/cloud/database":
+      return Response.json({ database: { id: new URL(request.url).searchParams.get("id") } });
     default:
       return Response.json({ error: "not_found" }, { status: 404 });
   }
@@ -91,7 +104,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
       device_authorization_endpoint: `${baseURL}/oauth/device/code`,
       token_endpoint: `${baseURL}/oauth/token`,
       revocation_endpoint: `${baseURL}/oauth/revoke`,
-      scopes_supported: ["account:read"],
+      scopes_supported: ["account:read", "databases:read"],
     });
   });
 
@@ -199,6 +212,77 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("POST");
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  it("proxies an allowlisted database list query with bearer auth and safe headers", async () => {
+    const response = await call(
+      "/api/databases?space=personal&pageSize=100&pageToken=next&upstream=https://attacker.example",
+      { headers: { Authorization: "Bearer cloud-access-token", "X-OVDB-Proxy-Secret": "attacker" } },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Authorization")).toBeNull();
+    expect(response.headers.get(PROXY_SECRET_HEADER)).toBeNull();
+    expect(response.headers.get("X-Untrusted")).toBeNull();
+    expect(upstreamRequests).toHaveLength(1);
+    const upstream = upstreamRequests[0];
+    expect(upstream.url).toBe(
+      "https://api.sneat.cloud/v0/ovdb/cloud/databases?space=personal&pageSize=100&pageToken=next",
+    );
+    expect(upstream.headers.get("Authorization")).toBe("Bearer cloud-access-token");
+    expect(upstream.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
+  });
+
+  it("routes one safe decoded database id to the fixed backend detail endpoint", async () => {
+    const response = await call("/api/databases/db_test-42?%69d=attacker", {
+      headers: { Authorization: "Bearer cloud-access-token" },
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ database: { id: "db_test-42" } });
+    expect(upstreamRequests).toHaveLength(1);
+    expect(upstreamRequests[0].url).toBe(
+      "https://api.sneat.cloud/v0/ovdb/cloud/database?id=db_test-42",
+    );
+  });
+
+  it.each(["/api/databases/", "/api/databases/a/b", "/api/databases/%2F", "/api/databases/%ZZ"])(
+    "rejects malformed database id %s before contacting the backend",
+    async (pathname) => {
+      const response = await call(pathname, { headers: { Authorization: "Bearer cloud-access-token" } });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: "invalid_request" });
+      expect(upstreamRequests).toHaveLength(0);
+    },
+  );
+
+  it.each(["POST", "PUT", "DELETE", "PATCH"])(
+    "returns 405 for %s database writes without contacting the backend",
+    async (method) => {
+      const response = await call("/api/databases/db_test", { method });
+      expect(response.status).toBe(405);
+      expect(response.headers.get("Allow")).toBe("GET");
+      expect(upstreamRequests).toHaveLength(0);
+    },
+  );
+
+  it("preserves safe backend database error status without exposing credentials", async () => {
+    const deniedWorker = createWorker(async () =>
+      Response.json(
+        { error: "insufficient_scope", error_description: "Read access is required." },
+        { status: 403, headers: { Authorization: "Bearer backend-secret" } },
+      ),
+    );
+    const deniedFetch = deniedWorker.fetch as unknown as typeof fetchWorker;
+    const response = await deniedFetch(
+      new Request(`${baseURL}/api/databases`, {
+        headers: { Authorization: "Bearer cloud-access-token" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Authorization")).toBeNull();
+    await expect(response.json()).resolves.toMatchObject({ error: "insufficient_scope" });
   });
 });
 
