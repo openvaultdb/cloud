@@ -49,3 +49,26 @@ npm run dev
 The Firebase browser configuration is public by design. Firebase authorization
 is verified by the Sneat Co. backend. Put `OVDB_DEVICE_AUTH_PROXY_SECRET` in a
 local `.dev.vars` file for manual Worker development; never commit it.
+
+## Disabled Listus demo relay
+
+The Worker includes a disabled-by-default relay for the bounded Listus local
+demo. It is enabled only when `OVDB_DEMO_ENABLED=true` and all of these private
+bindings are present: KV binding `OVDB_DEMO_SESSIONS`, secrets
+`OVDB_DEMO_CONTROL_SECRET` and `OVDB_DEMO_ENCRYPTION_KEY`, and variables
+`OVDB_DEMO_FIREBASE_PROJECT_ID`, `OVDB_DEMO_CORS_ORIGIN`, and
+`OVDB_DEMO_ORIGIN_HOST_SUFFIX`. The suffix restricts session origins to the
+account-owned relay domain and prevents the trusted control plane from turning
+the Worker into an arbitrary fetch proxy. Missing
+configuration fails closed. `OVDB_DEMO_CONTROL_SECRET` is only for backend to
+edge `/internal/demo/sessions/{sessionId}` calls; it is never forwarded to a
+tunnel origin. `OVDB_DEMO_ENCRYPTION_KEY` is a base64url-encoded 32-byte AES-GCM
+key used to encrypt the per-session database credential before writing KV.
+
+Before enabling a session's exact origin hostname, configure that hostname as
+an exact Worker route (not a wildcard) whose normal origin is the managed
+tunnel. Verify the account's real routing semantics with an unauthenticated
+direct-host request: it must be denied by this Worker without an origin request.
+Also test the bare tunnel target separately. Do not enable the feature until
+both checks are recorded; the local Worker test intentionally does not claim a
+production tunnel receipt.

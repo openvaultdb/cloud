@@ -5,14 +5,21 @@ import {
   type DeviceAuthEnv,
   type UpstreamFetch,
 } from "./proxy";
+import { handleDemoRequest, type DemoDependencies, type DemoEnv } from "./demo-session";
 
 export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
+  demoDependencies: DemoDependencies = {},
 ): ExportedHandler<Env> {
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        const demoResponse = await handleDemoRequest(request, env as DemoEnv, {
+          fetch: upstreamFetch,
+          ...demoDependencies,
+        });
+        if (demoResponse) return demoResponse;
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
             ? authorizationServerMetadata(env)
@@ -120,6 +127,51 @@ export function createWorker(
             upstreamFetch,
           );
         }
+        if (url.pathname === "/api/demo/sessions") {
+          if (request.method !== "POST") return methodNotAllowed("POST");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "demo-session-create"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/sessions",
+            upstreamFetch,
+          );
+        }
+        if (url.pathname.startsWith("/api/demo/sessions/")) {
+          if (request.method !== "DELETE") return methodNotAllowed("DELETE");
+          const sessionID = demoSessionIDFromPath(url.pathname);
+          if (!sessionID) return jsonResponse({ error: "invalid_request" }, 400);
+          const endRequest = new Request(request.url, {
+            method: "POST",
+            headers: {
+              Authorization: request.headers.get("Authorization") ?? "",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ sessionId: sessionID }),
+          });
+          return proxyDeviceAuthorization(
+            endRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session/end",
+            upstreamFetch,
+          );
+        }
+        if (url.pathname === "/api/demo/session") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          const search = allowedDemoSessionSearch(url);
+          if (!search) return jsonResponse({ error: "invalid_request" }, 400);
+          const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
+            headers: { Authorization: request.headers.get("Authorization") ?? "" },
+          });
+          return proxyDeviceAuthorization(
+            backendRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session",
+            upstreamFetch,
+          );
+        }
         if (url.pathname === "/api/databases") {
           if (request.method !== "GET") return methodNotAllowed("GET");
           if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "databases"))) {
@@ -216,6 +268,17 @@ function databaseIDFromPath(pathname: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function demoSessionIDFromPath(pathname: string): string | undefined {
+  const sessionID = pathname.slice("/api/demo/sessions/".length);
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(sessionID) ? sessionID : undefined;
+}
+
+function allowedDemoSessionSearch(url: URL): string | undefined {
+  const spaceIDs = url.searchParams.getAll("spaceId");
+  if (spaceIDs.length !== 1 || !/^[A-Za-z0-9_-]{1,128}$/u.test(spaceIDs[0])) return undefined;
+  return `?spaceId=${encodeURIComponent(spaceIDs[0])}`;
 }
 
 async function allowRequest(

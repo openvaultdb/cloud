@@ -6,6 +6,8 @@ import { PROXY_SECRET_HEADER } from "../src/proxy";
 import { createWorker } from "../src/worker";
 
 const baseURL = "https://cloud.openvaultdb.com";
+const demoEncryptionKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY";
+const demoNow = Date.parse("2026-09-02T12:00:00.000Z");
 const upstreamRequests: Request[] = [];
 const upstreamFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const request = new Request(input, init);
@@ -47,6 +49,12 @@ const upstreamFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
       );
     case "/v0/ovdb/cloud/database":
       return Response.json({ database: { id: new URL(request.url).searchParams.get("id") } });
+    case "/v0/ovdb/demo/sessions":
+      return Response.json({ sessionId: "session_test", tunnelToken: "secret-only-in-body" });
+    case "/v0/ovdb/demo/session":
+      return Response.json({ sessionId: "session_test", spaceId: new URL(request.url).searchParams.get("spaceId") });
+    case "/v0/ovdb/demo/session/end":
+      return new Response(null, { status: 204 });
     default:
       return Response.json({ error: "not_found" }, { status: 404 });
   }
@@ -284,7 +292,194 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(response.headers.get("Authorization")).toBeNull();
     await expect(response.json()).resolves.toMatchObject({ error: "insufficient_scope" });
   });
+
+  it("maps the bounded demo control routes to the backend without treating them as data relay requests", async () => {
+    const created = await call("/api/demo/sessions", {
+      method: "POST", headers: { Authorization: "Bearer device-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ app: "listus" }),
+    });
+    expect(created.status).toBe(200);
+    expect(upstreamRequests[0].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/sessions");
+    expect(upstreamRequests[0].headers.get("Authorization")).toBe("Bearer device-token");
+    const metadata = await call("/api/demo/session?spaceId=space_1&upstream=attacker", {
+      headers: { Authorization: "Bearer firebase-token" },
+    });
+    expect(metadata.status).toBe(200);
+    expect(upstreamRequests[1].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session?spaceId=space_1");
+    const ended = await call("/api/demo/sessions/session_test", {
+      method: "DELETE", headers: { Authorization: "Bearer device-token" },
+    });
+    expect(ended.status).toBe(204);
+    expect(upstreamRequests[2].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session/end");
+    await expect(upstreamRequests[2].json()).resolves.toEqual({ sessionId: "session_test" });
+  });
 });
+
+describe("Listus demo session relay", () => {
+  it("stores an encrypted immutable session, replaces an old session, and revokes it", async () => {
+    const kv = new MemoryKV();
+    const demoWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });
+    const put = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_one")),
+    });
+    expect(put.status).toBe(204);
+    expect(kv.values.get("demo:session:session_one")).not.toContain("database-secret");
+    const retry = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_one")),
+    });
+    expect(retry.status).toBe(204);
+    const replacement = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_two", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_two", "https://two.demo.openvaultdb.com")),
+    });
+    expect(replacement.status).toBe(204);
+    expect(kv.values.has("demo:session:session_one")).toBe(false);
+    const deleted = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_two", {
+      method: "DELETE", headers: controlHeaders(),
+    });
+    expect(deleted.status).toBe(204);
+    expect(kv.values.has("demo:session:session_two")).toBe(false);
+  });
+
+  it("rejects an invalid control secret, an oversized body, and an expired session at equality", async () => {
+    const kv = new MemoryKV();
+    const demoWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });
+    const denied = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(session("session_one")),
+    });
+    expect(denied.status).toBe(401);
+    const huge = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
+      method: "PUT", headers: { ...controlHeaders(), "Content-Length": "70000" }, body: JSON.stringify(session("session_one")),
+    });
+    expect(huge.status).toBe(400);
+    await putSession(demoWorker, kv, session("session_one", undefined, new Date(demoNow + 1_000).toISOString()));
+    const equalityWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow + 1_000 });
+    const expired = await demoCall(equalityWorker, kv, stablePath, { headers: { Authorization: "Bearer invalid" } });
+    expect(expired.status).toBe(410);
+  });
+
+  it("verifies Firebase signature, issuer and audience before owner-only proxying", async () => {
+    const kv = new MemoryKV();
+    const received: Request[] = [];
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
+    const firebaseJwksFetch = async () => Response.json({ test_key: certificate });
+    const demoWorker = createWorker(async (input, init) => {
+      received.push(new Request(input, init));
+      return Response.json({ lists: [] }, { headers: { "X-OVDB-Demo-Control-Secret": "never-forward" } });
+    }, { now: () => demoNow - 1, firebaseJwksFetch });
+    await putSession(demoWorker, kv, session("session_one"));
+    const valid = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
+    const response = await demoCall(demoWorker, kv, stablePath, {
+      headers: { Authorization: `Bearer ${valid}`, Origin: "https://listus.app", Cookie: "must-not-forward" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
+    expect(response.headers.get("X-OVDB-Demo-Control-Secret")).toBeNull();
+    expect(received).toHaveLength(1);
+    expect(received[0].headers.get("Authorization")).toBe("Bearer database-secret");
+    expect(received[0].headers.get("Cookie")).toBeNull();
+    const badAudience = await signedFirebaseToken(key.privateKey, { sub: "owner_1", aud: "attacker" });
+    const refused = await demoCall(demoWorker, kv, stablePath, { headers: { Authorization: `Bearer ${badAudience}` } });
+    expect(refused.status).toBe(401);
+    const otherOwner = await signedFirebaseToken(key.privateKey, { sub: "owner_2" });
+    const forbidden = await demoCall(demoWorker, kv, stablePath, { headers: { Authorization: `Bearer ${otherOwner}` } });
+    expect(forbidden.status).toBe(403);
+  });
+
+  it("applies the same lease and owner checks to the exact origin hostname", async () => {
+    const kv = new MemoryKV();
+    let proxied = 0;
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
+    const worker = createWorker(async () => { proxied += 1; return Response.json({ ok: true }); }, {
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+    });
+    await putSession(worker, kv, session("session_one"));
+    const directWithoutIdentity = await demoCall(worker, kv, "/v1/records", { host: "origin.demo.openvaultdb.com" });
+    expect(directWithoutIdentity.status).toBe(401);
+    expect(proxied).toBe(0);
+    const owner = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
+    const directOwner = await demoCall(worker, kv, "/v1/records", { host: "origin.demo.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
+    expect(directOwner.status).toBe(200);
+    expect(proxied).toBe(1);
+  });
+
+  it("bounds origin failures without exposing a redirect or timing out forever", async () => {
+    const kv = new MemoryKV();
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
+    const timeoutWorker = createWorker(async () => { throw new DOMException("timed out", "TimeoutError"); }, {
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+    });
+    await putSession(timeoutWorker, kv, session("session_one"));
+    const token = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
+    const timeout = await demoCall(timeoutWorker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } });
+    expect(timeout.status).toBe(504);
+    const redirectWorker = createWorker(async () => new Response(null, { status: 302, headers: { Location: "https://attacker.example" } }), {
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+    });
+    const redirect = await demoCall(redirectWorker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } });
+    expect(redirect.status).toBe(502);
+    expect(redirect.headers.get("Location")).toBeNull();
+  });
+
+  it.each(["/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/%2fsecret", "/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/../secret"]) (
+    "rejects malicious stable path %s before contacting the origin", async (path) => {
+      const kv = new MemoryKV(); let called = false;
+      const worker = createWorker(async () => { called = true; return Response.json({ ok: true }); });
+      const response = await demoCall(worker, kv, path);
+      expect(response.status).toBe(404);
+      expect(called).toBe(false);
+    },
+  );
+});
+
+const stablePath = "/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/v1/records";
+
+class MemoryKV {
+  readonly values = new Map<string, string>();
+  async get(key: string): Promise<string | null> { return this.values.get(key) ?? null; }
+  async put(key: string, value: string): Promise<void> { this.values.set(key, value); }
+  async delete(key: string): Promise<void> { this.values.delete(key); }
+}
+
+function session(sessionId: string, originUrl = "https://origin.demo.openvaultdb.com", expiresAt = new Date(demoNow + 60_000).toISOString()) {
+  return { sessionId, ownerUserId: "owner_1", spaceId: "space_1", databaseId: "demo-sneat-space", expiresAt, originUrl, originToken: "database-secret" };
+}
+
+function controlHeaders(): Record<string, string> { return { "Content-Type": "application/json", "X-OVDB-Demo-Control-Secret": "control-secret" }; }
+
+async function putSession(worker: ReturnType<typeof createWorker>, kv: MemoryKV, value: ReturnType<typeof session>) {
+  const response = await demoCall(worker, kv, `/internal/demo/sessions/${value.sessionId}`, { method: "PUT", headers: controlHeaders(), body: JSON.stringify(value) });
+  expect(response.status).toBe(204);
+}
+
+function demoCall(worker: ReturnType<typeof createWorker>, kv: MemoryKV, pathname: string, init: RequestInit & { host?: string } = {}): Promise<Response> {
+  const host = init.host ?? "cloud.openvaultdb.com";
+  const { host: _host, ...requestInit } = init;
+  const demoEnv = {
+    ...env,
+    OVDB_DEMO_ENABLED: "true",
+    OVDB_DEMO_CONTROL_SECRET: "control-secret",
+    OVDB_DEMO_ENCRYPTION_KEY: demoEncryptionKey,
+    OVDB_DEMO_FIREBASE_PROJECT_ID: "sneat-eur3-1",
+    OVDB_DEMO_CORS_ORIGIN: "https://listus.app",
+    OVDB_DEMO_ORIGIN_HOST_SUFFIX: "demo.openvaultdb.com",
+    OVDB_DEMO_SESSIONS: kv,
+  } as unknown as Env;
+  return (worker.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(new Request(`https://${host}${pathname}`, requestInit), demoEnv, createExecutionContext());
+}
+
+async function signedFirebaseToken(privateKey: CryptoKey, override: Partial<Record<string, string | number>>): Promise<string> {
+  const claims = { sub: "owner_1", aud: "sneat-eur3-1", iss: "https://securetoken.google.com/sneat-eur3-1", exp: Math.floor((demoNow + 60_000) / 1000), iat: Math.floor((demoNow - 60_000) / 1000), ...override };
+  const header = encode({ alg: "RS256", kid: "test_key" }); const body = encode(claims);
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(`${header}.${body}`));
+  return `${header}.${body}.${base64url(signature)}`;
+}
+
+function encode(value: unknown): string { return base64url(new TextEncoder().encode(JSON.stringify(value))); }
+function base64url(value: ArrayBuffer | Uint8Array): string { return btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, ""); }
+function pem(spki: ArrayBuffer): string { const body = btoa(String.fromCharCode(...new Uint8Array(spki))).match(/.{1,64}/g)?.join("\n"); return `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----`; }
 
 function formPost(pathname: string, values: Record<string, string>): Promise<Response> {
   return call(pathname, {
