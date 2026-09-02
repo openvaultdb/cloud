@@ -20,7 +20,7 @@ export function createWorker(
           ...demoDependencies,
         });
         if (demoResponse) return demoResponse;
-        if (url.pathname === "/api/demo/session" || url.pathname === "/api/demo/sessions" || url.pathname.startsWith("/api/demo/sessions/")) {
+        if (url.pathname === "/api/demo/session/browser") {
           const cors = demoControlCorsResponse(request, env as DemoEnv);
           if (cors) return cors;
         }
@@ -169,10 +169,24 @@ export function createWorker(
           const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
             headers: { Authorization: request.headers.get("Authorization") ?? "" },
           });
-          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
+          return proxyDeviceAuthorization(
             backendRequest,
             env as DeviceAuthEnv,
             "/v0/ovdb/demo/session",
+            upstreamFetch,
+          );
+        }
+        if (url.pathname === "/api/demo/session/browser") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          const search = allowedDemoSessionSearch(url);
+          if (!search) return jsonResponse({ error: "invalid_request" }, 400);
+          const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
+            headers: { Authorization: request.headers.get("Authorization") ?? "" },
+          });
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
+            backendRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session/browser",
             upstreamFetch,
           ));
         }

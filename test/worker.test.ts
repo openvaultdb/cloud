@@ -53,6 +53,8 @@ const upstreamFetch = async (input: RequestInfo | URL, init?: RequestInit): Prom
       return Response.json({ sessionId: "session_test", tunnelToken: "secret-only-in-body" });
     case "/v0/ovdb/demo/session":
       return Response.json({ sessionId: "session_test", spaceId: new URL(request.url).searchParams.get("spaceId") });
+    case "/v0/ovdb/demo/session/browser":
+      return Response.json({ sessionId: "session_test", spaceId: new URL(request.url).searchParams.get("spaceId") });
     case "/v0/ovdb/demo/session/end":
       return new Response(null, { status: 204 });
     default:
@@ -307,12 +309,20 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     });
     expect(metadata.status).toBe(200);
     expect(upstreamRequests[1].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session?spaceId=space_1");
+    expect(upstreamRequests[1].headers.get("Authorization")).toBe("Bearer firebase-token");
+    const browserMetadata = await demoCall(worker, kv, "/api/demo/session/browser?spaceId=space_1&upstream=attacker", {
+      headers: { Authorization: "Bearer firebase-id-token", Origin: "https://listus.app" },
+    });
+    expect(browserMetadata.status).toBe(200);
+    expect(browserMetadata.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
+    expect(upstreamRequests[2].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session/browser?spaceId=space_1");
+    expect(upstreamRequests[2].headers.get("Authorization")).toBe("Bearer firebase-id-token");
     const ended = await demoCall(worker, kv, "/api/demo/sessions/session_test", {
       method: "DELETE", headers: { Authorization: "Bearer device-token" },
     });
     expect(ended.status).toBe(204);
-    expect(upstreamRequests[2].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session/end");
-    await expect(upstreamRequests[2].json()).resolves.toEqual({ sessionId: "session_test" });
+    expect(upstreamRequests[3].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session/end");
+    await expect(upstreamRequests[3].json()).resolves.toEqual({ sessionId: "session_test" });
   });
 });
 
@@ -506,15 +516,15 @@ describe("Listus demo session relay", () => {
     expect(nativePaths).toEqual(["/v1/databases/demo-sneat-space/records/lists/do%3Ademo"]);
   });
 
-  it("adds strict Listus CORS to safe browser metadata control responses", async () => {
+  it("adds strict Listus CORS to the explicit browser metadata control response", async () => {
     const kv = new MemoryKV();
     const worker = createWorker(async () => Response.json({ sessionId: "safe", spaceId: "space_1" }));
-    const preflight = await demoCall(worker, kv, "/api/demo/session?spaceId=space_1", {
+    const preflight = await demoCall(worker, kv, "/api/demo/session/browser?spaceId=space_1", {
       method: "OPTIONS", headers: { Origin: "https://listus.app", "Access-Control-Request-Method": "GET" },
     });
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
-    const metadata = await demoCall(worker, kv, "/api/demo/session?spaceId=space_1", {
+    const metadata = await demoCall(worker, kv, "/api/demo/session/browser?spaceId=space_1", {
       headers: { Origin: "https://listus.app", Authorization: "Bearer firebase-id-token" },
     });
     expect(metadata.status).toBe(200);
