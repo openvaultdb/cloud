@@ -5,14 +5,25 @@ import {
   type DeviceAuthEnv,
   type UpstreamFetch,
 } from "./proxy";
+import { handleDemoRequest, type DemoDependencies, type DemoEnv } from "./demo-session";
 
 export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
+  demoDependencies: DemoDependencies = {},
 ): ExportedHandler<Env> {
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        const demoResponse = await handleDemoRequest(request, env as DemoEnv, {
+          fetch: upstreamFetch,
+          ...demoDependencies,
+        });
+        if (demoResponse) return demoResponse;
+        if (url.pathname === "/api/demo/session/browser") {
+          const cors = demoControlCorsResponse(request, env as DemoEnv);
+          if (cors) return cors;
+        }
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
             ? authorizationServerMetadata(env)
@@ -120,6 +131,65 @@ export function createWorker(
             upstreamFetch,
           );
         }
+        if (url.pathname === "/api/demo/sessions") {
+          if (request.method !== "POST") return methodNotAllowed("POST");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "demo-session-create"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/sessions",
+            upstreamFetch,
+          ));
+        }
+        if (url.pathname.startsWith("/api/demo/sessions/")) {
+          if (request.method !== "DELETE") return methodNotAllowed("DELETE");
+          const sessionID = demoSessionIDFromPath(url.pathname);
+          if (!sessionID) return jsonResponse({ error: "invalid_request" }, 400);
+          const endRequest = new Request(request.url, {
+            method: "POST",
+            headers: {
+              Authorization: request.headers.get("Authorization") ?? "",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ sessionId: sessionID }),
+          });
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
+            endRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session/end",
+            upstreamFetch,
+          ));
+        }
+        if (url.pathname === "/api/demo/session") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          const search = allowedDemoSessionSearch(url);
+          if (!search) return jsonResponse({ error: "invalid_request" }, 400);
+          const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
+            headers: { Authorization: request.headers.get("Authorization") ?? "" },
+          });
+          return proxyDeviceAuthorization(
+            backendRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session",
+            upstreamFetch,
+          );
+        }
+        if (url.pathname === "/api/demo/session/browser") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          const search = allowedDemoSessionSearch(url);
+          if (!search) return jsonResponse({ error: "invalid_request" }, 400);
+          const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
+            headers: { Authorization: request.headers.get("Authorization") ?? "" },
+          });
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
+            backendRequest,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/demo/session/browser",
+            upstreamFetch,
+          ));
+        }
         if (url.pathname === "/api/databases") {
           if (request.method !== "GET") return methodNotAllowed("GET");
           if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "databases"))) {
@@ -216,6 +286,34 @@ function databaseIDFromPath(pathname: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function demoSessionIDFromPath(pathname: string): string | undefined {
+  const sessionID = pathname.slice("/api/demo/sessions/".length);
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(sessionID) ? sessionID : undefined;
+}
+
+function allowedDemoSessionSearch(url: URL): string | undefined {
+  const spaceIDs = url.searchParams.getAll("spaceId");
+  if (spaceIDs.length !== 1 || !/^[A-Za-z0-9_-]{1,128}$/u.test(spaceIDs[0])) return undefined;
+  return `?spaceId=${encodeURIComponent(spaceIDs[0])}`;
+}
+
+function demoControlCorsResponse(request: Request, env: DemoEnv): Response | undefined {
+  const allowedOrigin = env.OVDB_DEMO_CORS_ORIGIN;
+  if (String(env.OVDB_DEMO_ENABLED) !== "true" || !allowedOrigin) return undefined;
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== allowedOrigin) return jsonResponse({ error: "cors_forbidden" }, 403);
+  if (request.method !== "OPTIONS") return undefined;
+  return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": allowedOrigin, "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Max-Age": "600", "Cache-Control": "no-store", Vary: "Origin" } });
+}
+
+function withDemoControlCors(request: Request, env: DemoEnv, response: Response): Response {
+  if (String(env.OVDB_DEMO_ENABLED) !== "true" || request.headers.get("Origin") !== env.OVDB_DEMO_CORS_ORIGIN) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", env.OVDB_DEMO_CORS_ORIGIN!);
+  headers.set("Vary", "Origin");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 async function allowRequest(
