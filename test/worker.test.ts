@@ -407,6 +407,24 @@ describe("Listus demo session relay", () => {
     const nonNumericAuthTime = await signedFirebaseToken(key.privateKey, { sub: "owner_1", auth_time: "not-a-time" });
     const malformed = await demoCall(demoWorker, kv, stablePath, { headers: { Authorization: `Bearer ${nonNumericAuthTime}` } });
     expect(malformed.status).toBe(401);
+    for (const claims of [
+      { iss: "https://securetoken.google.com/not-our-project" },
+      { exp: Math.floor((demoNow - 1) / 1000) },
+      { iat: Math.floor(demoNow / 1000) + 120 },
+    ]) {
+      const token = await signedFirebaseToken(key.privateKey, claims);
+      const rejected = await demoCall(demoWorker, kv, stablePath, {
+        headers: { Authorization: `Bearer ${token}`, Origin: "https://listus.app" },
+      });
+      expect(rejected.status).toBe(401);
+      expect(rejected.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
+    }
+    const tampered = valid.split(".");
+    tampered[2] = (tampered[2][0] === "A" ? "B" : "A") + tampered[2].slice(1);
+    expect((await demoCall(demoWorker, kv, stablePath, {
+      headers: { Authorization: `Bearer ${tampered.join(".")}` },
+    })).status).toBe(401);
+    expect(received).toHaveLength(1); // Rejected credentials never contact the origin.
   });
 
   it("refreshes JWKs once for a rotated key rather than trusting a stale cache miss", async () => {
