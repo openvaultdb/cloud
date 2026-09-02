@@ -5,6 +5,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const JWKS_TIMEOUT_MS = 3_000;
 const MAX_JWKS_BYTES = 64 * 1024;
+const UNKNOWN_KID_COOLDOWN_SECONDS = 60;
 const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const SESSION_KEY_PREFIX = "demo:session:";
 const SPACE_KEY_PREFIX = "demo:space:";
@@ -54,11 +55,11 @@ export async function handleDemoRequest(
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   if (!isDemoEnabled(env)) {
-    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return jsonResponse({ error: "demo_unavailable" }, 503);
+    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return withDemoCors(jsonResponse({ error: "demo_unavailable" }, 503), request, env);
     return undefined;
   }
   if (!demoConfigured(env)) {
-    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return jsonResponse({ error: "demo_unavailable" }, 503);
+    if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return withDemoCors(jsonResponse({ error: "demo_unavailable" }, 503), request, env);
     return undefined;
   }
 
@@ -90,7 +91,7 @@ function demoConfigured(env: DemoEnv): boolean {
 }
 
 function isDemoPath(pathname: string): boolean {
-  return pathname.startsWith("/internal/demo/") || pathname.startsWith(stablePrefix);
+  return pathname.startsWith("/internal/demo/") || pathname.startsWith("/api/demo/") || pathname.startsWith(stablePrefix);
 }
 
 function isPotentialDemoOriginHost(hostname: string): boolean {
@@ -126,6 +127,9 @@ async function handleInternalSession(
     if (!stored || !(await sameSession(stored, session, env.OVDB_DEMO_ENCRYPTION_KEY!))) {
       return jsonResponse({ error: "session_conflict" }, 409);
     }
+    if (!(await repairSessionIndexes(env, stored, (dependencies.now ?? Date.now)()))) {
+      return jsonResponse({ error: "session_conflict" }, 409);
+    }
     return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   }
 
@@ -142,6 +146,25 @@ async function handleInternalSession(
     return jsonResponse({ error: "session_conflict" }, 409);
   }
   return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+}
+
+async function repairSessionIndexes(env: DemoEnv, session: StoredSession, now: number): Promise<boolean> {
+  const expiration = kvExpirationSeconds(Date.parse(session.expiresAt), now);
+  const indexes = [
+    [spaceKey(session.spaceId), session.sessionId],
+    [ownerKey(session.ownerUserId), session.sessionId],
+    [originKey(new URL(session.originUrl).hostname), session.sessionId],
+  ] as const;
+  for (const [key, value] of indexes) {
+    const current = await env.OVDB_DEMO_SESSIONS!.get(key);
+    if (current && current !== value) return false;
+  }
+  for (const [key, value] of indexes) {
+    if ((await env.OVDB_DEMO_SESSIONS!.get(key)) === null) {
+      await env.OVDB_DEMO_SESSIONS!.put(key, value, { expiration });
+    }
+  }
+  return true;
 }
 
 async function deleteSession(env: DemoEnv, sessionID: string): Promise<Response> {
@@ -400,9 +423,10 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
     if (header.alg !== "RS256" || !header.kid || claims.aud !== project || claims.iss !== `https://securetoken.google.com/${project}` || !safeID(claims.sub) || !validNumericDate(claims.exp) || !validNumericDate(claims.iat) || !validNumericDate(claims.auth_time) || claims.exp <= nowSeconds || claims.exp <= claims.iat || claims.exp - claims.iat > 3600 || claims.iat > nowSeconds + 60 || claims.auth_time > nowSeconds + 60) throw new Error("invalid claims");
     let keys = await loadFirebaseJwks(dependencies);
     let jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
-    if (!jwk) {
+    if (!jwk && await claimUnknownKidRefresh(header.kid)) {
       keys = await loadFirebaseJwks(dependencies, true);
       jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
+      if (jwk) await clearUnknownKidCooldown(header.kid);
     }
     if (!jwk) throw new Error("unknown key");
     const publicKey = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
@@ -415,12 +439,12 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
 function decodeJSON<T>(value: string): T { return JSON.parse(new TextDecoder().decode(base64UrlDecode(value))) as T; }
 function validNumericDate(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
 async function loadFirebaseJwks(dependencies: DemoDependencies, refresh = false): Promise<FirebaseJwkSet> {
-  if (dependencies.firebaseJwksFetch) return readJwks(await dependencies.firebaseJwksFetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) }));
+  const jwksFetch = dependencies.firebaseJwksFetch ?? fetch;
   const cacheKey = new Request(FIREBASE_JWKS_URL);
   const cache = await caches.open("ovdb-demo-jwks");
   const cached = refresh ? undefined : await cache.match(cacheKey);
   if (cached) return readJwks(cached);
-  const response = await fetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
+  const response = await jwksFetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
   const body = await readJwksBody(response);
   const parsed = parseJwks(body);
   const maxAge = cacheMaxAgeSeconds(response.headers.get("Cache-Control"));
@@ -430,6 +454,17 @@ async function loadFirebaseJwks(dependencies: DemoDependencies, refresh = false)
     await cache.put(cacheKey, new Response(toArrayBuffer(body), { status: response.status, headers }));
   }
   return parsed;
+}
+async function claimUnknownKidRefresh(kid: string): Promise<boolean> {
+  const cache = await caches.open("ovdb-demo-jwks");
+  const key = new Request(`${FIREBASE_JWKS_URL}?unknown-kid=${encodeURIComponent(kid)}`);
+  if (await cache.match(key)) return false;
+  await cache.put(key, new Response(null, { headers: { "Cache-Control": `public, max-age=${UNKNOWN_KID_COOLDOWN_SECONDS}` } }));
+  return true;
+}
+async function clearUnknownKidCooldown(kid: string): Promise<void> {
+  const cache = await caches.open("ovdb-demo-jwks");
+  await cache.delete(new Request(`${FIREBASE_JWKS_URL}?unknown-kid=${encodeURIComponent(kid)}`));
 }
 async function readJwks(response: Response): Promise<FirebaseJwkSet> {
   return parseJwks(await readJwksBody(response));

@@ -294,19 +294,20 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
   });
 
   it("maps the bounded demo control routes to the backend without treating them as data relay requests", async () => {
-    const created = await call("/api/demo/sessions", {
+    const kv = new MemoryKV();
+    const created = await demoCall(worker, kv, "/api/demo/sessions", {
       method: "POST", headers: { Authorization: "Bearer device-token", "Content-Type": "application/json" },
       body: JSON.stringify({ app: "listus" }),
     });
     expect(created.status).toBe(200);
     expect(upstreamRequests[0].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/sessions");
     expect(upstreamRequests[0].headers.get("Authorization")).toBe("Bearer device-token");
-    const metadata = await call("/api/demo/session?spaceId=space_1&upstream=attacker", {
+    const metadata = await demoCall(worker, kv, "/api/demo/session?spaceId=space_1&upstream=attacker", {
       headers: { Authorization: "Bearer firebase-token" },
     });
     expect(metadata.status).toBe(200);
     expect(upstreamRequests[1].url).toBe("https://api.sneat.cloud/v0/ovdb/demo/session?spaceId=space_1");
-    const ended = await call("/api/demo/sessions/session_test", {
+    const ended = await demoCall(worker, kv, "/api/demo/sessions/session_test", {
       method: "DELETE", headers: { Authorization: "Bearer device-token" },
     });
     expect(ended.status).toBe(204);
@@ -328,6 +329,14 @@ describe("Listus demo session relay", () => {
       method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001")),
     });
     expect(retry.status).toBe(204);
+    kv.values.delete("demo:owner:owner_1");
+    kv.values.delete("demo:space:space_1");
+    kv.values.delete("demo:origin:ovdb-demo-session-demo-000001.openvaultdb.com");
+    const repaired = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001")),
+    });
+    expect(repaired.status).toBe(204);
+    expect(kv.values.get("demo:owner:owner_1")).toBe("session-demo-000001");
     const replacement = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000002", {
       method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000002")),
     });
@@ -404,6 +413,23 @@ describe("Listus demo session relay", () => {
     expect(calls).toBe(2);
   });
 
+  it("uses Cache API cooldown to avoid refreshing an unknown JWK kid on every invalid request", async () => {
+    const jwksURL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+    const cache = await caches.open("ovdb-demo-jwks");
+    await cache.delete(new Request(jwksURL));
+    await cache.delete(new Request(`${jwksURL}?unknown-kid=cooldown-kid`));
+    const kv = new MemoryKV(); let calls = 0;
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const worker = createWorker(async () => Response.json({ ok: true }), {
+      now: () => demoNow - 1, firebaseJwksFetch: async () => { calls += 1; return Response.json({ keys: [] }, { headers: { "Cache-Control": "public, max-age=60" } }); },
+    });
+    await putSession(worker, kv, session("session-demo-000001"));
+    const token = await signedFirebaseToken(key.privateKey, { sub: "owner_1" }, "cooldown-kid");
+    expect((await demoCall(worker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(401);
+    expect((await demoCall(worker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(401);
+    expect(calls).toBe(2);
+  });
+
   it("applies the same lease and owner checks to the exact origin hostname", async () => {
     const kv = new MemoryKV();
     let proxied = 0;
@@ -436,6 +462,8 @@ describe("Listus demo session relay", () => {
     const disabled = createWorker(async () => Response.json({ asset: true }));
     const disabledResponse = await (disabled.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(request, env, createExecutionContext());
     expect(disabledResponse.status).toBe(503);
+    const disabledControl = await (disabled.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(new Request("https://cloud.openvaultdb.com/api/demo/session?spaceId=space_1"), env, createExecutionContext());
+    expect(disabledControl.status).toBe(503);
     const unconfigured = { ...env, OVDB_DEMO_ENABLED: "true" } as unknown as Env;
     const unconfiguredResponse = await (disabled.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(request, unconfigured, createExecutionContext());
     expect(unconfiguredResponse.status).toBe(503);
@@ -541,9 +569,9 @@ function demoCall(worker: ReturnType<typeof createWorker>, kv: MemoryKV, pathnam
   return (worker.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(new Request(`https://${host}${pathname}`, requestInit), demoEnv, createExecutionContext());
 }
 
-async function signedFirebaseToken(privateKey: CryptoKey, override: Partial<Record<string, string | number>>): Promise<string> {
+async function signedFirebaseToken(privateKey: CryptoKey, override: Partial<Record<string, string | number>>, kid = "test_key"): Promise<string> {
   const claims = { sub: "owner_1", aud: "sneat-eur3-1", iss: "https://securetoken.google.com/sneat-eur3-1", exp: Math.floor((demoNow + 60_000) / 1000), iat: Math.floor((demoNow - 60_000) / 1000), auth_time: Math.floor((demoNow - 60_000) / 1000), ...override };
-  const header = encode({ alg: "RS256", kid: "test_key" }); const body = encode(claims);
+  const header = encode({ alg: "RS256", kid }); const body = encode(claims);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(`${header}.${body}`));
   return `${header}.${body}.${base64url(signature)}`;
 }
