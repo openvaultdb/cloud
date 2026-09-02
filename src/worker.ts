@@ -1,5 +1,6 @@
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import {
+  proxyCloudDatabase,
   proxyDeviceAuthorization,
   type DeviceAuthEnv,
   type UpstreamFetch,
@@ -119,6 +120,39 @@ export function createWorker(
             upstreamFetch,
           );
         }
+        if (url.pathname === "/api/databases") {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "databases"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyCloudDatabase(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/cloud/databases",
+            allowedDatabaseListSearch(url),
+            upstreamFetch,
+          );
+        }
+        if (url.pathname.startsWith("/api/databases/")) {
+          if (request.method !== "GET") return methodNotAllowed("GET");
+          const databaseID = databaseIDFromPath(url.pathname);
+          if (!databaseID) {
+            return jsonResponse(
+              { error: "invalid_request", error_description: "Database id must be one URL-safe path segment." },
+              400,
+            );
+          }
+          if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "database"))) {
+            return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
+          }
+          return proxyCloudDatabase(
+            request,
+            env as DeviceAuthEnv,
+            "/v0/ovdb/cloud/database",
+            `?id=${encodeURIComponent(databaseID)}`,
+            upstreamFetch,
+          );
+        }
 
         if (request.method !== "GET" && request.method !== "HEAD") {
           return jsonResponse({ error: "Not found." }, 404);
@@ -160,8 +194,28 @@ function authorizationServerMetadata(env: Env): Response {
     revocation_endpoint: `${env.PUBLIC_ORIGIN}/oauth/revoke`,
     grant_types_supported: [grantType],
     token_endpoint_auth_methods_supported: ["none"],
-    scopes_supported: ["account:read"],
+    scopes_supported: ["account:read", "databases:read"],
   });
+}
+
+function allowedDatabaseListSearch(url: URL): string {
+  const search = new URLSearchParams();
+  for (const name of ["space", "pageSize", "pageToken"] as const) {
+    for (const value of url.searchParams.getAll(name)) search.append(name, value);
+  }
+  const encoded = search.toString();
+  return encoded ? `?${encoded}` : "";
+}
+
+function databaseIDFromPath(pathname: string): string | undefined {
+  const encodedID = pathname.slice("/api/databases/".length);
+  if (!encodedID || encodedID.includes("/")) return undefined;
+  try {
+    const databaseID = decodeURIComponent(encodedID);
+    return /^[A-Za-z0-9_-]+$/u.test(databaseID) ? databaseID : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function allowRequest(
