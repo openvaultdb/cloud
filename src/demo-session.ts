@@ -3,6 +3,9 @@ import { jsonResponse, methodNotAllowed } from "./http";
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+const JWKS_TIMEOUT_MS = 3_000;
+const MAX_JWKS_BYTES = 64 * 1024;
+const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const SESSION_KEY_PREFIX = "demo:session:";
 const SPACE_KEY_PREFIX = "demo:space:";
 const OWNER_KEY_PREFIX = "demo:owner:";
@@ -39,9 +42,10 @@ type StoredSession = {
 };
 
 type EncryptedValue = { iv: string; ciphertext: string };
-type FirebaseClaims = { sub: string; aud: string; iss: string; exp: number; iat: number };
+type FirebaseClaims = { sub: string; aud: string; iss: string; exp: number; iat: number; auth_time: number };
 type FirebaseHeader = { alg: string; kid: string };
-type FirebaseJwkSet = { keys: JsonWebKey[] };
+type FirebaseJwk = JsonWebKey & { kid?: string; alg?: string; use?: string };
+type FirebaseJwkSet = { keys: FirebaseJwk[] };
 
 export async function handleDemoRequest(
   request: Request,
@@ -129,6 +133,9 @@ async function handleInternalSession(
   await env.OVDB_DEMO_SESSIONS!.put(originKey(new URL(session.originUrl).hostname), sessionID, {
     expiration: expirySeconds,
   });
+  if ((await env.OVDB_DEMO_SESSIONS!.get(ownerKey(session.ownerUserId))) !== sessionID) {
+    return jsonResponse({ error: "session_conflict" }, 409);
+  }
   return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
 }
 
@@ -138,11 +145,15 @@ async function deleteSession(env: DemoEnv, sessionID: string): Promise<Response>
   const session = parseStoredSession(serialized);
   await env.OVDB_DEMO_SESSIONS!.delete(sessionKey(sessionID));
   if (session) {
-    await env.OVDB_DEMO_SESSIONS!.delete(spaceKey(session.spaceId));
-    await env.OVDB_DEMO_SESSIONS!.delete(ownerKey(session.ownerUserId));
-    await env.OVDB_DEMO_SESSIONS!.delete(originKey(new URL(session.originUrl).hostname));
+    await deleteIndexIfCurrent(env, spaceKey(session.spaceId), sessionID);
+    await deleteIndexIfCurrent(env, ownerKey(session.ownerUserId), sessionID);
+    await deleteIndexIfCurrent(env, originKey(new URL(session.originUrl).hostname), sessionID);
   }
   return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+}
+
+async function deleteIndexIfCurrent(env: DemoEnv, key: string, sessionID: string): Promise<void> {
+  if ((await env.OVDB_DEMO_SESSIONS!.get(key)) === sessionID) await env.OVDB_DEMO_SESSIONS!.delete(key);
 }
 
 async function handleStableDatabaseRequest(
@@ -151,15 +162,15 @@ async function handleStableDatabaseRequest(
   dependencies: DemoDependencies,
 ): Promise<Response> {
   const parsed = parseStablePath(new URL(request.url).pathname);
-  if (!parsed) return jsonResponse({ error: "not_found" }, 404);
+  if (!parsed) return withDemoCors(jsonResponse({ error: "not_found" }, 404), request, env);
   const sessionID = await env.OVDB_DEMO_SESSIONS!.get(ownerKey(parsed.ownerUserId));
-  if (!sessionID) return jsonResponse({ error: "session_unavailable" }, 404);
+  if (!sessionID) return withDemoCors(jsonResponse({ error: "session_unavailable" }, 404), request, env);
   const session = await loadAuthorizedSession(request, env, sessionID, dependencies);
-  if (session instanceof Response) return session;
+  if (session instanceof Response) return withDemoCors(session, request, env);
   if (session.ownerUserId !== parsed.ownerUserId || session.databaseId !== stableDatabaseID) {
-    return jsonResponse({ error: "not_found" }, 404);
+    return withDemoCors(jsonResponse({ error: "not_found" }, 404), request, env);
   }
-  return proxySessionRequest(request, env, session, parsed.suffix, dependencies);
+  return withDemoCors(await proxySessionRequest(request, env, session, parsed.suffix, dependencies), request, env);
 }
 
 async function handleOriginHostRequest(
@@ -169,8 +180,8 @@ async function handleOriginHostRequest(
   dependencies: DemoDependencies,
 ): Promise<Response> {
   const session = await loadAuthorizedSession(request, env, sessionID, dependencies);
-  if (session instanceof Response) return session;
-  return proxySessionRequest(request, env, session, new URL(request.url).pathname, dependencies);
+  if (session instanceof Response) return withDemoCors(session, request, env);
+  return withDemoCors(await proxySessionRequest(request, env, session, new URL(request.url).pathname, dependencies), request, env);
 }
 
 async function loadAuthorizedSession(
@@ -228,6 +239,11 @@ async function proxySessionRequest(
     if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
       return jsonResponse({ error: "response_too_large" }, 502);
     }
+    if ([204, 205, 304].includes(upstream.status)) {
+      const responseHeaders = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" });
+      applyCors(responseHeaders, request, env);
+      return new Response(null, { status: upstream.status, headers: responseHeaders });
+    }
     if (!upstream.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) {
       return jsonResponse({ error: "origin_rejected" }, 502);
     }
@@ -252,20 +268,23 @@ async function proxySessionRequest(
 
 function parseStablePath(pathname: string): { ownerUserId: string; suffix: string } | undefined {
   const prefix = "/users/";
-  const marker = "/demo-sneat-space/ovdb/v1/databases/demo-sneat-space";
+  const marker = "/demo-sneat-space";
   if (!pathname.startsWith(prefix)) return undefined;
   const markerIndex = pathname.indexOf(marker, prefix.length);
   if (markerIndex < 0) return undefined;
   const ownerUserId = pathname.slice(prefix.length, markerIndex);
   const suffix = pathname.slice(markerIndex + marker.length);
+  if (!suffix.startsWith("/ovdb/v1/databases/demo-sneat-space/")) return undefined;
   if (!safeID(ownerUserId) || !safePathSuffix(suffix)) return undefined;
   return { ownerUserId, suffix };
 }
 
 function sessionIDFromInternalPath(pathname: string): string | undefined {
   const value = pathname.slice("/internal/demo/sessions/".length);
-  return safeID(value) ? value : undefined;
+  return safeSessionID(value) ? value : undefined;
 }
+
+function safeSessionID(value: string): boolean { return /^[a-z0-9-]{16,48}$/u.test(value); }
 
 function safeID(value: string): boolean {
   return /^[A-Za-z0-9_-]{1,128}$/u.test(value);
@@ -303,6 +322,12 @@ function applyCors(headers: Headers, request: Request, env: DemoEnv): void {
   }
 }
 
+function withDemoCors(response: Response, request: Request, env: DemoEnv): Response {
+  const headers = new Headers(response.headers);
+  applyCors(headers, request, env);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function parseIncomingSession(
   value: unknown,
   sessionID: string,
@@ -324,8 +349,9 @@ async function parseIncomingSession(
   let origin: URL;
   try { origin = new URL(originUrl); } catch { return undefined; }
   const originSuffix = env.OVDB_DEMO_ORIGIN_HOST_SUFFIX!.toLowerCase();
+  const expectedHostname = `ovdb-demo-${sessionID}.${originSuffix}`;
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.search || origin.hash ||
-      (!origin.hostname.toLowerCase().endsWith(`.${originSuffix}`) && origin.hostname.toLowerCase() !== originSuffix)) return undefined;
+      origin.port || origin.pathname !== "/" || origin.hostname.toLowerCase() !== expectedHostname) return undefined;
   const encryptedOriginToken = await encrypt(originToken, env.OVDB_DEMO_ENCRYPTION_KEY!);
   return { sessionId: sessionID, ownerUserId, spaceId, databaseId, expiresAt: new Date(expiry).toISOString(), originUrl: origin.toString(), encryptedOriginToken };
 }
@@ -338,7 +364,7 @@ function stringField(input: Record<string, unknown>, field: string): string | un
 function parseStoredSession(value: string): StoredSession | undefined {
   try {
     const parsed = JSON.parse(value) as StoredSession;
-    return parsed && safeID(parsed.sessionId) && safeID(parsed.ownerUserId) && safeID(parsed.spaceId) && parsed.databaseId === stableDatabaseID && typeof parsed.expiresAt === "string" && typeof parsed.originUrl === "string" && parsed.encryptedOriginToken ? parsed : undefined;
+    return parsed && safeSessionID(parsed.sessionId) && safeID(parsed.ownerUserId) && safeID(parsed.spaceId) && parsed.databaseId === stableDatabaseID && typeof parsed.expiresAt === "string" && typeof parsed.originUrl === "string" && parsed.encryptedOriginToken ? parsed : undefined;
   } catch { return undefined; }
 }
 
@@ -359,13 +385,11 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
     const claims = decodeJSON<FirebaseClaims>(parts[1]);
     const nowSeconds = Math.floor((dependencies.now ?? Date.now)() / 1000);
     const project = env.OVDB_DEMO_FIREBASE_PROJECT_ID!;
-    if (header.alg !== "RS256" || !header.kid || claims.aud !== project || claims.iss !== `https://securetoken.google.com/${project}` || !safeID(claims.sub) || claims.exp <= nowSeconds || claims.iat > nowSeconds + 60) throw new Error("invalid claims");
-    const keys = await (dependencies.firebaseJwksFetch ?? fetch)("https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com");
-    if (!keys.ok) throw new Error("keys unavailable");
-    const certificates = await keys.json() as Record<string, string>;
-    const certificate = certificates[header.kid];
-    if (!certificate) throw new Error("unknown key");
-    const publicKey = await crypto.subtle.importKey("spki", pemToBytes(certificate), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+    if (header.alg !== "RS256" || !header.kid || claims.aud !== project || claims.iss !== `https://securetoken.google.com/${project}` || !safeID(claims.sub) || !validNumericDate(claims.exp) || !validNumericDate(claims.iat) || !validNumericDate(claims.auth_time) || claims.exp <= nowSeconds || claims.exp <= claims.iat || claims.exp - claims.iat > 3600 || claims.iat > nowSeconds + 60 || claims.auth_time > nowSeconds + 60) throw new Error("invalid claims");
+    const keys = await loadFirebaseJwks(dependencies);
+    const jwk = keys.keys.find(key => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256" && key.use === "sig");
+    if (!jwk) throw new Error("unknown key");
+    const publicKey = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
     const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, toArrayBuffer(base64UrlDecode(parts[2])), new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
     if (!valid) throw new Error("invalid signature");
     return claims;
@@ -373,7 +397,35 @@ async function verifyFirebaseIDToken(request: Request, env: DemoEnv, dependencie
 }
 
 function decodeJSON<T>(value: string): T { return JSON.parse(new TextDecoder().decode(base64UrlDecode(value))) as T; }
-function pemToBytes(value: string): ArrayBuffer { return toArrayBuffer(base64Decode(value.replace(/-----[^-]+-----|\s/g, ""))); }
+function validNumericDate(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+async function loadFirebaseJwks(dependencies: DemoDependencies): Promise<FirebaseJwkSet> {
+  if (dependencies.firebaseJwksFetch) return readJwks(await dependencies.firebaseJwksFetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) }));
+  const cacheKey = new Request(FIREBASE_JWKS_URL);
+  const cache = await caches.open("ovdb-demo-jwks");
+  const cached = await cache.match(cacheKey);
+  if (cached) return readJwks(cached);
+  const response = await fetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(JWKS_TIMEOUT_MS) });
+  const body = await readJwksBody(response);
+  const parsed = parseJwks(body);
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "public, max-age=3600");
+  await cache.put(cacheKey, new Response(toArrayBuffer(body), { status: response.status, headers }));
+  return parsed;
+}
+async function readJwks(response: Response): Promise<FirebaseJwkSet> {
+  return parseJwks(await readJwksBody(response));
+}
+async function readJwksBody(response: Response): Promise<Uint8Array> {
+  if (!response.ok) throw new Error("keys unavailable");
+  const length = Number(response.headers.get("Content-Length") ?? "0");
+  if (Number.isFinite(length) && length > MAX_JWKS_BYTES) throw new Error("keys too large");
+  return readBoundedBytes(response.body, MAX_JWKS_BYTES);
+}
+function parseJwks(body: Uint8Array): FirebaseJwkSet {
+  const parsed = JSON.parse(new TextDecoder().decode(body)) as FirebaseJwkSet;
+  if (!Array.isArray(parsed.keys) || parsed.keys.length > 32) throw new Error("invalid keys");
+  return parsed;
+}
 function base64Decode(value: string): Uint8Array { return Uint8Array.from(atob(value), char => char.charCodeAt(0)); }
 function base64UrlDecode(value: string): Uint8Array { return base64Decode(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4)); }
 function base64UrlEncode(value: ArrayBuffer | Uint8Array): string { return btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, ""); }
@@ -403,7 +455,23 @@ async function timingSafeEqual(left: string, right: string): Promise<boolean> {
 async function readBoundedJSON(request: Request): Promise<unknown> {
   if (request.headers.get("Content-Type")?.split(";", 1)[0] !== "application/json") throw new Error("content type");
   const length = Number(request.headers.get("Content-Length") ?? "0"); if (Number.isFinite(length) && length > MAX_JSON_BYTES) throw new Error("too large");
-  const body = await request.arrayBuffer(); if (body.byteLength > MAX_JSON_BYTES) throw new Error("too large"); return JSON.parse(new TextDecoder().decode(body));
+  const body = await readBoundedBytes(request.body, MAX_JSON_BYTES); return JSON.parse(new TextDecoder().decode(body));
+}
+async function readBoundedBytes(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array> {
+  if (!body) return new Uint8Array();
+  const reader = body.getReader(); const chunks: Uint8Array[] = []; let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > limit) throw new Error("too large");
+      chunks.push(next.value);
+    }
+  } finally { reader.releaseLock(); }
+  const result = new Uint8Array(total); let offset = 0;
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
+  return result;
 }
 function boundedBody(body: ReadableStream<Uint8Array> | null, limit = MAX_JSON_BYTES): ReadableStream<Uint8Array> | undefined {
   if (!body) return undefined; let total = 0;

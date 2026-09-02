@@ -67,7 +67,9 @@ key used to encrypt the per-session database credential before writing KV.
 
 Before enabling a session's exact origin hostname, configure that hostname as
 an exact Worker route (not a wildcard) whose normal origin is the managed
-tunnel. Verify the account's real routing semantics with an unauthenticated
+tunnel. Its only accepted form is
+`https://ovdb-demo-{sessionId}.openvaultdb.com/`, with a DNS-safe lowercase
+session ID. Verify the account's real routing semantics with an unauthenticated
 direct-host request: it must be denied by this Worker without an origin request.
 Also test the bare tunnel target separately. Do not enable the feature until
 both checks are recorded; the local Worker test intentionally does not claim a

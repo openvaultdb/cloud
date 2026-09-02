@@ -20,6 +20,10 @@ export function createWorker(
           ...demoDependencies,
         });
         if (demoResponse) return demoResponse;
+        if (url.pathname === "/api/demo/session" || url.pathname === "/api/demo/sessions" || url.pathname.startsWith("/api/demo/sessions/")) {
+          const cors = demoControlCorsResponse(request, env as DemoEnv);
+          if (cors) return cors;
+        }
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
             ? authorizationServerMetadata(env)
@@ -132,12 +136,12 @@ export function createWorker(
           if (!(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "demo-session-create"))) {
             return jsonResponse({ error: "Too many attempts. Try again in one minute." }, 429);
           }
-          return proxyDeviceAuthorization(
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
             request,
             env as DeviceAuthEnv,
             "/v0/ovdb/demo/sessions",
             upstreamFetch,
-          );
+          ));
         }
         if (url.pathname.startsWith("/api/demo/sessions/")) {
           if (request.method !== "DELETE") return methodNotAllowed("DELETE");
@@ -151,12 +155,12 @@ export function createWorker(
             },
             body: JSON.stringify({ sessionId: sessionID }),
           });
-          return proxyDeviceAuthorization(
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
             endRequest,
             env as DeviceAuthEnv,
             "/v0/ovdb/demo/session/end",
             upstreamFetch,
-          );
+          ));
         }
         if (url.pathname === "/api/demo/session") {
           if (request.method !== "GET") return methodNotAllowed("GET");
@@ -165,12 +169,12 @@ export function createWorker(
           const backendRequest = new Request(`${url.origin}${url.pathname}${search}`, {
             headers: { Authorization: request.headers.get("Authorization") ?? "" },
           });
-          return proxyDeviceAuthorization(
+          return withDemoControlCors(request, env as DemoEnv, await proxyDeviceAuthorization(
             backendRequest,
             env as DeviceAuthEnv,
             "/v0/ovdb/demo/session",
             upstreamFetch,
-          );
+          ));
         }
         if (url.pathname === "/api/databases") {
           if (request.method !== "GET") return methodNotAllowed("GET");
@@ -279,6 +283,23 @@ function allowedDemoSessionSearch(url: URL): string | undefined {
   const spaceIDs = url.searchParams.getAll("spaceId");
   if (spaceIDs.length !== 1 || !/^[A-Za-z0-9_-]{1,128}$/u.test(spaceIDs[0])) return undefined;
   return `?spaceId=${encodeURIComponent(spaceIDs[0])}`;
+}
+
+function demoControlCorsResponse(request: Request, env: DemoEnv): Response | undefined {
+  const allowedOrigin = env.OVDB_DEMO_CORS_ORIGIN;
+  if (String(env.OVDB_DEMO_ENABLED) !== "true" || !allowedOrigin) return undefined;
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== allowedOrigin) return jsonResponse({ error: "cors_forbidden" }, 403);
+  if (request.method !== "OPTIONS") return undefined;
+  return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": allowedOrigin, "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Max-Age": "600", "Cache-Control": "no-store", Vary: "Origin" } });
+}
+
+function withDemoControlCors(request: Request, env: DemoEnv, response: Response): Response {
+  if (String(env.OVDB_DEMO_ENABLED) !== "true" || request.headers.get("Origin") !== env.OVDB_DEMO_CORS_ORIGIN) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", env.OVDB_DEMO_CORS_ORIGIN!);
+  headers.set("Vary", "Origin");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 async function allowRequest(

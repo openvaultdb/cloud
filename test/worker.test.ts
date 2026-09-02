@@ -319,55 +319,55 @@ describe("Listus demo session relay", () => {
   it("stores an encrypted immutable session, replaces an old session, and revokes it", async () => {
     const kv = new MemoryKV();
     const demoWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });
-    const put = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
-      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_one")),
+    const put = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001")),
     });
     expect(put.status).toBe(204);
-    expect(kv.values.get("demo:session:session_one")).not.toContain("database-secret");
-    const retry = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
-      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_one")),
+    expect(kv.values.get("demo:session:session-demo-000001")).not.toContain("database-secret");
+    const retry = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001")),
     });
     expect(retry.status).toBe(204);
-    const replacement = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_two", {
-      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session_two", "https://two.demo.openvaultdb.com")),
+    const replacement = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000002", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000002")),
     });
     expect(replacement.status).toBe(204);
-    expect(kv.values.has("demo:session:session_one")).toBe(false);
-    const deleted = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_two", {
+    expect(kv.values.has("demo:session:session-demo-000001")).toBe(false);
+    const deleted = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000002", {
       method: "DELETE", headers: controlHeaders(),
     });
     expect(deleted.status).toBe(204);
-    expect(kv.values.has("demo:session:session_two")).toBe(false);
+    expect(kv.values.has("demo:session:session-demo-000002")).toBe(false);
   });
 
   it("rejects an invalid control secret, an oversized body, and an expired session at equality", async () => {
     const kv = new MemoryKV();
     const demoWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });
-    const denied = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(session("session_one")),
+    const denied = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(session("session-demo-000001")),
     });
     expect(denied.status).toBe(401);
-    const huge = await demoCall(demoWorker, kv, "/internal/demo/sessions/session_one", {
-      method: "PUT", headers: { ...controlHeaders(), "Content-Length": "70000" }, body: JSON.stringify(session("session_one")),
+    const huge = await demoCall(demoWorker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: { ...controlHeaders(), "Content-Length": "70000" }, body: JSON.stringify(session("session-demo-000001")),
     });
     expect(huge.status).toBe(400);
-    await putSession(demoWorker, kv, session("session_one", undefined, new Date(demoNow + 1_000).toISOString()));
+    await putSession(demoWorker, kv, session("session-demo-000001", undefined, new Date(demoNow + 1_000).toISOString()));
     const equalityWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow + 1_000 });
-    const expired = await demoCall(equalityWorker, kv, stablePath, { headers: { Authorization: "Bearer invalid" } });
+    const expired = await demoCall(equalityWorker, kv, stablePath, { headers: { Authorization: "Bearer invalid", Origin: "https://listus.app" } });
     expect(expired.status).toBe(410);
+    expect(expired.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
   });
 
   it("verifies Firebase signature, issuer and audience before owner-only proxying", async () => {
     const kv = new MemoryKV();
     const received: Request[] = [];
     const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
-    const firebaseJwksFetch = async () => Response.json({ test_key: certificate });
+    const firebaseJwksFetch = async () => Response.json(await firebaseJwks(key.publicKey));
     const demoWorker = createWorker(async (input, init) => {
       received.push(new Request(input, init));
       return Response.json({ lists: [] }, { headers: { "X-OVDB-Demo-Control-Secret": "never-forward" } });
     }, { now: () => demoNow - 1, firebaseJwksFetch });
-    await putSession(demoWorker, kv, session("session_one"));
+    await putSession(demoWorker, kv, session("session-demo-000001"));
     const valid = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
     const response = await demoCall(demoWorker, kv, stablePath, {
       headers: { Authorization: `Bearer ${valid}`, Origin: "https://listus.app", Cookie: "must-not-forward" },
@@ -376,6 +376,7 @@ describe("Listus demo session relay", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
     expect(response.headers.get("X-OVDB-Demo-Control-Secret")).toBeNull();
     expect(received).toHaveLength(1);
+    expect(new URL(received[0].url).pathname).toBe("/ovdb/v1/databases/demo-sneat-space/v1/records");
     expect(received[0].headers.get("Authorization")).toBe("Bearer database-secret");
     expect(received[0].headers.get("Cookie")).toBeNull();
     const badAudience = await signedFirebaseToken(key.privateKey, { sub: "owner_1", aud: "attacker" });
@@ -390,16 +391,15 @@ describe("Listus demo session relay", () => {
     const kv = new MemoryKV();
     let proxied = 0;
     const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
     const worker = createWorker(async () => { proxied += 1; return Response.json({ ok: true }); }, {
-      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
     });
-    await putSession(worker, kv, session("session_one"));
-    const directWithoutIdentity = await demoCall(worker, kv, "/v1/records", { host: "origin.demo.openvaultdb.com" });
+    await putSession(worker, kv, session("session-demo-000001"));
+    const directWithoutIdentity = await demoCall(worker, kv, "/v1/records", { host: "ovdb-demo-session-demo-000001.openvaultdb.com" });
     expect(directWithoutIdentity.status).toBe(401);
     expect(proxied).toBe(0);
     const owner = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
-    const directOwner = await demoCall(worker, kv, "/v1/records", { host: "origin.demo.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
+    const directOwner = await demoCall(worker, kv, "/v1/records", { host: "ovdb-demo-session-demo-000001.openvaultdb.com", headers: { Authorization: `Bearer ${owner}` } });
     expect(directOwner.status).toBe(200);
     expect(proxied).toBe(1);
   });
@@ -407,20 +407,51 @@ describe("Listus demo session relay", () => {
   it("bounds origin failures without exposing a redirect or timing out forever", async () => {
     const kv = new MemoryKV();
     const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-    const certificate = pem(await crypto.subtle.exportKey("spki", key.publicKey));
     const timeoutWorker = createWorker(async () => { throw new DOMException("timed out", "TimeoutError"); }, {
-      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
     });
-    await putSession(timeoutWorker, kv, session("session_one"));
+    await putSession(timeoutWorker, kv, session("session-demo-000001"));
     const token = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
     const timeout = await demoCall(timeoutWorker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } });
     expect(timeout.status).toBe(504);
     const redirectWorker = createWorker(async () => new Response(null, { status: 302, headers: { Location: "https://attacker.example" } }), {
-      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json({ test_key: certificate }),
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
     });
     const redirect = await demoCall(redirectWorker, kv, stablePath, { headers: { Authorization: `Bearer ${token}` } });
     expect(redirect.status).toBe(502);
     expect(redirect.headers.get("Location")).toBeNull();
+  });
+
+  it("accepts native bodyless write acknowledgements and refuses an arbitrary origin URL", async () => {
+    const kv = new MemoryKV();
+    const key = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const worker = createWorker(async () => new Response(null, { status: 204 }), {
+      now: () => demoNow - 1, firebaseJwksFetch: async () => Response.json(await firebaseJwks(key.publicKey)),
+    });
+    const invalidOrigin = await demoCall(worker, kv, "/internal/demo/sessions/session-demo-000001", {
+      method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001", "https://attacker.example/")),
+    });
+    expect(invalidOrigin.status).toBe(400);
+    await putSession(worker, kv, session("session-demo-000001"));
+    const token = await signedFirebaseToken(key.privateKey, { sub: "owner_1" });
+    const write = await demoCall(worker, kv, stablePath, { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" });
+    expect(write.status).toBe(204);
+    expect(write.headers.get("Content-Type")).toBeNull();
+  });
+
+  it("adds strict Listus CORS to safe browser metadata control responses", async () => {
+    const kv = new MemoryKV();
+    const worker = createWorker(async () => Response.json({ sessionId: "safe", spaceId: "space_1" }));
+    const preflight = await demoCall(worker, kv, "/api/demo/session?spaceId=space_1", {
+      method: "OPTIONS", headers: { Origin: "https://listus.app", "Access-Control-Request-Method": "GET" },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
+    const metadata = await demoCall(worker, kv, "/api/demo/session?spaceId=space_1", {
+      headers: { Origin: "https://listus.app", Authorization: "Bearer firebase-id-token" },
+    });
+    expect(metadata.status).toBe(200);
+    expect(metadata.headers.get("Access-Control-Allow-Origin")).toBe("https://listus.app");
   });
 
   it.each(["/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/%2fsecret", "/users/owner_1/demo-sneat-space/ovdb/v1/databases/demo-sneat-space/../secret"]) (
@@ -443,7 +474,7 @@ class MemoryKV {
   async delete(key: string): Promise<void> { this.values.delete(key); }
 }
 
-function session(sessionId: string, originUrl = "https://origin.demo.openvaultdb.com", expiresAt = new Date(demoNow + 60_000).toISOString()) {
+function session(sessionId: string, originUrl = `https://ovdb-demo-${sessionId}.openvaultdb.com/`, expiresAt = new Date(demoNow + 60_000).toISOString()) {
   return { sessionId, ownerUserId: "owner_1", spaceId: "space_1", databaseId: "demo-sneat-space", expiresAt, originUrl, originToken: "database-secret" };
 }
 
@@ -464,14 +495,14 @@ function demoCall(worker: ReturnType<typeof createWorker>, kv: MemoryKV, pathnam
     OVDB_DEMO_ENCRYPTION_KEY: demoEncryptionKey,
     OVDB_DEMO_FIREBASE_PROJECT_ID: "sneat-eur3-1",
     OVDB_DEMO_CORS_ORIGIN: "https://listus.app",
-    OVDB_DEMO_ORIGIN_HOST_SUFFIX: "demo.openvaultdb.com",
+    OVDB_DEMO_ORIGIN_HOST_SUFFIX: "openvaultdb.com",
     OVDB_DEMO_SESSIONS: kv,
   } as unknown as Env;
   return (worker.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(new Request(`https://${host}${pathname}`, requestInit), demoEnv, createExecutionContext());
 }
 
 async function signedFirebaseToken(privateKey: CryptoKey, override: Partial<Record<string, string | number>>): Promise<string> {
-  const claims = { sub: "owner_1", aud: "sneat-eur3-1", iss: "https://securetoken.google.com/sneat-eur3-1", exp: Math.floor((demoNow + 60_000) / 1000), iat: Math.floor((demoNow - 60_000) / 1000), ...override };
+  const claims = { sub: "owner_1", aud: "sneat-eur3-1", iss: "https://securetoken.google.com/sneat-eur3-1", exp: Math.floor((demoNow + 60_000) / 1000), iat: Math.floor((demoNow - 60_000) / 1000), auth_time: Math.floor((demoNow - 60_000) / 1000), ...override };
   const header = encode({ alg: "RS256", kid: "test_key" }); const body = encode(claims);
   const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, new TextEncoder().encode(`${header}.${body}`));
   return `${header}.${body}.${base64url(signature)}`;
@@ -479,7 +510,10 @@ async function signedFirebaseToken(privateKey: CryptoKey, override: Partial<Reco
 
 function encode(value: unknown): string { return base64url(new TextEncoder().encode(JSON.stringify(value))); }
 function base64url(value: ArrayBuffer | Uint8Array): string { return btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, ""); }
-function pem(spki: ArrayBuffer): string { const body = btoa(String.fromCharCode(...new Uint8Array(spki))).match(/.{1,64}/g)?.join("\n"); return `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----`; }
+async function firebaseJwks(publicKey: CryptoKey): Promise<{ keys: Array<JsonWebKey & { kid: string; alg: string; use: string }> }> {
+  const key = await crypto.subtle.exportKey("jwk", publicKey);
+  return { keys: [{ ...key, kid: "test_key", alg: "RS256", use: "sig" }] };
+}
 
 function formPost(pathname: string, values: Record<string, string>): Promise<Response> {
   return call(pathname, {
