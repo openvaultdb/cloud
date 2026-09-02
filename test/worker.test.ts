@@ -327,6 +327,28 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
 });
 
 describe("Listus demo session relay", () => {
+  it("keeps authenticated cleanup available while disabled without enabling admission or data", async () => {
+    const kv = new MemoryKV();
+    const demoWorker = createWorker(async () => { throw new Error("disabled demo must not contact an upstream"); }, { now: () => demoNow });
+    await putSession(demoWorker, kv, session("session-demo-000001"));
+    // Encryption/identity configuration may already be removed during shutdown.
+    const disabledEnv = { ...env, OVDB_DEMO_ENABLED: "false", OVDB_DEMO_CONTROL_SECRET: "control-secret", OVDB_DEMO_SESSIONS: kv } as unknown as Env;
+    const disabledCall = (path: string, init: RequestInit, environment = disabledEnv) =>
+      (demoWorker.fetch as unknown as (request: Request, environment: Env, context: ExecutionContext) => Promise<Response>)(new Request(`https://cloud.openvaultdb.com${path}`, init), environment, createExecutionContext());
+    const path = "/internal/demo/sessions/session-demo-000001";
+    expect((await disabledCall(path, { method: "DELETE" })).status).toBe(401);
+    expect((await disabledCall(path, { method: "DELETE", headers: { "X-OVDB-Demo-Control-Secret": "wrong" } })).status).toBe(401);
+    expect((await disabledCall(path, { method: "DELETE", headers: controlHeaders() }, { ...disabledEnv, OVDB_DEMO_CONTROL_SECRET: "" } as Env)).status).toBe(503);
+    expect((await disabledCall(path, { method: "DELETE", headers: controlHeaders() }, { ...env, OVDB_DEMO_ENABLED: "false", OVDB_DEMO_CONTROL_SECRET: "control-secret" } as unknown as Env)).status).toBe(503);
+    expect(kv.values.has("demo:session:session-demo-000001")).toBe(true);
+    expect((await disabledCall(path, { method: "PUT", headers: controlHeaders(), body: JSON.stringify(session("session-demo-000001")) })).status).toBe(503);
+    expect((await disabledCall("/api/demo/sessions", { method: "POST", headers: controlHeaders() })).status).toBe(503);
+    expect((await disabledCall(stablePath, { headers: { Authorization: "Bearer irrelevant" } })).status).toBe(503);
+    expect((await disabledCall(path, { method: "DELETE", headers: controlHeaders() })).status).toBe(204);
+    expect(kv.values.size).toBe(0);
+    expect((await disabledCall(path, { method: "DELETE", headers: controlHeaders() })).status).toBe(204);
+  });
+
   it("stores an encrypted immutable session, replaces an old session, and revokes it", async () => {
     const kv = new MemoryKV();
     const demoWorker = createWorker(async () => Response.json({ ok: true }), { now: () => demoNow });

@@ -54,6 +54,14 @@ export async function handleDemoRequest(
   dependencies: DemoDependencies = {},
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
+  // Turning admission/data access off must not strand provisioned resources.
+  // Cleanup needs only its authenticated control channel and the KV binding;
+  // it never decrypts a credential or contacts an origin.
+  if (url.hostname === "cloud.openvaultdb.com" && request.method === "DELETE" &&
+      url.pathname.startsWith("/internal/demo/sessions/") &&
+      env.OVDB_DEMO_CONTROL_SECRET && env.OVDB_DEMO_SESSIONS) {
+    return handleInternalSession(request, env, dependencies);
+  }
   if (!isDemoEnabled(env)) {
     if (isDemoPath(url.pathname) || isPotentialDemoOriginHost(url.hostname)) return withDemoCors(jsonResponse({ error: "demo_unavailable" }, 503), request, env);
     return undefined;

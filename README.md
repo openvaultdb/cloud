@@ -65,6 +65,11 @@ edge `/internal/demo/sessions/{sessionId}` calls; it is never forwarded to a
 tunnel origin. `OVDB_DEMO_ENCRYPTION_KEY` is a base64url-encoded 32-byte AES-GCM
 key used to encrypt the per-session database credential before writing KV.
 
+When disabling the demo, keep the KV binding and control secret until cleanup
+finishes. Authenticated internal `DELETE` calls on `cloud.openvaultdb.com`
+remain available while admission and data access are disabled; they need no
+encryption key or Firebase configuration and never contact a tunnel origin.
+
 Before enabling a session's exact origin hostname, configure that hostname as
 an exact Worker route (not a wildcard) whose normal origin is the managed
 tunnel. Its only accepted form is
