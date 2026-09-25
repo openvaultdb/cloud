@@ -4,7 +4,7 @@ go 1.26.1
 
 toolchain go1.27.0
 
-require github.com/openvaultdb/openvaultdb-go v0.9.0
+require github.com/openvaultdb/openvaultdb-go v0.10.0
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
