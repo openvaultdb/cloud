@@ -24,7 +24,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("mount Chinook: %v", err)
 	}
-	defer closeDatabase()
+	defer func() {
+		if err := closeDatabase(); err != nil {
+			log.Printf("close Chinook database: %v", err)
+		}
+	}()
 
 	port := os.Getenv("PORT")
 	if port == "" {
