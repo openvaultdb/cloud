@@ -295,7 +295,8 @@ describe("public Chinook OVDB proxy", () => {
       return new Response(`{"records":[]}`, { headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "https://chinookdb.com",
-        "Cache-Control": "no-store",
+        "Cache-Control": request.method === "GET" && request.url.includes("/dtql?") ? "public, max-age=86400, s-maxage=86400" : "no-store",
+        Vary: "Origin",
         "Set-Cookie": "should-not-leak=1",
       } });
     });
@@ -317,6 +318,11 @@ describe("public Chinook OVDB proxy", () => {
     const profile = await fetchChinook(new Request(`${baseURL}/ovdb/dbs/chinook`), chinookEnv, createExecutionContext());
     expect(profile.status).toBe(200);
     expect(forwarded[1].url).toBe("https://chinook-ovdb.example.run.app/ovdb/dbs/chinook");
+    const dtqlURL = `${baseURL}/v1/databases/chinook/dtql?` + new URLSearchParams({ q: "from: {name: Album}\n" });
+    const get = await fetchChinook(new Request(dtqlURL), chinookEnv, createExecutionContext());
+    expect(get.headers.get("Cache-Control")).toBe("public, max-age=86400, s-maxage=86400");
+    expect(get.headers.get("Vary")).toBe("Origin");
+    expect(forwarded[2].url).toBe(dtqlURL.replace(baseURL, "https://chinook-ovdb.example.run.app"));
   });
 
   it("returns a service error until the Cloud Run origin is configured", async () => {

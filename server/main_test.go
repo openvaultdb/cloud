@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -50,6 +51,21 @@ func TestPublicChinookJourney(t *testing.T) {
 	}
 	if response.Header().Get("Access-Control-Allow-Origin") != "https://chinookdb.com" {
 		t.Error("ChinookDB CORS origin missing")
+	}
+	get := httptest.NewRecorder()
+	getURL := "/v1/databases/chinook/dtql?" + url.Values{
+		"q":          {query["query"].(string)},
+		"parameters": {`{"MinArtistID":1}`},
+	}.Encode()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, getURL, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET DTQL: %d %s", get.Code, get.Body.String())
+	}
+	if got := get.Header().Get("Cache-Control"); got != "public, max-age=86400, s-maxage=86400" {
+		t.Fatalf("GET DTQL Cache-Control: %q", got)
+	}
+	if got := strings.Join(get.Header().Values("Vary"), ", "); !strings.Contains(got, "Origin") || !strings.Contains(got, "OVDB-Page-Size") {
+		t.Fatalf("GET DTQL Vary: %q", got)
 	}
 	write := httptest.NewRecorder()
 	handler.ServeHTTP(write, httptest.NewRequest(http.MethodPut, "/v1/databases/chinook/records/Album/1", strings.NewReader(`{"data":{"Title":"changed"}}`)))

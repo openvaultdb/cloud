@@ -8,7 +8,8 @@ database.
 
 `prepare_fixture.py` verifies the source SHA-256, copies the eleven tables,
 adds a stable `id` column based on each table's primary key for DALgo's SQLite
-adapter, and generates the strict OVDB manifest. The canonical upstream source
+adapter, and generates the strict OVDB manifest with `database.cache_ttl: 24h`.
+The canonical upstream source
 and downloads on chinookdb.com are unchanged.
 
 ## Local acceptance
@@ -26,13 +27,14 @@ GOWORK=/tmp/ovdb-local-work/go.work CHINOOK_MANIFEST=/tmp/chinook-ovdb/chinook.y
 ```
 
 Run these commands from `server/`, except the parenthesized workspace command.
-The test covers generic pages, discovery, the parameterized DataTug
-query, ChinookDB CORS, and rejected writes.
+The test covers generic pages, discovery, parameterized POST and GET DTQL,
+the GET cache header, ChinookDB CORS, and rejected writes.
 
 ## Deployment dependency
 
 The Dockerfile deliberately runs the acceptance test. Before building an image
-for Cloud Run, publish the accompanying `openvaultdb-go` bound-DTQL change and
+for Cloud Run, publish the accompanying `openvaultdb-go` bound-DTQL, GET DTQL,
+and per-database cache-duration change and
 update `go.mod` to that release. The current `v0.9.0` pin does not include it;
 an image built against it must fail the test instead of silently serving an
 incompatible query endpoint.

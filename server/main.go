@@ -56,7 +56,6 @@ func newHandler(manifest string) (http.Handler, func() error, error) {
 		server.WithReadOnly(true),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
 		server.WithCORS(server.ParseCORSOrigins([]string{"https://chinookdb.com", "https://www.chinookdb.com"})),
-		server.WithReadCacheTTL(24*time.Hour),
 	).Handler()
 	return handler, database.Close, nil
 }

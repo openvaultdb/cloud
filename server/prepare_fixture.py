@@ -27,7 +27,7 @@ def main(source: Path, output: Path) -> None:
     shutil.copyfile(source, database_path)
     connection = sqlite3.connect(database_path)
     manifest = [
-        "database: {id: chinook, schema_mode: strict}",
+        "database: {id: chinook, schema_mode: strict, cache_ttl: 24h}",
         "storage: {engine: sqlite, path: ./chinook.sqlite}",
         "schemas:",
         "  collections:",
