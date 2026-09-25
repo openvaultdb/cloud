@@ -1,5 +1,12 @@
 # OpenVaultDB Cloud
 
+The public Chinook OVDB service is implemented in [`server/`](server/). Its Go
+handler serves generic OVDB pages and a read-only SQLite API on Cloud Run;
+this Worker proxies the public paths after `CHINOOK_RUN_ORIGIN` is configured.
+See the server README for local acceptance and the required Go library release.
+The older device and account routes documented below still use Sneat-backed
+infrastructure; their independent identity cutover is a separate stage.
+
 This repository contains the public OpenVaultDB Cloud browser surface and API
 facade deployed at `https://cloud.openvaultdb.com`.
 
