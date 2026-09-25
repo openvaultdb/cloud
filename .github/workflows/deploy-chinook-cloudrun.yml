@@ -1,0 +1,116 @@
+name: Deploy Chinook to Cloud Run
+
+on:
+  workflow_run:
+    workflows: [Cloud Worker CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: openvaultdb-chinook-cloudrun-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT_ID: openvaultdb
+      REGION: europe-west1
+      SERVICE_NAME: chinook-ovdb
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      IMAGE: europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out the validated commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      - name: Reject an older main commit
+        run: test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+
+      - name: Download the validated Go binary
+        uses: actions/download-artifact@v8
+        with:
+          name: ovdb-cloud-linux-amd64
+          path: server
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify binary identity and checksum
+        working-directory: server
+        run: |
+          test "$(cat ovdb-cloud.source-sha)" = "${DEPLOY_SHA}"
+          sha256sum --check ovdb-cloud.sha256
+          chmod +x ovdb-cloud
+
+      - name: Authenticate with OpenVaultDB Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/323159488879/locations/global/workloadIdentityPools/github/providers/github-provider
+          service_account: github-chinook-deploy@openvaultdb.iam.gserviceaccount.com
+
+      - name: Configure gcloud and Docker
+        run: |
+          gcloud auth login --brief --cred-file="${{ steps.auth.outputs.credentials_file_path }}"
+          gcloud config set project "${PROJECT_ID}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push the validated image
+        run: |
+          docker build --file server/Dockerfile --tag "${IMAGE}" server
+          docker push "${IMAGE}"
+
+      - name: Deploy the public read-only service
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image="${IMAGE}" \
+            --region="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com \
+            --allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=2 \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=120 \
+            --quiet
+
+      - name: Verify live profile and cacheable DTQL
+        working-directory: server
+        run: |
+          SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+            --project="${PROJECT_ID}" --region="${REGION}" \
+            --format='value(status.url)')
+          test -n "${SERVICE_URL}"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            "${SERVICE_URL}/ovdb/dbs/chinook" > "${RUNNER_TEMP}/chinook-profile.html"
+          grep -q 'https://cloud.openvaultdb.com/ovdb/dbs/chinook' "${RUNNER_TEMP}/chinook-profile.html"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            --dump-header "${RUNNER_TEMP}/chinook-headers" \
+            --get --data-urlencode 'q=from: {name: Album}' \
+            "${SERVICE_URL}/v1/databases/chinook/dtql" \
+            --output "${RUNNER_TEMP}/chinook-result.json"
+          jq -e '.records | length == 347' "${RUNNER_TEMP}/chinook-result.json"
+          grep -iq '^cache-control: public, max-age=86400, s-maxage=86400' "${RUNNER_TEMP}/chinook-headers"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
+          printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
+
+      - name: Publish verified service origin for the Worker deploy
+        uses: actions/upload-artifact@v7
+        with:
+          name: chinook-cloudrun-deployment
+          path: |
+            server/chinook-run-origin.txt
+            server/chinook-deploy-sha.txt
+          if-no-files-found: error
+          retention-days: 7
