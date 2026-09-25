@@ -1,12 +1,14 @@
 name: Deploy OpenVaultDB Cloud
 
 on:
-  push:
+  workflow_run:
+    workflows: [Deploy Chinook to Cloud Run]
+    types: [completed]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: openvaultdb-cloud-production
@@ -14,13 +16,52 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - name: Check out repository
+      - name: Download verified Cloud Run origin
+        uses: actions/download-artifact@v8
+        with:
+          name: chinook-cloudrun-deployment
+          path: ${{ runner.temp }}/chinook-deployment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Read deployment receipt
+        id: receipt
+        run: |
+          DEPLOY_SHA=$(cat "${RUNNER_TEMP}/chinook-deployment/chinook-deploy-sha.txt")
+          CHINOOK_RUN_ORIGIN=$(cat "${RUNNER_TEMP}/chinook-deployment/chinook-run-origin.txt")
+          [[ "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          python3 - "${CHINOOK_RUN_ORIGIN}" <<'PY'
+          import sys
+          from urllib.parse import urlsplit
+
+          origin = sys.argv[1]
+          url = urlsplit(origin)
+          if (any(ord(char) < 33 for char in origin)
+                  or url.scheme != "https"
+                  or not url.hostname or not url.hostname.endswith(".run.app")
+                  or url.netloc != url.hostname
+                  or url.path or url.query or url.fragment):
+              raise SystemExit("invalid Chinook Cloud Run origin")
+          PY
+          echo "sha=${DEPLOY_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "origin=${CHINOOK_RUN_ORIGIN}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out deployed source commit
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # actions/checkout v5
+        with:
+          ref: ${{ steps.receipt.outputs.sha }}
+
+      - name: Reject stale deployment
+        env:
+          DEPLOY_SHA: ${{ steps.receipt.outputs.sha }}
+        run: |
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # actions/setup-node v6
@@ -35,4 +76,6 @@ jobs:
         run: npm run check
 
       - name: Deploy Worker, assets, and custom domain
-        run: npm run deploy
+        env:
+          CHINOOK_RUN_ORIGIN: ${{ steps.receipt.outputs.origin }}
+        run: npm run deploy -- --var "CHINOOK_RUN_ORIGIN:${CHINOOK_RUN_ORIGIN}"

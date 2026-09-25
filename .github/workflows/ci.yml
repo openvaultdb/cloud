@@ -1,12 +1,16 @@
 name: Cloud Worker CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
 
 permissions:
-  contents: read
+  # The shared Go workflow declares write permission for its gated release job.
+  contents: write
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: cloud-ci-${{ github.ref }}
@@ -30,3 +34,26 @@ jobs:
 
       - name: Verify Worker facade, assets, and deployment bundle
         run: npm run check
+
+  verify_chinook_service:
+    # Share the fleet's Go lint/test/build and artifact gate with Sneat Go.
+    uses: strongo/cicd/.github/workflows/workflow.yml@v1.20.0
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      working_directory: server
+      go_version: '1.27.0'
+      disable-version-bumping: true
+      build_command: |
+        python3 prepare_fixture.py fixture/Chinook_Sqlite.sqlite "${RUNNER_TEMP}/chinook-ovdb"
+        echo "CHINOOK_MANIFEST=${RUNNER_TEMP}/chinook-ovdb/chinook.yaml" >> "${GITHUB_ENV}"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o ovdb-cloud .
+        chmod +x ovdb-cloud
+        sha256sum ovdb-cloud > ovdb-cloud.sha256
+        printf '%s\n' "${GITHUB_SHA}" > ovdb-cloud.source-sha
+      artifact_name: ovdb-cloud-linux-amd64
+      artifact_path: |
+        server/ovdb-cloud
+        server/ovdb-cloud.sha256
+        server/ovdb-cloud.source-sha
+      artifact_on_main_only: true

@@ -286,6 +286,51 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
   });
 });
 
+describe("public Chinook OVDB proxy", () => {
+  it("forwards the generic profile and parameterized DTQL without caller credentials", async () => {
+    const forwarded: Request[] = [];
+    const chinookWorker = createWorker(async (input, init) => {
+      const request = new Request(input, init);
+      forwarded.push(request);
+      return new Response(`{"records":[]}`, { headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "https://chinookdb.com",
+        "Cache-Control": request.method === "GET" && request.url.includes("/dtql?") ? "public, max-age=86400, s-maxage=86400" : "no-store",
+        Vary: "Origin",
+        "Set-Cookie": "should-not-leak=1",
+      } });
+    });
+    const fetchChinook = chinookWorker.fetch as unknown as typeof fetchWorker;
+    const chinookEnv = { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env;
+    const response = await fetchChinook(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://chinookdb.com", Authorization: "Bearer must-not-forward", Cookie: "secret=1" },
+      body: JSON.stringify({ query: "from: {name: Album}", parameters: {} }),
+    }), chinookEnv, createExecutionContext());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("https://chinookdb.com");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0].url).toBe("https://chinook-ovdb.example.run.app/v1/databases/chinook/dtql");
+    expect(forwarded[0].headers.get("Authorization")).toBeNull();
+    expect(forwarded[0].headers.get("Cookie")).toBeNull();
+    expect(await forwarded[0].text()).toContain("Album");
+    const profile = await fetchChinook(new Request(`${baseURL}/ovdb/dbs/chinook`), chinookEnv, createExecutionContext());
+    expect(profile.status).toBe(200);
+    expect(forwarded[1].url).toBe("https://chinook-ovdb.example.run.app/ovdb/dbs/chinook");
+    const dtqlURL = `${baseURL}/v1/databases/chinook/dtql?` + new URLSearchParams({ q: "from: {name: Album}\n" });
+    const get = await fetchChinook(new Request(dtqlURL), chinookEnv, createExecutionContext());
+    expect(get.headers.get("Cache-Control")).toBe("public, max-age=86400, s-maxage=86400");
+    expect(get.headers.get("Vary")).toBe("Origin");
+    expect(forwarded[2].url).toBe(dtqlURL.replace(baseURL, "https://chinook-ovdb.example.run.app"));
+  });
+
+  it("returns a service error until the Cloud Run origin is configured", async () => {
+    const response = await call("/ovdb/dbs/chinook");
+    expect(response.status).toBe(503);
+  });
+});
+
 function formPost(pathname: string, values: Record<string, string>): Promise<Response> {
   return call(pathname, {
     method: "POST",

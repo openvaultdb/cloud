@@ -1,4 +1,5 @@
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
+import { proxyChinook } from "./chinook";
 import {
   proxyCloudDatabase,
   proxyDeviceAuthorization,
@@ -17,6 +18,9 @@ export function createWorker(
           return request.method === "GET"
             ? authorizationServerMetadata(env)
             : methodNotAllowed("GET");
+        }
+        if (url.pathname === "/.well-known/openvaultdb" || url.pathname === "/ovdb" || url.pathname.startsWith("/ovdb/") || url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
+          return proxyChinook(request, env, upstreamFetch);
         }
         if (url.pathname === "/oauth/device/code") {
           if (request.method !== "POST") return methodNotAllowed("POST");
