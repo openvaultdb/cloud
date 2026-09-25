@@ -38,6 +38,8 @@ jobs:
   verify_chinook_service:
     # Share the fleet's Go lint/test/build and artifact gate with Sneat Go.
     uses: strongo/cicd/.github/workflows/workflow.yml@v1.20.0
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     with:
       working_directory: server
       go_version: '1.27.0'
