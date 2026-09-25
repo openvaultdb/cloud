@@ -27,7 +27,7 @@ the GET cache header, ChinookDB CORS, and rejected writes.
 
 ## Deployment dependency
 
-The shared Go CI workflow tests against the published `openvaultdb-go v0.10.0`
+The shared Go CI workflow tests against the published `openvaultdb-go v0.11.0`
 module and produces a checksummed Linux binary from the same commit. After CI
 passes on `main`, GitHub Actions downloads that exact binary, builds the image
 on its runner, pushes it to Artifact Registry, and deploys it to Cloud Run.

@@ -95,6 +95,11 @@ jobs:
             "${SERVICE_URL}/ovdb/dbs/chinook" > "${RUNNER_TEMP}/chinook-profile.html"
           grep -q 'https://cloud.openvaultdb.com/ovdb/dbs/chinook' "${RUNNER_TEMP}/chinook-profile.html"
           curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            "${SERVICE_URL}/ovdb/dbs/chinook/collections/Album" > "${RUNNER_TEMP}/chinook-album.html"
+          grep -q 'Database; enforcement: disabled' "${RUNNER_TEMP}/chinook-album.html"
+          grep -q 'collections/Artist' "${RUNNER_TEMP}/chinook-album.html"
+          grep -q 'collections/Track' "${RUNNER_TEMP}/chinook-album.html"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
             --dump-header "${RUNNER_TEMP}/chinook-headers" \
             --get --data-urlencode 'q=from: {name: Album}' \
             "${SERVICE_URL}/v1/databases/chinook/dtql" \

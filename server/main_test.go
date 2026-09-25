@@ -20,7 +20,7 @@ func TestPublicChinookJourney(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = closeDatabase() })
-	for _, path := range []string{"/ovdb/", "/ovdb/dbs/", "/ovdb/dbs/chinook", "/.well-known/openvaultdb", "/v1/databases/chinook"} {
+	for _, path := range []string{"/ovdb/", "/ovdb/dbs/", "/ovdb/dbs/chinook", "/ovdb/dbs/chinook/collections/Album", "/.well-known/openvaultdb", "/v1/databases/chinook"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK {
@@ -28,6 +28,15 @@ func TestPublicChinookJourney(t *testing.T) {
 		}
 		if path == "/ovdb/dbs/chinook" && !strings.Contains(response.Body.String(), "https://cloud.openvaultdb.com/ovdb/dbs/chinook") {
 			t.Error("database profile lacks canonical cloud URL")
+		}
+		if path == "/ovdb/dbs/chinook" && !strings.Contains(response.Body.String(), `href="/ovdb/dbs/chinook/collections/Album"`) {
+			t.Error("database profile lacks Album collection link")
+		}
+		if path == "/ovdb/dbs/chinook/collections/Album" && (!strings.Contains(response.Body.String(), `<a href="/ovdb/dbs/chinook/collections/Artist">Artist</a>`) || !strings.Contains(response.Body.String(), `<a href="/ovdb/dbs/chinook/collections/Track">Track</a>`)) {
+			t.Error("Album profile lacks both relationship directions")
+		}
+		if path == "/ovdb/dbs/chinook/collections/Album" && (!strings.Contains(response.Body.String(), "Database; enforcement: disabled") || strings.Contains(response.Body.String(), "OVDB declaration; enforcement:")) {
+			t.Error("Album profile does not identify database foreign keys and their enforcement state")
 		}
 	}
 	query := map[string]any{"query": "from: {name: Album}\nwhere: {op: '>=', left: {field: ArtistId}, right: {param: MinArtistID}}\norderBy: [{field: AlbumId}]\nlimit: 5\n", "parameters": map[string]any{"MinArtistID": 1}}

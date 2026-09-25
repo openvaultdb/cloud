@@ -4,7 +4,7 @@ go 1.26.1
 
 toolchain go1.27.0
 
-require github.com/openvaultdb/openvaultdb-go v0.10.0
+require github.com/openvaultdb/openvaultdb-go v0.11.0
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -14,15 +14,15 @@ require (
 	cloud.google.com/go/firestore v1.24.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/RoaringBitmap/roaring/v2 v2.27.0 // indirect
+	github.com/RoaringBitmap/roaring/v2 v2.29.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dal-go/dalgo v0.80.0 // indirect
+	github.com/dal-go/dalgo v0.88.0 // indirect
 	github.com/dal-go/dalgo2firestore v0.10.3 // indirect
-	github.com/dal-go/dalgo2mysql v0.2.0 // indirect
-	github.com/dal-go/dalgo2postgres v0.2.0 // indirect
-	github.com/dal-go/dalgo2sql v0.14.0 // indirect
-	github.com/dal-go/dalgo2sqlite v0.1.8 // indirect
+	github.com/dal-go/dalgo2mysql v0.2.2 // indirect
+	github.com/dal-go/dalgo2postgres v0.2.2 // indirect
+	github.com/dal-go/dalgo2sql v0.18.0 // indirect
+	github.com/dal-go/dalgo2sqlite v0.2.0 // indirect
 	github.com/dal-go/record v0.1.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
@@ -73,8 +73,8 @@ require (
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.75.6 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.58.0 // indirect
+	modernc.org/sqlite v1.59.0 // indirect
 )
