@@ -122,6 +122,7 @@ jobs:
             "${SERVICE_URL}/v1/databases/northwind/dtql" \
             --output "${RUNNER_TEMP}/northwind-result.json"
           jq -e '.records | length == 2' "${RUNNER_TEMP}/northwind-result.json"
+          jq -e '(.records | length == 2) and all(.records[]; (.data.id | type == "string") and ((.data.id | length) > 0) and (.key == ("Order Details/" + .data.id)))' "${RUNNER_TEMP}/northwind-result.json"
           grep -iq '^access-control-allow-origin: https://northwind.demodb.dev' "${RUNNER_TEMP}/northwind-headers"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
           printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt

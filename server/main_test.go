@@ -10,6 +10,17 @@ import (
 	"testing"
 )
 
+type northwindQueryRow struct {
+	Key  string         `json:"key"`
+	Data map[string]any `json:"data"`
+}
+
+type northwindQueryPage struct {
+	Records       []northwindQueryRow `json:"records"`
+	SnapshotToken string              `json:"snapshotToken"`
+	NextPageToken string              `json:"nextPageToken"`
+}
+
 func TestPublicChinookJourney(t *testing.T) {
 	manifest := os.Getenv("CHINOOK_MANIFEST")
 	if manifest == "" {
@@ -123,7 +134,8 @@ func TestPublicNorthwindJourney(t *testing.T) {
 		}
 	}
 
-	query := map[string]any{"query": "from: {name: 'Order Details'}\nlimit: 2\n"}
+	queryText := "from: {name: 'Order Details'}\norderBy: [{field: OrderID}, {field: ProductID}]\nlimit: 2\n"
+	query := map[string]any{"query": queryText}
 	body, err := json.Marshal(query)
 	if err != nil {
 		t.Fatal(err)
@@ -136,23 +148,82 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("Northwind DTQL: %d %s", response.Code, response.Body.String())
 	}
-	var result struct {
-		Records []json.RawMessage `json:"records"`
-	}
+	var result northwindQueryPage
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Records) != 2 {
 		t.Fatalf("Northwind DTQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
 	}
-	var firstRows struct {
-		Records []struct {
-			Data map[string]any `json:"data"`
-		} `json:"records"`
+	assertRowsMatchAdapterID := func(rows []northwindQueryRow) []string {
+		t.Helper()
+		ids := make([]string, len(rows))
+		for i, row := range rows {
+			adapterID, ok := row.Data["id"].(string)
+			if !ok || adapterID == "" {
+				t.Fatalf("Northwind row %d has no adapter data.id: %#v", i, row)
+			}
+			want := "Order Details/" + adapterID
+			if row.Key != want {
+				t.Fatalf("Northwind row key %q, want native collection plus adapter id %q", row.Key, want)
+			}
+			ids[i] = adapterID
+		}
+		return ids
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &firstRows); err != nil || len(firstRows.Records) == 0 {
-		t.Fatalf("Northwind row data: err=%v body=%s", err, response.Body.String())
+	adapterIDs := assertRowsMatchAdapterID(result.Records)
+	adapterID := adapterIDs[0]
+
+	pageQuery := "from: {name: 'Order Details'}\norderBy: [{field: OrderID}, {field: ProductID}]\n"
+	requestPage := func(doc, token string, closeSnapshot bool) *httptest.ResponseRecorder {
+		t.Helper()
+		pageRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/dtql", strings.NewReader(doc))
+		pageRequest.Header.Set("OVDB-Page-Size", "2")
+		if token != "" {
+			pageRequest.Header.Set("OVDB-Page-Token", token)
+		}
+		if closeSnapshot {
+			pageRequest.Header.Set("OVDB-Page-Close", "true")
+		}
+		pageResponse := httptest.NewRecorder()
+		handler.ServeHTTP(pageResponse, pageRequest)
+		return pageResponse
 	}
-	adapterID, ok := firstRows.Records[0].Data["id"].(string)
-	if !ok || adapterID == "" {
-		t.Fatalf("Northwind composite row has no adapter id: %s", response.Body.String())
+	var paged northwindQueryPage
+	pagedResponse := requestPage(pageQuery, "", false)
+	if pagedResponse.Code != http.StatusOK || json.Unmarshal(pagedResponse.Body.Bytes(), &paged) != nil || len(paged.Records) != 2 {
+		t.Fatalf("Northwind paged DTQL: %d %s", pagedResponse.Code, pagedResponse.Body.String())
+	}
+	assertRowsMatchAdapterID(paged.Records)
+	if paged.SnapshotToken == "" || paged.NextPageToken == "" {
+		t.Fatalf("Northwind paged response did not expose snapshot continuation: %#v", paged)
+	}
+	secondPageResponse := requestPage(pageQuery, paged.NextPageToken, false)
+	var secondPage northwindQueryPage
+	if secondPageResponse.Code != http.StatusOK || json.Unmarshal(secondPageResponse.Body.Bytes(), &secondPage) != nil || len(secondPage.Records) != 2 {
+		t.Fatalf("Northwind second DTQL page: %d %s", secondPageResponse.Code, secondPageResponse.Body.String())
+	}
+	assertRowsMatchAdapterID(secondPage.Records)
+	if closeResponse := requestPage(pageQuery, paged.SnapshotToken, true); closeResponse.Code != http.StatusNoContent {
+		t.Fatalf("close Northwind query snapshot: %d %s", closeResponse.Code, closeResponse.Body.String())
+	}
+
+	projectedQuery := pageQuery + "columns: [{field: OrderID}, {field: ProductID}]\n"
+	var projected northwindQueryPage
+	projectedResponse := requestPage(projectedQuery, "", false)
+	if projectedResponse.Code != http.StatusOK || json.Unmarshal(projectedResponse.Body.Bytes(), &projected) != nil || len(projected.Records) != 2 {
+		t.Fatalf("Northwind projected DTQL: %d %s", projectedResponse.Code, projectedResponse.Body.String())
+	}
+	if projected.SnapshotToken == "" {
+		t.Fatalf("Northwind projected page lacks a snapshot token: %#v", projected)
+	}
+	for i, row := range projected.Records {
+		if row.Key != paged.Records[i].Key || row.Key != "Order Details/"+adapterIDs[i] {
+			t.Fatalf("projected Northwind key %q does not preserve adapter identity %q", row.Key, adapterIDs[i])
+		}
+		if len(row.Data) != 2 || row.Data["OrderID"] == nil || row.Data["ProductID"] == nil || row.Data["id"] != nil {
+			t.Fatalf("projected Northwind data exposed missing fields or helper identity: %#v", row.Data)
+		}
+	}
+	if closeResponse := requestPage(projectedQuery, projected.SnapshotToken, true); closeResponse.Code != http.StatusNoContent {
+		t.Fatalf("close projected Northwind snapshot: %d %s", closeResponse.Code, closeResponse.Body.String())
 	}
 	compositeRecord := httptest.NewRecorder()
 	collection := url.PathEscape("Order Details")

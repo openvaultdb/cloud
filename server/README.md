@@ -16,17 +16,15 @@ uses natural single-column IDs and typed, collision-safe IDs for composite
 keys. BLOB columns are declared as `any` so OVDB can return their native byte
 values.
 
-OpenVaultDB v0.11.0 currently emits SQLite identifiers directly while ensuring
-strict schemas. The Northwind table `Order Details` therefore uses a quoted
-SQL identifier in its generated manifest. After mounting, the service restores
-the native logical collection name for discovery and rendering, then maps
-GET, HEAD, and query-key reads to the retained quoted driver key. The public
-URL, query, and returned row keep the upstream collection name. The SQLite
-table, columns, composite primary key, self-reference, and foreign keys keep
-their upstream names and definitions. A reusable fix belongs at the
-`openvaultdb-go` strict-schema/mount boundary and the DALgo SQLite DDL builder,
-where logical names can be separated from safely quoted SQL identifiers; this
-service shim does not change those upstream libraries.
+OpenVaultDB v0.11.1 registers the logical name of a quoted SQLite collection as
+an alias for its driver recordset. Query identity lookup can therefore find the
+native primary key, including when a projection omits the hidden identity
+field. The Northwind table `Order Details` still uses a quoted SQL identifier
+in its generated manifest. The cloud adapter restores the native logical name
+for discovery and rendering, then maps GET, HEAD, and query-key reads to the
+retained quoted driver key. Public URLs, queries, and returned rows keep the
+upstream collection name. The SQLite table, columns, composite primary key,
+self-reference, and foreign keys keep their upstream names and definitions.
 
 ## Local acceptance
 
