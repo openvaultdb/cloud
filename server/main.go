@@ -21,18 +21,11 @@ import (
 )
 
 func main() {
-	manifest := os.Getenv("CHINOOK_MANIFEST")
-	if manifest == "" {
-		manifest = "/srv/fixture/chinook.yaml"
+	databases, err := configuredDatabases()
+	if err != nil {
+		log.Fatalf("load sample database inventory: %v", err)
 	}
-	manifests := map[string]string{"chinook": manifest}
-	northwindManifest, northwindConfigured := os.LookupEnv("NORTHWIND_MANIFEST")
-	if northwindConfigured {
-		manifests["northwind"] = northwindManifest
-	} else if _, err := os.Stat("/srv/fixture/northwind.yaml"); err == nil {
-		manifests["northwind"] = "/srv/fixture/northwind.yaml"
-	}
-	handler, closeDatabases, err := newHandlerWithManifests(manifests)
+	handler, closeDatabases, err := newHandlerWithProviders(databases)
 	if err != nil {
 		log.Fatalf("mount sample databases: %v", err)
 	}
@@ -57,9 +50,9 @@ func main() {
 			log.Printf("shutdown: %v", err)
 		}
 	}()
-	log.Printf("serving read-only sample databases %v on port %s", mapKeys(manifests), port)
+	log.Printf("serving read-only sample databases %v on port %s", databaseIDs(databases), port)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("serve Chinook: %v", err)
+		log.Fatalf("serve sample databases: %v", err)
 	}
 }
 
@@ -68,51 +61,74 @@ func newHandler(manifest string) (http.Handler, func() error, error) {
 }
 
 func newHandlerWithManifests(manifests map[string]string) (http.Handler, func() error, error) {
-	databases := make(map[string]*core.Database, len(manifests))
-	quotedCollections := make(map[string]map[string]string, len(manifests))
+	databases := make([]runtimeDatabase, 0, len(manifests))
 	for id, manifest := range manifests {
+		databases = append(databases, runtimeDatabase{ID: id, Manifest: manifest, CORSOrigins: legacyCORSOrigins(id)})
+	}
+	return newHandlerWithProviders(databases)
+}
+
+func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() error, error) {
+	sort.Slice(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
+	if len(providers) == 0 {
+		return nil, nil, errors.New("no sample database manifests configured")
+	}
+	databases := make(map[string]*core.Database, len(providers))
+	quotedCollections := make(map[string]map[string]string, len(providers))
+	corsOrigins := make(map[string]struct{})
+	for _, provider := range providers {
+		id, manifest := provider.ID, provider.Manifest
 		if manifest == "" {
+			closeMountedDatabases(databases)
 			return nil, nil, fmt.Errorf("manifest path for database %q is empty", id)
+		}
+		if _, exists := databases[id]; exists {
+			closeMountedDatabases(databases)
+			return nil, nil, fmt.Errorf("database ID %q is configured more than once", id)
 		}
 		database, err := mount.File(manifest)
 		if err != nil {
-			for _, mounted := range databases {
-				_ = mounted.Close()
-			}
+			closeMountedDatabases(databases)
 			return nil, nil, err
 		}
 		if database.Manifest.Database.ID != id {
 			_ = database.Close()
-			for _, mounted := range databases {
-				_ = mounted.Close()
-			}
+			closeMountedDatabases(databases)
 			return nil, nil, fmt.Errorf("manifest %q declares database ID %q, want %q", manifest, database.Manifest.Database.ID, id)
+		}
+		if !runtimeDatabaseIDPattern.MatchString(id) {
+			_ = database.Close()
+			closeMountedDatabases(databases)
+			return nil, nil, fmt.Errorf("invalid database ID %q", id)
 		}
 		quotedCollections[id] = quotedCollectionAliases(database)
 		normalizeManifestIdentifiers(database)
 		databases[id] = database
+		for _, origin := range provider.CORSOrigins {
+			corsOrigins[origin] = struct{}{}
+		}
 	}
-	if len(databases) == 0 {
-		return nil, nil, errors.New("no sample database manifests configured")
+	origins := make([]string, 0, len(corsOrigins))
+	for origin := range corsOrigins {
+		origins = append(origins, origin)
 	}
+	sort.Strings(origins)
 	handler := server.New("demodb-cloud", databases,
 		server.WithReadOnly(true),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
-		server.WithCORS(server.ParseCORSOrigins([]string{
-			"https://chinookdb.com", "https://www.chinookdb.com",
-			"https://demodb.dev", "https://www.demodb.dev",
-			"https://chinook.demodb.dev", "https://northwind.demodb.dev",
-		})),
+		server.WithCORS(server.ParseCORSOrigins(origins)),
 	).Handler()
-	return withQuotedCollectionRecordReads(handler, quotedCollections), func() error {
-		var closeErr error
-		for _, database := range databases {
-			if err := database.Close(); err != nil && closeErr == nil {
-				closeErr = err
-			}
+	return withQuotedCollectionRecordReads(handler, quotedCollections), func() error { return closeMountedDatabases(databases) }, nil
+}
+
+func closeMountedDatabases(databases map[string]*core.Database) error {
+	var closeErr error
+	for _, database := range databases {
+		if err := database.Close(); err != nil && closeErr == nil {
+			closeErr = err
 		}
-		return closeErr
-	}, nil
+	}
+	return closeErr
 }
 
 func quotedCollectionAliases(database *core.Database) map[string]string {
@@ -196,13 +212,4 @@ func logicalIdentifier(name string) string {
 		return name
 	}
 	return strings.ReplaceAll(name[1:len(name)-1], `""`, `"`)
-}
-
-func mapKeys(values map[string]string) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

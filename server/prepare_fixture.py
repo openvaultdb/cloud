@@ -9,6 +9,7 @@ foreign-key declarations remain in the derived copy.
 import base64
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import sys
@@ -17,13 +18,16 @@ from typing import Any
 
 
 DEFAULT_CHINOOK_SHA256 = "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15"
+DATABASE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+ID_COLUMN_NAME = "id"
+UPDATE_BATCH_SIZE = 1000
 
 
 def field_type(sql_type: str) -> str:
     kind = sql_type.upper()
     if "INT" in kind:
         return "integer"
-    if any(token in kind for token in ("REAL", "FLOA", "DOUB", "DECIMAL", "NUMERIC")):
+    if any(token in kind for token in ("REAL", "FLOA", "DOUB", "DECIMAL", "NUMERIC", "MONEY")):
         return "number"
     if "BLOB" in kind:
         return "any"
@@ -58,25 +62,63 @@ def record_id(values: tuple[Any, ...], key_format: str) -> str:
     return "ovdb:" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+def hidden_rowid_name(column_names: set[str]) -> str | None:
+    lowered = {name.casefold() for name in column_names}
+    return next((candidate for candidate in ("rowid", "_rowid_", "oid") if candidate.casefold() not in lowered), None)
+
+
+def is_without_rowid(connection: sqlite3.Connection, table: str) -> bool:
+    try:
+        for row in connection.execute("PRAGMA table_list"):
+            if row[0] == "main" and row[1] == table and row[2] == "table":
+                return bool(row[4])
+    except sqlite3.DatabaseError:
+        pass
+    table_statement = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()[0]
+    return bool(re.search(r"\bWITHOUT\s+ROWID\b", table_statement or "", re.IGNORECASE))
+
+
 def add_record_ids(connection: sqlite3.Connection, table: str, columns: list[tuple[Any, ...]], key_format: str) -> None:
     names = {str(column[1]) for column in columns}
-    if "id" in names:
+    if any(name.casefold() == ID_COLUMN_NAME for name in names):
         raise ValueError(f"table {table!r} already has an id column; the OVDB adapter reserves this name")
     primary_keys = [str(name) for _, name, _, _, _, order in sorted(columns, key=lambda item: item[5]) if order]
     table_sql = quote_identifier(table)
+    without_rowid = is_without_rowid(connection, table)
+    rowid_column = hidden_rowid_name(names)
     connection.execute(f"ALTER TABLE {table_sql} ADD COLUMN \"id\" TEXT")
 
-    if primary_keys:
+    if primary_keys and without_rowid:
         projection = ", ".join(quote_identifier(name) for name in primary_keys)
-        cursor = connection.execute(f"SELECT rowid, {projection} FROM {table_sql}")
+        cursor = connection.execute(f"SELECT {projection} FROM {table_sql}")
+        predicate = " AND ".join(f"{quote_identifier(name)} IS ?" for name in primary_keys)
+    elif primary_keys and rowid_column:
+        projection = ", ".join(quote_identifier(name) for name in primary_keys)
+        cursor = connection.execute(f"SELECT {quote_identifier(rowid_column)}, {projection} FROM {table_sql}")
+        predicate = f"{quote_identifier(rowid_column)}=?"
     else:
-        cursor = connection.execute(f"SELECT rowid FROM {table_sql}")
-    updates = []
-    for row in cursor:
-        rowid = row[0]
-        values = tuple(row[1:]) if primary_keys else (rowid,)
-        updates.append((record_id(values, key_format), rowid))
-    connection.executemany(f"UPDATE {table_sql} SET \"id\"=? WHERE rowid=?", updates)
+        if primary_keys:
+            raise ValueError(f"table {table!r} shadows SQLite's hidden row identity; cannot safely prepare serving IDs")
+        if not rowid_column:
+            raise ValueError(f"keyless table {table!r} shadows all SQLite row identity aliases")
+        cursor = connection.execute(f"SELECT {quote_identifier(rowid_column)} FROM {table_sql}")
+        predicate = f"{quote_identifier(rowid_column)}=?"
+    update_sql = f"UPDATE {table_sql} SET \"id\"=? WHERE {predicate}"
+    while rows := cursor.fetchmany(UPDATE_BATCH_SIZE):
+        updates = []
+        for row in rows:
+            if primary_keys and without_rowid:
+                values = tuple(row)
+                updates.append((record_id(values, key_format), *values))
+            elif primary_keys:
+                values = tuple(row[1:])
+                updates.append((record_id(values, key_format), row[0]))
+            else:
+                values = (row[0],)
+                updates.append((record_id(values, key_format), values[0]))
+        connection.executemany(update_sql, updates)
     missing_ids = connection.execute(f"SELECT COUNT(*) FROM {table_sql} WHERE \"id\" IS NULL").fetchone()[0]
     if missing_ids:
         raise ValueError(f"failed to assign adapter IDs for {table!r}: {missing_ids} missing")
@@ -89,7 +131,7 @@ def table_metadata(connection: sqlite3.Connection, table: str) -> tuple[Any, ...
         (name, sql_type, not_null, default_value, primary_key_order)
         for _, name, sql_type, not_null, default_value, primary_key_order
         in connection.execute(f"PRAGMA table_info({quoted})")
-        if name != "id"
+        if name.casefold() != ID_COLUMN_NAME
     )
     foreign_keys = tuple(connection.execute(f"PRAGMA foreign_key_list({quoted})"))
     indexes = []
@@ -105,7 +147,7 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
     actual_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
     if expected_sha256 and actual_sha256 != expected_sha256:
         raise ValueError(f"{database_id} source SHA-256 differs from its pin: got {actual_sha256}")
-    if not database_id.isidentifier():
+    if not DATABASE_ID_PATTERN.fullmatch(database_id):
         raise ValueError(f"invalid database id: {database_id!r}")
     if key_format not in ("natural", "legacy"):
         raise ValueError(f"unknown OVDB record key format: {key_format!r}")
@@ -121,6 +163,11 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
         "  collections:",
     ]
     try:
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError(f"{database_id} source SQLite file failed integrity check")
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise ValueError(f"{database_id} source SQLite file has {len(violations)} foreign-key violations")
         tables = [row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         )]
@@ -154,6 +201,9 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
         connection.commit()
         if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError(f"{database_id} derived SQLite file failed integrity check")
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise ValueError(f"{database_id} derived SQLite file has {len(violations)} foreign-key violations")
         if actual_sha256 != hashlib.sha256(source.read_bytes()).hexdigest():
             raise ValueError("provider source changed during preparation")
     finally:
