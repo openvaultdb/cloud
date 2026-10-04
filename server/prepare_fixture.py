@@ -35,8 +35,8 @@ def quote_identifier(name: str) -> str:
 
 
 def manifest_identifier(name: str) -> str:
-    # openvaultdb-go v0.11.0 currently emits collection/field identifiers as
-    # SQL fragments during strict-schema setup. Quote only names that SQLite
+    # The driver emits collection/field identifiers as SQL fragments during
+    # strict-schema setup. Quote only names that SQLite
     # cannot parse as bare identifiers; main.go restores the logical names
     # after mounting, while the SQLite driver still sees the native table.
     return name if name.isidentifier() else quote_identifier(name)
