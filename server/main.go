@@ -79,27 +79,24 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 	for _, provider := range providers {
 		id, manifest := provider.ID, provider.Manifest
 		if manifest == "" {
-			closeMountedDatabases(databases)
-			return nil, nil, fmt.Errorf("manifest path for database %q is empty", id)
+			return nil, nil, errors.Join(fmt.Errorf("manifest path for database %q is empty", id), closeMountedDatabases(databases))
 		}
 		if _, exists := databases[id]; exists {
-			closeMountedDatabases(databases)
-			return nil, nil, fmt.Errorf("database ID %q is configured more than once", id)
+			return nil, nil, errors.Join(fmt.Errorf("database ID %q is configured more than once", id), closeMountedDatabases(databases))
 		}
 		database, err := mount.File(manifest)
 		if err != nil {
-			closeMountedDatabases(databases)
-			return nil, nil, err
+			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 		}
 		if database.Manifest.Database.ID != id {
-			_ = database.Close()
-			closeMountedDatabases(databases)
-			return nil, nil, fmt.Errorf("manifest %q declares database ID %q, want %q", manifest, database.Manifest.Database.ID, id)
+			return nil, nil, errors.Join(
+				fmt.Errorf("manifest %q declares database ID %q, want %q", manifest, database.Manifest.Database.ID, id),
+				database.Close(),
+				closeMountedDatabases(databases),
+			)
 		}
 		if !runtimeDatabaseIDPattern.MatchString(id) {
-			_ = database.Close()
-			closeMountedDatabases(databases)
-			return nil, nil, fmt.Errorf("invalid database ID %q", id)
+			return nil, nil, errors.Join(fmt.Errorf("invalid database ID %q", id), database.Close(), closeMountedDatabases(databases))
 		}
 		quotedCollections[id] = quotedCollectionAliases(database)
 		normalizeManifestIdentifiers(database)

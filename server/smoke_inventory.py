@@ -63,12 +63,18 @@ def main() -> None:
             if "max-age=86400" not in headers.get("Cache-Control", ""):
                 raise RuntimeError(f"{database['id']} GET query is not cacheable")
             result = json.loads(result_bytes)
-            if not isinstance(result.get("records"), list) or not result["records"]:
+            records = result.get("records")
+            if not isinstance(records, list) or not records:
                 raise RuntimeError(f"{database['id']} query returned no records from {collection!r}")
+            first_record = records[0]
+            record_key = first_record.get("key") if isinstance(first_record, dict) else None
+            if not isinstance(record_key, str) or not record_key.strip() or "<nil>" in record_key:
+                raise RuntimeError(f"{database['id']} query returned an invalid record key for {collection!r}: {record_key!r}")
 
+        write_collection_path = quote(recordsets[0], safe="")
         status, _, body = request(
             args.origin,
-            f"/v1/databases/{database_id}/records/{collection_path}/no-such-record",
+            f"/v1/databases/{database_id}/records/{write_collection_path}/no-such-record",
             method="PUT",
             body=b'{"data":{}}',
             headers={"Content-Type": "application/json"},
