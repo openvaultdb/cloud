@@ -57,6 +57,48 @@ def verify_blob(data: bytes, expected_hash: str, expected_bytes: int | None, con
         raise ValueError(f"{context} is {len(data)} bytes, expected {expected_bytes}")
 
 
+def validate_sqlite_export(database_id: str, exports: list[dict[str, Any]], artifact: dict[str, Any]) -> None:
+    if not isinstance(exports, list):
+        raise ValueError(f"{database_id} provider contract exports must be an array")
+    artifact_path = artifact["path"]
+    sqlite_exports = [
+        entry
+        for entry in exports
+        if entry.get("path") == artifact_path and entry.get("format", "sqlite" if artifact_path.endswith(".sqlite") else None) == "sqlite"
+    ]
+    if len(sqlite_exports) != 1:
+        raise ValueError(f"{database_id} contract must declare its SQLite artifact exactly once")
+
+    exported = sqlite_exports[0]
+    compression = artifact.get("compression")
+    if compression is None:
+        if exported.get("compression") not in (None, ""):
+            raise ValueError(f"{database_id} contract SQLite compression disagrees with its immutable provider pin")
+        if exported.get("sha256") not in (None, artifact["sha256"]):
+            raise ValueError(f"{database_id} contract SQLite hash disagrees with its immutable provider pin")
+        if exported.get("bytes") != artifact["bytes"]:
+            raise ValueError(f"{database_id} contract SQLite size disagrees with its immutable provider pin")
+        return
+
+    if compression != "gzip" or exported.get("compression") != compression:
+        raise ValueError(f"{database_id} contract SQLite compression disagrees with its immutable provider pin")
+    if exported.get("encodedPath") != artifact.get("encodedPath"):
+        raise ValueError(f"{database_id} contract SQLite encoded path disagrees with its immutable provider pin")
+    if exported.get("sha256") != artifact.get("sha256") or exported.get("bytes") != artifact.get("bytes"):
+        raise ValueError(f"{database_id} contract SQLite encoded hash or size disagrees with its immutable provider pin")
+    if exported.get("decodedSha256") != artifact.get("decodedSha256") or exported.get("decodedBytes") != artifact.get("decodedBytes"):
+        raise ValueError(f"{database_id} contract SQLite decoded hash or size disagrees with its immutable provider pin")
+
+    expected_chunks = artifact.get("chunks", [])
+    exported_chunks = exported.get("chunks", [])
+    if not isinstance(exported_chunks, list) or not isinstance(expected_chunks, list):
+        raise ValueError(f"{database_id} contract SQLite chunks must be arrays")
+    normalized_expected = [{key: chunk.get(key) for key in ("path", "bytes", "sha256")} for chunk in expected_chunks]
+    normalized_exported = [{key: chunk.get(key) for key in ("path", "bytes", "sha256")} for chunk in exported_chunks if isinstance(chunk, dict)]
+    if len(normalized_exported) != len(exported_chunks) or normalized_exported != normalized_expected:
+        raise ValueError(f"{database_id} contract SQLite chunks disagree with its immutable provider pin")
+
+
 def load_inventory(path: Path) -> list[dict[str, Any]]:
     document = read_json(path.read_bytes(), str(path))
     if document.get("version") != 1 or not isinstance(document.get("databases"), list):
@@ -307,21 +349,9 @@ def validate_provider(
     if database_manifest.get("provenance", {}).get("license") != source["license"]:
         raise ValueError(f"{database_id} public provenance license differs from provider metadata")
 
-    artifact_path = provider["files"]["artifact"]["path"]
     artifact_descriptor = provider["files"]["artifact"]
     artifact_hash = artifact_descriptor.get("decodedSha256", artifact_descriptor["sha256"])
-    artifact_bytes = artifact_descriptor.get("decodedBytes", artifact_descriptor["bytes"])
-    sqlite_exports = [
-        entry
-        for entry in contract.get("exports", [])
-        if entry.get("path") == artifact_path and entry.get("format", "sqlite" if artifact_path.endswith(".sqlite") else None) == "sqlite"
-    ]
-    if len(sqlite_exports) != 1:
-        raise ValueError(f"{database_id} contract must declare its SQLite artifact exactly once")
-    if sqlite_exports[0].get("sha256") not in (None, artifact_hash):
-        raise ValueError(f"{database_id} contract SQLite hash disagrees with its immutable provider pin")
-    if sqlite_exports[0].get("bytes") != artifact_bytes:
-        raise ValueError(f"{database_id} contract SQLite size disagrees with its immutable provider pin")
+    validate_sqlite_export(database_id, contract.get("exports", []), artifact_descriptor)
     source_hash = source.get("sha256") or source.get("databaseSha256")
     if source_hash and source_hash != artifact_hash:
         raise ValueError(f"{database_id} source fixture hash differs from the published SQLite artifact")

@@ -76,12 +76,45 @@ class PrepareProvidersTest(unittest.TestCase):
             path.write_text(json.dumps(document))
             with self.assertRaisesRegex(ValueError, "decodedBytes"):
                 prepare_providers.load_inventory(path)
-
             artifact["decodedBytes"] = 1
             artifact["bytes"] = prepare_providers.MAX_ENCODED_ARTIFACT_BYTES + 1
             path.write_text(json.dumps(document))
             with self.assertRaisesRegex(ValueError, "encoded-stream limit"):
                 prepare_providers.load_inventory(path)
+
+    def test_adventureworks_contract_export_matches_encoded_and_decoded_inventory_pins(self) -> None:
+        # These are the real sqlite export fields from demo-db/adventureworks
+        # at cd8dcdf2079fe31480ad6d6c024b8c17cb91beea, contract
+        # 462d32735cb3fb85868af977741a83cdb3add508809503934ef7a08daa36d682.
+        chunks = [
+            {"path": "artifacts/adventureworks.sqlite.gz.part-0001", "bytes": 26214400, "sha256": "3c59d3812fbc29d8a3070da9bef2306b25cff219fa08bb3fd82e5838f92d080a"},
+            {"path": "artifacts/adventureworks.sqlite.gz.part-0002", "bytes": 9075051, "sha256": "80b1a2c58648469aebe5b47b9dfaef3b3c84d14e141b5297e6f5f94953ef28a7"},
+        ]
+        artifact = {
+            "path": "artifacts/adventureworks.sqlite",
+            "compression": "gzip",
+            "encodedPath": "artifacts/adventureworks.sqlite.gz",
+            "bytes": 35289451,
+            "sha256": "533165298eb696d330be6a2fc648ba56d985be491d511ca581d7ea64736e1a28",
+            "decodedBytes": 125276160,
+            "decodedSha256": "e0f352f0e3a28ff15158130c237a91d58f1b60fffa7f30d2c412b92df4065dfd",
+            "chunks": chunks,
+        }
+        contract_export = {"path": artifact["path"], "format": "sqlite", **artifact}
+
+        prepare_providers.validate_sqlite_export("adventureworks", [contract_export], artifact)
+
+        wrong_encoded_hash = {**contract_export, "sha256": artifact["decodedSha256"]}
+        with self.assertRaisesRegex(ValueError, "encoded hash or size"):
+            prepare_providers.validate_sqlite_export("adventureworks", [wrong_encoded_hash], artifact)
+
+        wrong_decoded_size = {**contract_export, "decodedBytes": artifact["bytes"]}
+        with self.assertRaisesRegex(ValueError, "decoded hash or size"):
+            prepare_providers.validate_sqlite_export("adventureworks", [wrong_decoded_size], artifact)
+
+        wrong_chunks = {**contract_export, "chunks": [*chunks[:-1], {**chunks[-1], "path": "artifacts/wrong.part"}]}
+        with self.assertRaisesRegex(ValueError, "chunks disagree"):
+            prepare_providers.validate_sqlite_export("adventureworks", [wrong_chunks], artifact)
 
     def test_rejects_provider_bytes_that_disagree_with_pins(self) -> None:
         with self.assertRaisesRegex(ValueError, "SHA-256"):
