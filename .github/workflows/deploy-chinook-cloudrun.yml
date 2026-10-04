@@ -48,6 +48,8 @@ jobs:
         run: |
           test "$(cat ovdb-cloud.source-sha)" = "${DEPLOY_SHA}"
           sha256sum --check ovdb-cloud.sha256
+          test "$(cat fixture/output/chinook.source-sha256)" = "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15"
+          test "$(cat fixture/output/northwind.source-sha256)" = "279b34136771aee75d802094b3329515a2b01da65d2a20a4a9e3b58c29b4fd20"
           chmod +x ovdb-cloud
 
       - name: Authenticate with OpenVaultDB Google Cloud
@@ -100,12 +102,27 @@ jobs:
           grep -q 'collections/Artist' "${RUNNER_TEMP}/chinook-album.html"
           grep -q 'collections/Track' "${RUNNER_TEMP}/chinook-album.html"
           curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            "${SERVICE_URL}/ovdb/dbs/northwind" > "${RUNNER_TEMP}/northwind-profile.html"
+          grep -q 'https://cloud.openvaultdb.com/ovdb/dbs/northwind' "${RUNNER_TEMP}/northwind-profile.html"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            "${SERVICE_URL}/ovdb/dbs/northwind/collections/Order%20Details" > "${RUNNER_TEMP}/northwind-order-details.html"
+          grep -q 'Order Details' "${RUNNER_TEMP}/northwind-order-details.html"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
             --dump-header "${RUNNER_TEMP}/chinook-headers" \
             --get --data-urlencode 'q=from: {name: Album}' \
             "${SERVICE_URL}/v1/databases/chinook/dtql" \
             --output "${RUNNER_TEMP}/chinook-result.json"
           jq -e '.records | length == 347' "${RUNNER_TEMP}/chinook-result.json"
           grep -iq '^cache-control: public, max-age=86400, s-maxage=86400' "${RUNNER_TEMP}/chinook-headers"
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            --dump-header "${RUNNER_TEMP}/northwind-headers" \
+            --header 'Origin: https://northwind.demodb.dev' \
+            --header 'Content-Type: application/json' \
+            --data '{"query":"from: {name: '\''Order Details'\''}\nlimit: 2\n"}' \
+            "${SERVICE_URL}/v1/databases/northwind/dtql" \
+            --output "${RUNNER_TEMP}/northwind-result.json"
+          jq -e '.records | length == 2' "${RUNNER_TEMP}/northwind-result.json"
+          grep -iq '^access-control-allow-origin: https://northwind.demodb.dev' "${RUNNER_TEMP}/northwind-headers"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
           printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
           printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
