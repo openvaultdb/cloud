@@ -6,12 +6,31 @@
       "repository": "demo-db/chinook",
       "revision": "26e852cca00101f53a84ef8ee1f1ae389067f5cf",
       "files": {
-        "manifest": {"path": "manifest.json", "sha256": "4e168c0091053817d71fbda43e3b23d711a6318d941ea9a2f34efab78baf00c6"},
-        "contract": {"path": "metadata/contract.json", "sha256": "576b4ecb21bd3b263b7a3523b6a3c952c8388298eb0fa56a7950b42f63958272"},
-        "checksums": {"path": "metadata/checksums.json", "sha256": "bfc531be4ee1ccaeef7de11d60b174ea134189fbde83e1474150b4f7b7b314a6"},
-        "databaseManifest": {"path": "ovdb-database.json", "sha256": "e851d1709633a43958fbabe9eb1710ea895838d8a2fb6c225adc21b085dbf26b"},
-        "artifact": {"path": "artifacts/data/chinook.sqlite", "sha256": "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15", "bytes": 1007616},
-        "license": {"path": "data-source/LICENSE.md", "sha256": "5064d720db431474b0a0b0cef9d2b5e362b6c6f80602b35c6443b07cbc979f77"}
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "4e168c0091053817d71fbda43e3b23d711a6318d941ea9a2f34efab78baf00c6"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "576b4ecb21bd3b263b7a3523b6a3c952c8388298eb0fa56a7950b42f63958272"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "bfc531be4ee1ccaeef7de11d60b174ea134189fbde83e1474150b4f7b7b314a6"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "e851d1709633a43958fbabe9eb1710ea895838d8a2fb6c225adc21b085dbf26b"
+        },
+        "artifact": {
+          "path": "artifacts/data/chinook.sqlite",
+          "sha256": "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15",
+          "bytes": 1007616
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "5064d720db431474b0a0b0cef9d2b5e362b6c6f80602b35c6443b07cbc979f77"
+        }
       },
       "recordKeyFormat": "legacy",
       "corsOrigins": [
@@ -27,32 +46,124 @@
       "repository": "demo-db/northwind",
       "revision": "e74726515c3833620b54b7a50d1d273276dd23c1",
       "files": {
-        "manifest": {"path": "manifest.json", "sha256": "91e1fab00b76461241282ac4f1f51b963b237e5c842d7d118ec6c2b39a27e300"},
-        "contract": {"path": "metadata/contract.json", "sha256": "88a7e21b1ed16b27c3195c8ee10dc60ebef60fba6c70df6f9325d8e4adaaea22"},
-        "checksums": {"path": "metadata/checksums.json", "sha256": "c89b2cfee811e384c9ed961dfbdf4f4ea35b65cbb38e2582f3c6c6ea768edf9f"},
-        "databaseManifest": {"path": "ovdb-database.json", "sha256": "a5f7ec858ecc1f98f9c03b66ad5a618ece1a2998c9e1853aeabb320e949d8756"},
-        "artifact": {"path": "artifacts/northwind.sqlite", "sha256": "279b34136771aee75d802094b3329515a2b01da65d2a20a4a9e3b58c29b4fd20", "bytes": 602112},
-        "license": {"path": "data-source/LICENSE.md", "sha256": "c28e204be6418b87ae1c83127096aad9c9e1a218c365f8f4d630e84d8ba96c47"}
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "91e1fab00b76461241282ac4f1f51b963b237e5c842d7d118ec6c2b39a27e300"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "88a7e21b1ed16b27c3195c8ee10dc60ebef60fba6c70df6f9325d8e4adaaea22"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "c89b2cfee811e384c9ed961dfbdf4f4ea35b65cbb38e2582f3c6c6ea768edf9f"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "a5f7ec858ecc1f98f9c03b66ad5a618ece1a2998c9e1853aeabb320e949d8756"
+        },
+        "artifact": {
+          "path": "artifacts/northwind.sqlite",
+          "sha256": "279b34136771aee75d802094b3329515a2b01da65d2a20a4a9e3b58c29b4fd20",
+          "bytes": 602112
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "c28e204be6418b87ae1c83127096aad9c9e1a218c365f8f4d630e84d8ba96c47"
+        }
       },
       "recordKeyFormat": "natural",
-      "corsOrigins": ["https://northwind.demodb.dev", "https://demodb.dev", "https://www.demodb.dev"]
+      "corsOrigins": [
+        "https://northwind.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev"
+      ]
     },
     {
       "id": "pubs",
       "repository": "demo-db/pubs",
-      "revision": "34501946b0478b7e2ae13c15b4c57019109b5edc",
+      "revision": "6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",
       "files": {
-        "manifest": {"path": "manifest.json", "sha256": "e62c141ed9d0cfb8b9091ff6f274902c2fb729f54856fd871241fd38ed4e9761"},
-        "contract": {"path": "metadata/contract.json", "sha256": "0b427916f82c14d1a702e072316e497f8c20918f2377fb76fad97b9e98b62474"},
-        "checksums": {"path": "metadata/checksums.json", "sha256": "2b42b3b4e6576fb32d46753404aefbaada64ce06d4a5a73f766233b98cbe7107"},
-        "databaseManifest": {"path": "ovdb-database.json", "sha256": "6df81e8f260500f202bb168152b88203a2bea28194630773bf8a879785015118"},
-        "artifact": {"path": "artifacts/pubs.sqlite", "sha256": "b45b08b7c06441cc0b138b031ea5bd32bd5866aebf874c89d2ebf7fc6abb3691", "bytes": 212992},
-        "license": {"path": "data-source/LICENSE.txt", "sha256": "201f3705979e932c92cd3c6ddbddf4dc3c71dcc5a82089a1e4018227cfe1cf09"}
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "00b830249f64ae7c6a669b4bf14e70e09068041482d771959012db868dcfdb16"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "32224efdbecd57962f32a0aad81653bbf5085788df69185be30b2c7c0910d659"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "64dc3bd74f5ad7dff22b7ca53446985421d1c06f2b7fa548eae965005b24d886"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "42a9ec5d9179b64a3d848fc661a8a1b230d691643ecf71ca42fc2fa1830533c1"
+        },
+        "artifact": {
+          "path": "artifacts/pubs.sqlite",
+          "sha256": "b45b08b7c06441cc0b138b031ea5bd32bd5866aebf874c89d2ebf7fc6abb3691",
+          "bytes": 212992
+        },
+        "license": {
+          "path": "data-source/LICENSE.txt",
+          "sha256": "201f3705979e932c92cd3c6ddbddf4dc3c71dcc5a82089a1e4018227cfe1cf09"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "smokeRecordsets": [
+        "discounts",
+        "roysched"
+      ],
+      "corsOrigins": [
+        "https://pubs.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev"
+      ]
+    },
+    {
+      "id": "sakila",
+      "repository": "demo-db/sakila",
+      "revision": "0cb13fd76b2ce590f68efa99a6fbf7effcf6e4ce",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "b408335abaaaaa34f87b27172223bf1a27af985659663a32587f1e211dec5590"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "89c9c181ed41746c5a26ec14b489f9b295040a450c13667c134db483bc65cbce"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "f200b1f2bd5b4f845f97f37c01fd0d4b9b9eb8acd9a62c6ae16d2c8a6a288305"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "d19c4c448e7a7a61a9a9bdaf051b69da44bcc619707b7491304a6c8fce8b9b6b"
+        },
+        "artifact": {
+          "path": "artifacts/sakila.sqlite",
+          "sha256": "9bebeee50fecb1fee115c206a4f380f2f6d1f009e7796b18b8a8cfba7c810454",
+          "bytes": 4915200
+        },
+        "license": {
+          "path": "data-source/sakila-schema.sql",
+          "sha256": "b32170e1e2ad5828749b61a5ec896155bcd143104b076e5ee8a3a3b013f44915"
+        }
       },
       "recordKeyFormat": "natural",
       "requirePublishedQuery": false,
-      "smokeRecordsets": ["discounts", "roysched"],
-      "corsOrigins": ["https://pubs.demodb.dev", "https://demodb.dev", "https://www.demodb.dev"]
+      "smokeRecordsets": [
+        "film",
+        "rental",
+        "payment"
+      ],
+      "corsOrigins": [
+        "https://sakila.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev"
+      ]
     }
   ]
 }

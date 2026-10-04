@@ -6,3 +6,5 @@ worker-configuration.d.ts
 coverage/
 dist/
 server/server
+__pycache__/
+*.py[cod]

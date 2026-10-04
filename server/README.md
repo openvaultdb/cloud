@@ -10,7 +10,11 @@ immutable commits and verifies every pin before it prepares a fixture.
 `prepare_providers.py` checks that the provider ID, public OVDB identity and
 route, exported SQLite path, source digest, license, contract, and checksums
 agree. It rejects mutable revisions, unsafe paths, invalid SQLite/FK data, and
-individual source exports over 25 MiB. It then creates a runtime inventory
+individual source files over 25 MiB. A gzip-compressed export may be split into
+ordered, individually pinned chunks; the preparer verifies every chunk and the
+aggregate encoded hash, streams the full decoded SQLite file to a temporary
+fixture, then verifies its decoded size and hash before adapting it. Decoded
+fixtures are bounded to 2 GiB. It then creates a runtime inventory
 with separate hashes for the original provider SQLite and the derived
 serving-only SQLite. At startup, Go verifies those serving receipts and the
 license bytes before mounting the inventory. Origins are assembled from the
@@ -32,6 +36,9 @@ published schema metadata and exports.
 The adapter currently reserves a native column named `id` (case-insensitively), because the
 read-only record adapter uses that name for serving identity. A source table
 with that column fails preparation explicitly rather than overwriting it.
+The generated `data.id` in OVDB record responses is this derived serving
+identity; it is absent from source exports and native provider schema/model
+metadata. Native primary keys and adapter record identities remain separate.
 
 ## Local checks
 

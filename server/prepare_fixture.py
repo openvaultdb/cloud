@@ -21,6 +21,15 @@ DEFAULT_CHINOOK_SHA256 = "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e2
 DATABASE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 ID_COLUMN_NAME = "id"
 UPDATE_BATCH_SIZE = 1000
+HASH_CHUNK_SIZE = 1024 * 1024
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(HASH_CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def field_type(sql_type: str) -> str:
@@ -144,7 +153,7 @@ def table_metadata(connection: sqlite3.Connection, table: str) -> tuple[Any, ...
 
 
 def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, key_format: str) -> Path:
-    actual_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    actual_sha256 = sha256_file(source)
     if expected_sha256 and actual_sha256 != expected_sha256:
         raise ValueError(f"{database_id} source SHA-256 differs from its pin: got {actual_sha256}")
     if not DATABASE_ID_PATTERN.fullmatch(database_id):
@@ -204,7 +213,7 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise ValueError(f"{database_id} derived SQLite file has {len(violations)} foreign-key violations")
-        if actual_sha256 != hashlib.sha256(source.read_bytes()).hexdigest():
+        if actual_sha256 != sha256_file(source):
             raise ValueError("provider source changed during preparation")
     finally:
         connection.close()
