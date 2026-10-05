@@ -51,7 +51,11 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeDBs()
+	defer func() {
+		if err := closeDBs(); err != nil {
+			t.Errorf("close selected databases: %v", err)
+		}
+	}()
 	keys := []string{"simple", "a/b", "with space", `quote".$#[]`, "Éire_日本"}
 	for _, provider := range providers {
 		profile := selectedRequest(handler, http.MethodGet, "/v1/databases/"+provider.ID, "")
@@ -239,7 +243,11 @@ func TestSelectedRuntimeFailClosedLinkage(t *testing.T) {
 			if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			defer os.WriteFile(manifestPath, manifestData, 0o600)
+			defer func() {
+				if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
+					t.Errorf("restore manifest: %v", err)
+				}
+			}()
 			if !reflect.DeepEqual(data, manifestData) {
 				provider.ManifestSHA256 = digest(data)
 			}
@@ -447,7 +455,11 @@ func TestDescriptorMetadataExactConsumedMembers(t *testing.T) {
 				if err := os.WriteFile(path, encoded, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				defer os.WriteFile(path, original, 0o600)
+				defer func() {
+					if err := os.WriteFile(path, original, 0o600); err != nil {
+						t.Errorf("restore descriptor: %v", err)
+					}
+				}()
 				candidate := provider
 				pin := *provider.PublicDescriptor
 				pin.Bytes = int64(len(encoded))

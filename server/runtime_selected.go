@@ -73,13 +73,13 @@ func safePinnedPath(path string) bool {
 
 type selectedFiles struct{ manifest, publisher, descriptor []byte }
 
-func readBoundedPinned(path, hash string, size int64) ([]byte, error) {
+func readBoundedPinned(path, hash string, size int64) (data []byte, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, publisherselection.MaxBytes+1))
+	defer func() { err = errors.Join(err, f.Close()) }()
+	data, err = io.ReadAll(io.LimitReader(f, publisherselection.MaxBytes+1))
 	if err != nil {
 		return nil, err
 	}
@@ -252,12 +252,12 @@ func mountSelectedSnapshot(p runtimeDatabase) (*core.Database, error) {
 	failed = false
 	return database, nil
 }
-func copyPinnedSQLite(source, destination, hash string) error {
+func copyPinnedSQLite(source, destination, hash string) (err error) {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	defer func() { err = errors.Join(err, input.Close()) }()
 	info, err := input.Stat()
 	if err != nil {
 		return err
@@ -297,7 +297,8 @@ func rejectDuplicateJSON(data []byte) error {
 		if !ok {
 			return nil
 		}
-		if delimiter == '{' {
+		switch delimiter {
+		case '{':
 			seen := map[string]bool{}
 			for decoder.More() {
 				key, err := decoder.Token()
@@ -313,13 +314,13 @@ func rejectDuplicateJSON(data []byte) error {
 					return err
 				}
 			}
-		} else if delimiter == '[' {
+		case '[':
 			for decoder.More() {
 				if err := value(depth + 1); err != nil {
 					return err
 				}
 			}
-		} else {
+		default:
 			return errors.New("invalid JSON delimiter")
 		}
 		_, err = decoder.Token()
