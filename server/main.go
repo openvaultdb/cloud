@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
 	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
-	"github.com/openvaultdb/openvaultdb-go/pkg/schema"
 	"github.com/openvaultdb/openvaultdb-go/pkg/server"
 )
 
@@ -74,7 +71,6 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		return nil, nil, errors.New("no sample database manifests configured")
 	}
 	databases := make(map[string]*core.Database, len(providers))
-	quotedCollections := make(map[string]map[string]string, len(providers))
 	corsOrigins := make(map[string]struct{})
 	for _, provider := range providers {
 		id, manifest := provider.ID, provider.Manifest
@@ -98,8 +94,6 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		if !runtimeDatabaseIDPattern.MatchString(id) {
 			return nil, nil, errors.Join(fmt.Errorf("invalid database ID %q", id), database.Close(), closeMountedDatabases(databases))
 		}
-		quotedCollections[id] = quotedCollectionAliases(database)
-		normalizeManifestIdentifiers(database)
 		databases[id] = database
 		for _, origin := range provider.CORSOrigins {
 			corsOrigins[origin] = struct{}{}
@@ -115,7 +109,7 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
 		server.WithCORS(server.ParseCORSOrigins(origins)),
 	).Handler()
-	return withQuotedCollectionRecordReads(handler, quotedCollections), func() error { return closeMountedDatabases(databases) }, nil
+	return handler, func() error { return closeMountedDatabases(databases) }, nil
 }
 
 func closeMountedDatabases(databases map[string]*core.Database) error {
@@ -126,87 +120,4 @@ func closeMountedDatabases(databases map[string]*core.Database) error {
 		}
 	}
 	return closeErr
-}
-
-func quotedCollectionAliases(database *core.Database) map[string]string {
-	aliases := make(map[string]string)
-	if database.Manifest.Schemas == nil {
-		return aliases
-	}
-	for name := range database.Manifest.Schemas.Collections {
-		logical := logicalIdentifier(name)
-		if logical != name {
-			aliases[logical] = name
-		}
-	}
-	return aliases
-}
-
-func withQuotedCollectionRecordReads(next http.Handler, aliases map[string]map[string]string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			segments := strings.Split(r.URL.EscapedPath(), "/")
-			if len(segments) >= 7 && segments[1] == "v1" && segments[2] == "databases" && segments[4] == "records" {
-				databaseID, err := url.PathUnescape(segments[3])
-				if err == nil {
-					collection, decodeErr := url.PathUnescape(segments[5])
-					if decodeErr == nil {
-						if quoted := aliases[databaseID][collection]; quoted != "" {
-							rewriteEscapedPath(r, segments, 5, quoted)
-						}
-					}
-				}
-			} else if r.Method == http.MethodGet && len(segments) == 5 && segments[1] == "v1" && segments[2] == "databases" && segments[4] == "read" {
-				databaseID, err := url.PathUnescape(segments[3])
-				if err == nil {
-					params := r.URL.Query()
-					keyParts := strings.Split(params.Get("key"), "/")
-					if len(keyParts) >= 2 {
-						collection, decodeErr := url.PathUnescape(keyParts[0])
-						if decodeErr == nil {
-							if quoted := aliases[databaseID][collection]; quoted != "" {
-								keyParts[0] = url.PathEscape(quoted)
-								params.Set("key", strings.Join(keyParts, "/"))
-								r.URL.RawQuery = params.Encode()
-							}
-						}
-					}
-				}
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func rewriteEscapedPath(r *http.Request, segments []string, index int, identifier string) {
-	segments[index] = url.PathEscape(identifier)
-	rawPath := strings.Join(segments, "/")
-	if decodedPath, err := url.PathUnescape(rawPath); err == nil {
-		r.URL.Path = decodedPath
-		r.URL.RawPath = rawPath
-	}
-}
-
-func normalizeManifestIdentifiers(database *core.Database) {
-	if database.Manifest.Schemas == nil {
-		return
-	}
-	collections := make(map[string]schema.Collection, len(database.Manifest.Schemas.Collections))
-	for name, collection := range database.Manifest.Schemas.Collections {
-		logicalName := logicalIdentifier(name)
-		fields := make(map[string]schema.Field, len(collection.Fields))
-		for field, definition := range collection.Fields {
-			fields[logicalIdentifier(field)] = definition
-		}
-		collection.Fields = fields
-		collections[logicalName] = collection
-	}
-	database.Manifest.Schemas.Collections = collections
-}
-
-func logicalIdentifier(name string) string {
-	if len(name) < 2 || name[0] != '"' || name[len(name)-1] != '"' {
-		return name
-	}
-	return strings.ReplaceAll(name[1:len(name)-1], `""`, `"`)
 }

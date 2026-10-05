@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,17 +28,27 @@ type runtimeInventory struct {
 }
 
 type runtimeDatabase struct {
-	ID                 string   `json:"id"`
-	Manifest           string   `json:"manifest"`
-	CORSOrigins        []string `json:"corsOrigins"`
-	ProviderRepository string   `json:"providerRepository"`
-	ProviderRevision   string   `json:"providerRevision"`
-	SourceSHA256       string   `json:"sourceSha256"`
-	ServingSHA256      string   `json:"servingSha256"`
-	License            string   `json:"license"`
-	LicenseSHA256      string   `json:"licenseSha256"`
-	SmokeRecordset     string   `json:"smokeRecordset"`
-	SmokeRecordsets    []string `json:"smokeRecordsets"`
+	ID                 string                   `json:"id"`
+	Manifest           string                   `json:"manifest"`
+	CORSOrigins        []string                 `json:"corsOrigins"`
+	ProviderRepository string                   `json:"providerRepository"`
+	ProviderRevision   string                   `json:"providerRevision"`
+	SourceSHA256       string                   `json:"sourceSha256"`
+	ServingSHA256      string                   `json:"servingSha256"`
+	License            string                   `json:"license"`
+	LicenseSHA256      string                   `json:"licenseSha256"`
+	SmokeRecordset     string                   `json:"smokeRecordset"`
+	SmokeRecordsets    []string                 `json:"smokeRecordsets"`
+	EmptyRecordsets    []string                 `json:"emptyRecordsets"`
+	BlobSmokeFields    map[string][]string      `json:"blobSmokeFields"`
+	ForeignKeySmoke    []runtimeForeignKeySmoke `json:"foreignKeySmoke"`
+}
+
+type runtimeForeignKeySmoke struct {
+	SourceRecordset string `json:"sourceRecordset"`
+	SourceField     string `json:"sourceField"`
+	TargetRecordset string `json:"targetRecordset"`
+	TargetField     string `json:"targetField"`
 }
 
 func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
@@ -87,6 +99,41 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 			}
 			seenRecordsets[recordset] = struct{}{}
 		}
+		for _, recordset := range database.EmptyRecordsets {
+			if strings.TrimSpace(recordset) == "" {
+				return nil, fmt.Errorf("runtime provider %q has an empty expected-empty recordset", database.ID)
+			}
+			if _, exists := seenRecordsets[recordset]; exists {
+				return nil, fmt.Errorf("runtime provider %q repeats recordset %q across smoke groups", database.ID, recordset)
+			}
+			seenRecordsets[recordset] = struct{}{}
+		}
+		for recordset, fields := range database.BlobSmokeFields {
+			if _, exists := seenRecordsets[recordset]; !exists || len(fields) == 0 {
+				return nil, fmt.Errorf("runtime provider %q BLOB smoke fields must reference a queried recordset and include columns", database.ID)
+			}
+			seenFields := make(map[string]struct{}, len(fields))
+			for _, field := range fields {
+				if strings.TrimSpace(field) == "" {
+					return nil, fmt.Errorf("runtime provider %q has an empty BLOB smoke field", database.ID)
+				}
+				if _, exists := seenFields[field]; exists {
+					return nil, fmt.Errorf("runtime provider %q repeats BLOB smoke field %q", database.ID, field)
+				}
+				seenFields[field] = struct{}{}
+			}
+		}
+		for _, relationship := range database.ForeignKeySmoke {
+			if strings.TrimSpace(relationship.SourceRecordset) == "" || strings.TrimSpace(relationship.SourceField) == "" || strings.TrimSpace(relationship.TargetRecordset) == "" || strings.TrimSpace(relationship.TargetField) == "" {
+				return nil, fmt.Errorf("runtime provider %q has an incomplete foreign-key smoke descriptor", database.ID)
+			}
+			if _, exists := seenRecordsets[relationship.SourceRecordset]; !exists {
+				return nil, fmt.Errorf("runtime provider %q foreign-key smoke source %q is not queried", database.ID, relationship.SourceRecordset)
+			}
+			if _, exists := seenRecordsets[relationship.TargetRecordset]; !exists {
+				return nil, fmt.Errorf("runtime provider %q foreign-key smoke target %q is not queried", database.ID, relationship.TargetRecordset)
+			}
+		}
 		for _, origin := range database.CORSOrigins {
 			parsed, parseErr := url.Parse(origin)
 			if parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -101,12 +148,11 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 		if actual != database.SourceSHA256 {
 			return nil, fmt.Errorf("runtime provider %q source hash receipt does not match its inventory pin", database.ID)
 		}
-		fixture, readErr := os.ReadFile(filepath.Join(base, database.ID+".sqlite"))
-		if readErr != nil {
-			return nil, fmt.Errorf("runtime provider %q serving SQLite: %w", database.ID, readErr)
+		actualHash, hashErr := sha256File(filepath.Join(base, database.ID+".sqlite"))
+		if hashErr != nil {
+			return nil, fmt.Errorf("runtime provider %q serving SQLite: %w", database.ID, hashErr)
 		}
-		actualHash := sha256.Sum256(fixture)
-		if hex.EncodeToString(actualHash[:]) != database.ServingSHA256 {
+		if actualHash != database.ServingSHA256 {
 			return nil, fmt.Errorf("runtime provider %q serving SQLite hash does not match its inventory pin", database.ID)
 		}
 		license, readErr := os.ReadFile(filepath.Join(base, database.License))
@@ -121,6 +167,26 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 		database.License = filepath.Join(base, database.License)
 	}
 	return inventory.Databases, nil
+}
+
+func sha256File(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		readErr := fmt.Errorf("read %q: %w", path, err)
+		if closeErr := file.Close(); closeErr != nil {
+			return "", errors.Join(readErr, fmt.Errorf("close %q: %w", path, closeErr))
+		}
+		return "", readErr
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close %q: %w", path, err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func safeInventoryFilename(name string) bool {

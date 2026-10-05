@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Prepare a derived SQLite copy for the read-only OVDB record adapter.
+"""Prepare a derived SQLite file for the read-only OVDB record adapter.
 
-The provider file is checked against its pinned SHA-256 and copied before the
-adapter key column is added. Native columns, primary keys, indexes, views, and
-foreign-key declarations remain in the derived copy.
+The provider file is checked against its pinned SHA-256 before the adapter key
+column is added. Native columns, primary keys, indexes, views, and foreign-key
+declarations remain in the derived file. Build staging files may be consumed to
+avoid a second full-size copy; callers default to preserving their source.
 """
 
 import base64
 import hashlib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -48,11 +50,10 @@ def quote_identifier(name: str) -> str:
 
 
 def manifest_identifier(name: str) -> str:
-    # The driver emits collection/field identifiers as SQL fragments during
-    # strict-schema setup. Quote only names that SQLite
-    # cannot parse as bare identifiers; main.go restores the logical names
-    # after mounting, while the SQLite driver still sees the native table.
-    return name if name.isidentifier() else quote_identifier(name)
+    # Manifests carry logical/native names. The SQLite adapter owns SQL
+    # identifier quoting; storing quoted SQL fragments here makes those quote
+    # characters part of the actual collection or field name.
+    return name
 
 
 def record_id(values: tuple[Any, ...], key_format: str) -> str:
@@ -152,7 +153,15 @@ def table_metadata(connection: sqlite3.Connection, table: str) -> tuple[Any, ...
     return columns, foreign_keys, tuple(sorted(indexes))
 
 
-def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, key_format: str) -> Path:
+def prepare(
+    source: Path,
+    output: Path,
+    database_id: str,
+    expected_sha256: str,
+    key_format: str,
+    *,
+    consume_source: bool = False,
+) -> Path:
     actual_sha256 = sha256_file(source)
     if expected_sha256 and actual_sha256 != expected_sha256:
         raise ValueError(f"{database_id} source SHA-256 differs from its pin: got {actual_sha256}")
@@ -163,7 +172,10 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
 
     output.mkdir(parents=True, exist_ok=True)
     database_path = output / f"{database_id}.sqlite"
-    shutil.copyfile(source, database_path)
+    if consume_source:
+        os.replace(source, database_path)
+    else:
+        shutil.copyfile(source, database_path)
     connection = sqlite3.connect(database_path)
     manifest = [
         f"database: {{id: {database_id}, schema_mode: strict, cache_ttl: 24h}}",
@@ -213,7 +225,7 @@ def prepare(source: Path, output: Path, database_id: str, expected_sha256: str, 
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
             raise ValueError(f"{database_id} derived SQLite file has {len(violations)} foreign-key violations")
-        if actual_sha256 != sha256_file(source):
+        if not consume_source and actual_sha256 != sha256_file(source):
             raise ValueError("provider source changed during preparation")
     finally:
         connection.close()

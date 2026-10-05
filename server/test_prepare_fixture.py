@@ -44,6 +44,32 @@ def make_source(path: Path) -> None:
 
 
 class PrepareFixtureTest(unittest.TestCase):
+    def test_consumes_verified_staging_source_without_a_second_full_sqlite_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "staging.sqlite"
+            make_source(source)
+            source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+            manifest = prepare_fixture.prepare(
+                source,
+                root / "prepared",
+                "demo-sales",
+                source_digest,
+                "natural",
+                consume_source=True,
+            )
+
+            self.assertFalse(source.exists(), "staging copy should be moved into the serving path")
+            self.assertEqual(source_digest, (manifest.parent / "demo-sales.source-sha256").read_text().strip())
+            serving = sqlite3.connect(manifest.parent / "demo-sales.sqlite")
+            try:
+                self.assertEqual(2, serving.execute('SELECT COUNT(*) FROM "Order Details"').fetchone()[0])
+                self.assertEqual(2, serving.execute('SELECT COUNT(id) FROM "Order Details"').fetchone()[0])
+                self.assertEqual("ok", serving.execute("PRAGMA integrity_check").fetchone()[0])
+            finally:
+                serving.close()
+
     def test_preserves_native_metadata_and_adds_ids_for_keyed_and_keyless_tables(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -60,6 +86,8 @@ class PrepareFixtureTest(unittest.TestCase):
             self.assertIn("Order Details", text)
             self.assertIn("Order ID", text)
             self.assertIn("Unit Price", text)
+            self.assertNotIn('\\"Order Details\\"', text)
+            self.assertNotIn('\\"Order ID\\"', text)
             self.assertIn("{type: number}", text)
             self.assertIn('"Payload": {type: any}', text)
             self.assertIn('"discounts":', text)

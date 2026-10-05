@@ -27,8 +27,9 @@ foreign keys, row counts, native columns, primary keys, indexes, and view
 definitions. It preserves composite primary-key order and supports keyless
 tables through SQLite row identity without publishing an invented source key;
 `WITHOUT ROWID` tables use their declared primary key. `MONEY` columns map to
-numeric query fields, BLOB columns remain byte values, and native names with
-spaces are quoted for SQLite while public queries retain their native names.
+numeric query fields, BLOB columns remain byte values, and native names,
+including spaces and punctuation, are preserved in manifests; the SQLite
+adapter quotes them only when generating SQL.
 Chinook keeps its historical comma-separated composite identifiers. The live
 OVDB mount exposes physical tables; provider views remain represented in the
 published schema metadata and exports.
@@ -59,7 +60,14 @@ the configured smoke recordset schemas, runs representative queries, checks its
 declared CORS origin, validates returned record keys, and confirms writes are
 rejected. Entries can name multiple `smokeRecordsets` when one provider needs
 specific physical tables checked, including keyless tables. CI performs the
-same journey using the provider commits pinned in `providers.json`.
+same journey using the provider commits pinned in `providers.json`. An
+`emptyRecordsets` entry is checked against the pinned native schema and queried
+to ensure genuinely empty physical tables remain discoverable without invented
+sample rows. Successful query rows are also fetched back by their serving ID;
+the AdventureWorks smoke set covers composite-key history and its empty audit
+tables. Providers may declare native binary columns in `blobSmokeFields`; the
+generic smoke journey confirms non-empty encoded values without naming a
+database or table in service code.
 
 ## Add a database
 

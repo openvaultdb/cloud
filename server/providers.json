@@ -2,6 +2,129 @@
   "version": 1,
   "databases": [
     {
+      "id": "adventureworks",
+      "repository": "demo-db/adventureworks",
+      "revision": "cd8dcdf2079fe31480ad6d6c024b8c17cb91beea",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "4f6189574f821ea439ac46af7e229995aed713af79739bbcb42ba435e60acc10"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "462d32735cb3fb85868af977741a83cdb3add508809503934ef7a08daa36d682"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "34a6f6ae64b03338537f839b16a5cbcb96aa68470238e0f7198ac98d190919f0"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "16209363a4a214a1cc3df0858d1a7c982b07614a2cea8873080cdd18d3e45c34"
+        },
+        "artifact": {
+          "path": "artifacts/adventureworks.sqlite",
+          "compression": "gzip",
+          "encodedPath": "artifacts/adventureworks.sqlite.gz",
+          "bytes": 35289451,
+          "sha256": "533165298eb696d330be6a2fc648ba56d985be491d511ca581d7ea64736e1a28",
+          "decodedBytes": 125276160,
+          "decodedSha256": "e0f352f0e3a28ff15158130c237a91d58f1b60fffa7f30d2c412b92df4065dfd",
+          "chunks": [
+            {
+              "path": "artifacts/adventureworks.sqlite.gz.part-0001",
+              "bytes": 26214400,
+              "sha256": "3c59d3812fbc29d8a3070da9bef2306b25cff219fa08bb3fd82e5838f92d080a"
+            },
+            {
+              "path": "artifacts/adventureworks.sqlite.gz.part-0002",
+              "bytes": 9075051,
+              "sha256": "80b1a2c58648469aebe5b47b9dfaef3b3c84d14e141b5297e6f5f94953ef28a7"
+            }
+          ]
+        },
+        "license": {
+          "path": "data-source/microsoft-sql-server-samples/LICENSE.txt",
+          "sha256": "201f3705979e932c92cd3c6ddbddf4dc3c71dcc5a82089a1e4018227cfe1cf09"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": false,
+      "smokeRecordsets": [
+        "HumanResources.EmployeeDepartmentHistory",
+        "HumanResources.Employee",
+        "Production.ProductProductPhoto",
+        "Production.ProductPhoto",
+        "Production.TransactionHistory"
+      ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "HumanResources.EmployeeDepartmentHistory", "sourceField": "BusinessEntityID", "targetRecordset": "HumanResources.Employee", "targetField": "BusinessEntityID"}
+      ],
+      "emptyRecordsets": [
+        "dbo.DatabaseLog",
+        "dbo.ErrorLog"
+      ],
+      "corsOrigins": [
+        "https://adventureworks.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev"
+      ],
+      "blobSmokeFields": {
+        "Production.ProductPhoto": [
+          "ThumbNailPhoto",
+          "LargePhoto"
+        ]
+      }
+    },
+    {
+      "id": "employees",
+      "repository": "demo-db/employees",
+      "revision": "2455bb327aa8444ec496d36e2fe6dcacfc58dc0a",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "2c59493941087ac3846a2105b818c995ec2639636590fcc733d7fcc352471499"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "fb895607de3bc09af5f3c6e2062f293d46f464456ae50b7b5e231996adab9c00"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "da4fa1a4b9af3d33a03e2e7f6f97a0ec6630f615cdfa68a1fa069df06b8a1fc9"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "8f0181fb39c5da279368d0a1c8ecbfb1942061f03482bc4ce64b95c9d6434e3c"
+        },
+        "artifact": {
+          "path": "artifacts/employees.sqlite",
+          "sha256": "46b49dd0e141cd8db66d57680a10febfccc15e6f54dc7b8f3c2316b55e11c5f0",
+          "bytes": 876544
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "38371a2d0b398de3d7113d1ae138acc9c476345e0207bb9548f6f5dbf12f748b"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": false,
+      "smokeRecordsets": [
+        "employees",
+        "dept_emp",
+        "salaries",
+        "dept_manager"
+      ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "dept_emp", "sourceField": "emp_no", "targetRecordset": "employees", "targetField": "emp_no"}
+      ],
+      "corsOrigins": [
+        "https://employees.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev"
+      ]
+    },
+    {
       "id": "chinook",
       "repository": "demo-db/chinook",
       "revision": "26e852cca00101f53a84ef8ee1f1ae389067f5cf",
@@ -33,6 +156,13 @@
         }
       },
       "recordKeyFormat": "legacy",
+      "smokeRecordsets": [
+        "Invoice",
+        "Customer"
+      ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "Invoice", "sourceField": "CustomerId", "targetRecordset": "Customer", "targetField": "CustomerId"}
+      ],
       "corsOrigins": [
         "https://chinook.demodb.dev",
         "https://demodb.dev",
@@ -73,6 +203,17 @@
         }
       },
       "recordKeyFormat": "natural",
+      "smokeRecordsets": [
+        "Order Details",
+        "Orders",
+        "Employees"
+      ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "Order Details", "sourceField": "OrderID", "targetRecordset": "Orders", "targetField": "OrderID"}
+      ],
+      "blobSmokeFields": {
+        "Employees": ["Photo"]
+      },
       "corsOrigins": [
         "https://northwind.demodb.dev",
         "https://demodb.dev",
@@ -113,7 +254,11 @@
       "recordKeyFormat": "natural",
       "smokeRecordsets": [
         "discounts",
-        "roysched"
+        "roysched",
+        "titles"
+      ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "roysched", "sourceField": "title_id", "targetRecordset": "titles", "targetField": "title_id"}
       ],
       "corsOrigins": [
         "https://pubs.demodb.dev",
@@ -124,19 +269,19 @@
     {
       "id": "sakila",
       "repository": "demo-db/sakila",
-      "revision": "0cb13fd76b2ce590f68efa99a6fbf7effcf6e4ce",
+      "revision": "6567d30aec1592fe0917934a8bbe74ff70b04b01",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "b408335abaaaaa34f87b27172223bf1a27af985659663a32587f1e211dec5590"
+          "sha256": "bf8d4145d14a36b5de49f4b9e0756e6265f8d2d23b10ab851c7f95b526658778"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "89c9c181ed41746c5a26ec14b489f9b295040a450c13667c134db483bc65cbce"
+          "sha256": "f123ebfb9820a473245b7cac38c07c2121469390f80318d9df06c8be51b57210"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "f200b1f2bd5b4f845f97f37c01fd0d4b9b9eb8acd9a62c6ae16d2c8a6a288305"
+          "sha256": "57095f0f4fd99cafe4094b42f96a62f7b442a1f5e9c06fb6c9bac9b838adad3a"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
@@ -156,9 +301,18 @@
       "requirePublishedQuery": false,
       "smokeRecordsets": [
         "film",
+        "film_actor",
+        "actor",
         "rental",
-        "payment"
+        "payment",
+        "address"
       ],
+      "foreignKeySmoke": [
+        {"sourceRecordset": "film_actor", "sourceField": "actor_id", "targetRecordset": "actor", "targetField": "actor_id"}
+      ],
+      "blobSmokeFields": {
+        "address": ["location"]
+      },
       "corsOrigins": [
         "https://sakila.demodb.dev",
         "https://demodb.dev",

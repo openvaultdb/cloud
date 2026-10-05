@@ -126,6 +126,39 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
         smoke_recordsets = provider.get("smokeRecordsets")
         if smoke_recordsets is not None and (not isinstance(smoke_recordsets, list) or not smoke_recordsets or any(not isinstance(name, str) or not name for name in smoke_recordsets) or len(set(smoke_recordsets)) != len(smoke_recordsets)):
             raise ValueError(f"{database_id} smokeRecordsets must be a non-empty list of unique recordset names")
+        empty_recordsets = provider.get("emptyRecordsets", [])
+        if not isinstance(empty_recordsets, list) or any(not isinstance(name, str) or not name for name in empty_recordsets) or len(set(empty_recordsets)) != len(empty_recordsets):
+            raise ValueError(f"{database_id} emptyRecordsets must be a list of unique recordset names")
+        if set(smoke_recordsets or ()) & set(empty_recordsets):
+            raise ValueError(f"{database_id} recordsets cannot be both queried and expected empty")
+        blob_smoke_fields = provider.get("blobSmokeFields", {})
+        if not isinstance(blob_smoke_fields, dict) or any(
+            not isinstance(recordset, str) or not recordset
+            or not isinstance(columns, list) or not columns
+            or any(not isinstance(column, str) or not column for column in columns)
+            or len(set(columns)) != len(columns)
+            for recordset, columns in blob_smoke_fields.items()
+        ):
+            raise ValueError(f"{database_id} blobSmokeFields must map recordset names to unique column-name lists")
+        if set(blob_smoke_fields) - set(smoke_recordsets or ()):
+            raise ValueError(f"{database_id} BLOB smoke recordsets must also be queried")
+        foreign_key_smoke = provider.get("foreignKeySmoke", [])
+        if not isinstance(foreign_key_smoke, list):
+            raise ValueError(f"{database_id} foreignKeySmoke must be a list")
+        seen_relationships: set[tuple[str, str, str, str]] = set()
+        for relationship in foreign_key_smoke:
+            if not isinstance(relationship, dict) or set(relationship) != {"sourceRecordset", "sourceField", "targetRecordset", "targetField"}:
+                raise ValueError(f"{database_id} foreignKeySmoke entries must name sourceRecordset/sourceField and targetRecordset/targetField")
+            source_recordset, source_field = relationship["sourceRecordset"], relationship["sourceField"]
+            target_recordset, target_field = relationship["targetRecordset"], relationship["targetField"]
+            if any(not isinstance(value, str) or not value.strip() for value in (source_recordset, source_field, target_recordset, target_field)):
+                raise ValueError(f"{database_id} foreignKeySmoke entries must use non-empty native names")
+            if source_recordset not in (smoke_recordsets or ()) or target_recordset not in (smoke_recordsets or ()):
+                raise ValueError(f"{database_id} foreignKeySmoke source and target recordsets must both be queried")
+            identity = (source_recordset, source_field, target_recordset, target_field)
+            if identity in seen_relationships:
+                raise ValueError(f"{database_id} repeats foreignKeySmoke relationship {identity!r}")
+            seen_relationships.add(identity)
         files = provider.get("files")
         if not isinstance(files, dict) or set(files) != {"manifest", "contract", "checksums", "databaseManifest", "artifact", "license"}:
             raise ValueError(f"{database_id} must pin manifest, contract, checksums, databaseManifest, artifact, and license files")
@@ -334,6 +367,47 @@ def validate_provider(
     unknown_smoke_recordsets = set(smoke_recordsets) - set(table_names)
     if unknown_smoke_recordsets:
         raise ValueError(f"{database_id} smoke recordsets are absent from its native table schema: {sorted(unknown_smoke_recordsets)}")
+    empty_smoke_recordsets = [
+        table["name"] for table in physical_tables
+        if table["name"] in smoke_recordsets and table.get("rowCount", 0) == 0
+    ]
+    if empty_smoke_recordsets:
+        raise ValueError(f"{database_id} smoke recordsets have no rows in the pinned schema: {sorted(empty_smoke_recordsets)}")
+    empty_recordsets = provider.get("emptyRecordsets", [])
+    unknown_empty_recordsets = set(empty_recordsets) - set(table_names)
+    if unknown_empty_recordsets:
+        raise ValueError(f"{database_id} expected-empty recordsets are absent from its native table schema: {sorted(unknown_empty_recordsets)}")
+    if set(smoke_recordsets) & set(empty_recordsets):
+        raise ValueError(f"{database_id} recordsets cannot be both queried and expected empty")
+    nonempty_expected_empty = [
+        table["name"] for table in physical_tables
+        if table["name"] in empty_recordsets and table.get("rowCount") != 0
+    ]
+    if nonempty_expected_empty:
+        raise ValueError(f"{database_id} expected-empty recordsets contain rows in the pinned schema: {sorted(nonempty_expected_empty)}")
+    blob_smoke_fields = provider.get("blobSmokeFields", {})
+    for recordset, columns in blob_smoke_fields.items():
+        table = next((item for item in physical_tables if item["name"] == recordset), None)
+        native_columns = {column["name"]: column.get("type", "").upper() for column in table.get("columns", [])} if table else {}
+        for column in columns:
+            if native_columns.get(column) not in {"BLOB", "BINARY", "VARBINARY"}:
+                raise ValueError(f"{database_id} BLOB smoke field {recordset}.{column} is not declared as binary in its native schema")
+
+    native_foreign_keys = {
+        (table.get("name"), foreign_key.get("column"), foreign_key.get("table"), foreign_key.get("referencedColumn"))
+        for table in physical_tables
+        for foreign_key in table.get("foreignKeys", [])
+    }
+    for relationship in provider.get("foreignKeySmoke", []):
+        source_recordset = relationship["sourceRecordset"]
+        source_field = relationship["sourceField"]
+        target_recordset = relationship["targetRecordset"]
+        target_field = relationship["targetField"]
+        if (source_recordset, source_field, target_recordset, target_field) not in native_foreign_keys:
+            raise ValueError(
+                f"{database_id} foreignKeySmoke {source_recordset}.{source_field} -> {target_recordset}.{target_field} "
+                "is not a declared native foreign key"
+            )
 
     source = manifest.get("source", {})
     provenance = database_manifest.get("provenance", {})
@@ -387,6 +461,7 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
             physical_tables = [table for table in tables if table.get("kind", "table") == "table" and isinstance(table.get("name"), str)]
             smoke_recordset = next((table["name"] for table in physical_tables if table.get("rowCount", 0) > 0), physical_tables[0]["name"])
             smoke_recordsets = provider.get("smokeRecordsets", [smoke_recordset])
+            empty_recordsets = provider.get("emptyRecordsets", [])
             if artifact.get("compression") is None:
                 with source_path.open("wb") as source_file:
                     source_file.write(fetched["artifact"])
@@ -396,6 +471,7 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                 database_id,
                 artifact.get("decodedSha256", artifact["sha256"]),
                 provider["recordKeyFormat"],
+                consume_source=True,
             )
         finally:
             source_path.unlink(missing_ok=True)
@@ -414,6 +490,9 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                 "licenseSha256": provider["files"]["license"]["sha256"],
                 "smokeRecordset": smoke_recordset,
                 "smokeRecordsets": smoke_recordsets,
+                "emptyRecordsets": empty_recordsets,
+                "blobSmokeFields": provider.get("blobSmokeFields", {}),
+                "foreignKeySmoke": provider.get("foreignKeySmoke", []),
             }
         )
     runtime_path = output / "inventory.json"

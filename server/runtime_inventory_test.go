@@ -34,6 +34,7 @@ func TestLoadRuntimeInventoryVerifiesFixtureAndLicensePins(t *testing.T) {
 			ID: "sample-db", Manifest: "sample-db.yaml", License: "sample-db-license.md",
 			ProviderRepository: "demo-db/sample", ProviderRevision: strings.Repeat("a", 40), SourceSHA256: artifactHash, ServingSHA256: artifactHash, LicenseSHA256: licenseHash,
 			CORSOrigins: origins, SmokeRecordset: "records",
+			EmptyRecordsets: []string{"empty"},
 		}}}
 		data, err := json.Marshal(inventory)
 		if err != nil {
@@ -64,6 +65,41 @@ func TestLoadRuntimeInventoryVerifiesFixtureAndLicensePins(t *testing.T) {
 	writeInventory(inventoryPath, fixtureSHA, licenseSHA, []string{"http://sample.demodb.dev"})
 	if _, err := loadRuntimeInventory(inventoryPath); err == nil || !strings.Contains(err.Error(), "invalid CORS origin") {
 		t.Fatalf("non-HTTPS CORS origin was accepted: %v", err)
+	}
+}
+
+func TestLoadRuntimeInventoryRejectsDuplicateSmokeGroups(t *testing.T) {
+	directory := t.TempDir()
+	fixture := []byte("fixture")
+	fixtureHash := sha256.Sum256(fixture)
+	fixtureSHA := hex.EncodeToString(fixtureHash[:])
+	license := []byte("license")
+	licenseHash := sha256.Sum256(license)
+	licenseSHA := hex.EncodeToString(licenseHash[:])
+	for name, content := range map[string][]byte{
+		"sample.yaml": []byte("database: {id: sample}\n"), "sample.sqlite": fixture,
+		"sample.source-sha256": []byte(fixtureSHA + "\n"), "license.txt": license,
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	database := runtimeDatabase{
+		ID: "sample", Manifest: "sample.yaml", License: "license.txt", ProviderRepository: "demo-db/sample",
+		ProviderRevision: strings.Repeat("a", 40), SourceSHA256: fixtureSHA, ServingSHA256: fixtureSHA,
+		LicenseSHA256: licenseSHA, CORSOrigins: []string{"https://sample.demodb.dev"},
+		SmokeRecordset: "records", SmokeRecordsets: []string{"records"}, EmptyRecordsets: []string{"records"},
+	}
+	data, err := json.Marshal(runtimeInventory{Version: 1, Databases: []runtimeDatabase{database}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "inventory.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadRuntimeInventory(path); err == nil || !strings.Contains(err.Error(), "repeats recordset") {
+		t.Fatalf("recordset listed as both populated and empty was accepted: %v", err)
 	}
 }
 
