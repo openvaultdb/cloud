@@ -27,7 +27,7 @@ import (
 //
 // A read of a collection by the query endpoint (/v1/databases/{id}/query) is the
 // heaviest request that no gate counts: it applies no default row limit, so the
-// library reads rows until its 8 MiB buffer is full, and the heap holds 8 to 10
+// library reads rows until its 8 MiB buffer is full, and the heap holds 6 to 10
 // times the JSON it counts. The heaviest of the 112 pinned collections held 67.2
 // MiB (limits_test.go gives the runs). It is heavier than a database-route query
 // (64 MiB), so the second request of an instance is a read, not a join. Nothing in

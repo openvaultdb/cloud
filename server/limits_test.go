@@ -50,10 +50,11 @@ const (
 	// by the query endpoint (POST or GET /v1/databases/{id}/query), which applies no
 	// default row limit and stops at the library's 8 MiB buffer. Measured on every
 	// one of the 112 collections of the five providers that can be prepared
-	// locally, in seven runs: four collections whose answer is 6.2 to 8.2 MB
+	// locally, in seven runs: five collections whose answer is 6.2 to 8.2 MB
 	// (Person.PersonPhone, Person.BusinessEntityAddress, Person.Address,
-	// Sales.SalesOrderHeaderSalesReason) held 48 to 67.2 MiB, the heaviest of them
-	// varying with the collector's timing; a collection the buffer refuses
+	// Person.EmailAddress, Sales.SalesOrderHeaderSalesReason) held 48 to 67.2 MiB,
+	// the heaviest of them varying with the collector's timing; a collection the
+	// buffer refuses
 	// (Production.TransactionHistory) held 40 to 44 MiB. The same collections read
 	// with a limit of 1,000 rows, by the query endpoint or by single-collection
 	// DTQL, held 22.4 MiB at most. Sakila, the sixth provider, was not prepared
