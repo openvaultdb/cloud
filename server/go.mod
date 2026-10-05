@@ -4,7 +4,7 @@ go 1.26.1
 
 toolchain go1.27.0
 
-require github.com/openvaultdb/openvaultdb-go v0.11.2
+require github.com/openvaultdb/openvaultdb-go v0.13.0
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -17,11 +17,11 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.29.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dal-go/dalgo v0.89.1 // indirect
+	github.com/dal-go/dalgo v0.89.6 // indirect
 	github.com/dal-go/dalgo2firestore v0.10.3 // indirect
 	github.com/dal-go/dalgo2mysql v0.2.2 // indirect
-	github.com/dal-go/dalgo2postgres v0.2.2 // indirect
-	github.com/dal-go/dalgo2sql v0.26.4 // indirect
+	github.com/dal-go/dalgo2postgres v0.4.1 // indirect
+	github.com/dal-go/dalgo2sql v0.26.6 // indirect
 	github.com/dal-go/dalgo2sqlite v0.2.3 // indirect
 	github.com/dal-go/record v0.1.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -37,9 +37,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.20 // indirect
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
-	github.com/ingitdb/dalgo2ingitdb v0.6.1 // indirect
+	github.com/ingitdb/dalgo2ingitdb v0.6.2 // indirect
 	github.com/ingitdb/dalgo2ingitdb4github v0.2.3 // indirect
-	github.com/ingitdb/ingitdb-go/ingitdb v0.6.0 // indirect
+	github.com/ingitdb/ingitdb-go/ingitdb v0.7.4 // indirect
 	github.com/ingr-io/ingr-go v0.0.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
