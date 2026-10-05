@@ -16,7 +16,7 @@ func imageEntryFromInfo(info os.FileInfo) (imageEntry, error) {
 	if !ok {
 		return imageEntry{}, errors.New("linux file identity is unavailable")
 	}
-	return imageEntry{mode: info.Mode(), uid: stat.Uid, links: stat.Nlink, device: uint64(stat.Dev), inode: stat.Ino, size: info.Size()}, nil
+	return imageEntry{mode: info.Mode(), uid: stat.Uid, links: uint64(stat.Nlink), device: uint64(stat.Dev), inode: stat.Ino, size: info.Size()}, nil
 }
 func imageFileEntry(file *os.File) (imageEntry, error) {
 	info, err := file.Stat()

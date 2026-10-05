@@ -97,7 +97,7 @@ func TestProtectedImageObservedPrivilegeAndMountRefusals(t *testing.T) {
 	if err := checkImageStatus([]byte("CapEff:\t0000000000000400\n")); err != nil {
 		t.Fatal(err)
 	}
-	for _, status := range []string{"Uid: 0 0 0 0", "Uid: 65532 65532 0 65532", "Uid: bad", "CapEff: 2", "CapPrm: 200000", "CapAmb: 80", "CapEff: malformed"} {
+	for _, status := range []string{"Uid: 0 0 0 0", "Uid: 65532 65532 0 65532", "Uid: bad", "CapEff: 2", "CapPrm: 200000", "CapAmb: 80", "CapEff: 40000", "CapEff: 8000000", "CapEff: malformed"} {
 		if err := checkImageStatus([]byte(status)); err == nil {
 			t.Fatalf("unsafe status accepted: %s", status)
 		}

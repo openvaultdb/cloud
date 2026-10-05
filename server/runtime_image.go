@@ -245,7 +245,7 @@ func mountSelectedImage(provider runtimeDatabase, image *protectedImage) (*core.
 func checkImageStatus(data []byte) error {
 	// Privileges that can change ownership, bypass DAC, become root, acquire caps,
 	// modify mounts/kernel state, or inject a privileged process defeat this proof.
-	const bypass = uint64(1<<0 | 1<<1 | 1<<3 | 1<<7 | 1<<8 | 1<<16 | 1<<17 | 1<<19 | 1<<21)
+	const bypass = uint64(1<<0 | 1<<1 | 1<<3 | 1<<7 | 1<<8 | 1<<16 | 1<<17 | 1<<18 | 1<<19 | 1<<21 | 1<<27)
 	for _, line := range strings.Split(string(data), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
