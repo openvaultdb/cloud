@@ -17,9 +17,15 @@ class PrepareProvidersTest(unittest.TestCase):
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
-        self.assertEqual(["chinook", "northwind", "pubs", "sakila"], [provider["id"] for provider in providers])
-        self.assertTrue(providers[2].get("requirePublishedQuery", True))
-        self.assertFalse(providers[3]["requirePublishedQuery"])
+        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [provider["id"] for provider in providers])
+        by_id = {provider["id"]: provider for provider in providers}
+        self.assertFalse(by_id["adventureworks"]["requirePublishedQuery"])
+        self.assertFalse(by_id["employees"]["requirePublishedQuery"])
+        self.assertTrue(by_id["pubs"].get("requirePublishedQuery", True))
+        self.assertFalse(by_id["sakila"]["requirePublishedQuery"])
+        self.assertIn("film_actor", by_id["sakila"]["smokeRecordsets"])
+        self.assertEqual(["dbo.DatabaseLog", "dbo.ErrorLog"], by_id["adventureworks"]["emptyRecordsets"])
+        self.assertEqual({"Production.ProductPhoto": ["ThumbNailPhoto", "LargePhoto"]}, by_id["adventureworks"]["blobSmokeFields"])
         if not all((providers_root / provider["repository"]).is_dir() for provider in providers):
             self.skipTest("local provider clones are absent; CI exercises immutable remote fetches during fixture preparation")
         with tempfile.TemporaryDirectory() as temporary:
@@ -27,7 +33,7 @@ class PrepareProvidersTest(unittest.TestCase):
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)
             runtime = json.loads(runtime_path.read_text())
             self.assertEqual(1, runtime["version"])
-            self.assertEqual(["chinook", "northwind", "pubs", "sakila"], [database["id"] for database in runtime["databases"]])
+            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [database["id"] for database in runtime["databases"]])
             for database in runtime["databases"]:
                 self.assertTrue((output / database["manifest"]).is_file())
                 self.assertTrue((output / database["license"]).is_file())
@@ -56,6 +62,12 @@ class PrepareProvidersTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "HTTPS origins"):
                 prepare_providers.load_inventory(path)
 
+            document = json.loads(INVENTORY.read_text())
+            document["databases"][0]["emptyRecordsets"] = [document["databases"][0]["smokeRecordsets"][0]]
+            path.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ValueError, "both queried and expected empty"):
+                prepare_providers.load_inventory(path)
+
     def test_inventory_accepts_verified_chunked_sqlite_descriptors_and_bounds_them(self) -> None:
         document = json.loads(INVENTORY.read_text())
         artifact = document["databases"][0]["files"]["artifact"]
@@ -70,7 +82,7 @@ class PrepareProvidersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "providers.json"
             path.write_text(json.dumps(document))
-            self.assertEqual("chinook", prepare_providers.load_inventory(path)[0]["id"])
+            self.assertEqual("adventureworks", prepare_providers.load_inventory(path)[0]["id"])
 
             artifact["decodedBytes"] = prepare_providers.MAX_DECODED_ARTIFACT_BYTES + 1
             path.write_text(json.dumps(document))

@@ -2,8 +2,10 @@
 """Smoke every pinned database after Cloud Run deployment."""
 
 import argparse
+import base64
 import json
 from pathlib import Path
+import sqlite3
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -29,6 +31,10 @@ def require_status(origin: str, path: str, expected: int = 200, **kwargs):
     return headers, body
 
 
+def quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", required=True, help="deployed Cloud Run HTTPS origin")
@@ -47,6 +53,7 @@ def main() -> None:
             raise RuntimeError(f"{database['id']} human profile omitted its public cloud URL")
         require_status(args.origin, f"/v1/databases/{database_id}")
         recordsets = database.get("smokeRecordsets") or [database["smokeRecordset"]]
+        queried_rows = {}
         for collection in recordsets:
             collection_path = quote(collection, safe="")
             require_status(args.origin, f"/ovdb/dbs/{database_id}/collections/{collection_path}")
@@ -67,9 +74,75 @@ def main() -> None:
             if not isinstance(records, list) or not records:
                 raise RuntimeError(f"{database['id']} query returned no records from {collection!r}")
             first_record = records[0]
+            if not isinstance(first_record, dict) or not isinstance(first_record.get("data"), dict):
+                raise RuntimeError(f"{database['id']} query returned malformed record data for {collection!r}")
             record_key = first_record.get("key") if isinstance(first_record, dict) else None
             if not isinstance(record_key, str) or not record_key.strip() or "<nil>" in record_key:
                 raise RuntimeError(f"{database['id']} query returned an invalid record key for {collection!r}: {record_key!r}")
+            record_id = first_record.get("data", {}).get("id") if isinstance(first_record, dict) else None
+            if not isinstance(record_id, str) or not record_id:
+                raise RuntimeError(f"{database['id']} query returned no serving identity for {collection!r}")
+            queried_rows[collection] = first_record["data"]
+            record_status, _, record_bytes = request(
+                args.origin,
+                f"/v1/databases/{database_id}/records/{collection_path}/{quote(record_id, safe='')}",
+            )
+            if record_status != 200:
+                raise RuntimeError(f"{database['id']} record lookup for {collection!r}/{record_id!r} returned {record_status}: {record_bytes[:400]!r}")
+            fetched_record = json.loads(record_bytes)
+            if fetched_record.get("key") != record_key or fetched_record.get("data") != first_record["data"]:
+                raise RuntimeError(f"{database['id']} record lookup differs from DTQL result for {collection!r}/{record_id!r}")
+            for field in database.get("blobSmokeFields", {}).get(collection, []):
+                blob_value = first_record["data"].get(field)
+                if not isinstance(blob_value, str) or not blob_value:
+                    raise RuntimeError(f"{database['id']} query returned no encoded binary value for {collection}.{field}")
+                try:
+                    decoded_blob = base64.b64decode(blob_value, validate=True)
+                except (ValueError, base64.binascii.Error) as error:
+                    raise RuntimeError(f"{database['id']} query returned invalid base64 for {collection}.{field}") from error
+                fixture_path = args.inventory.parent / f"{database['id']}.sqlite"
+                with sqlite3.connect(f"file:{fixture_path}?mode=ro", uri=True) as fixture:
+                    expected_blob = fixture.execute(
+                        f"SELECT {quote_identifier(field)} FROM {quote_identifier(collection)} WHERE {quote_identifier('id')} = ?",
+                        (record_id,),
+                    ).fetchone()
+                if expected_blob is None or expected_blob[0] is None or decoded_blob != expected_blob[0]:
+                    raise RuntimeError(f"{database['id']} BLOB payload differs from the pinned serving fixture for {collection}.{field}")
+
+        for relationship in database.get("foreignKeySmoke", []):
+            source = queried_rows.get(relationship["sourceRecordset"])
+            if not isinstance(source, dict) or relationship["sourceField"] not in source or source[relationship["sourceField"]] is None:
+                raise RuntimeError(f"{database['id']} foreign-key source row omits {relationship['sourceRecordset']}.{relationship['sourceField']}")
+            target = relationship["targetRecordset"]
+            target_field = relationship["targetField"]
+            query = (
+                f"from: {{name: '{target.replace(chr(39), chr(39) * 2)}'}}\n"
+                f"where: {{op: '==', left: {{field: '{target_field.replace(chr(39), chr(39) * 2)}'}}, right: {{param: 'foreignKey'}}}}\n"
+                "limit: 1\n"
+            )
+            query_path = f"/v1/databases/{database_id}/dtql?{urlencode({'q': query, 'parameters': json.dumps({'foreignKey': source[relationship['sourceField']]}, separators=(',', ':'))})}"
+            _, target_bytes = require_status(args.origin, query_path)
+            target_result = json.loads(target_bytes)
+            target_records = target_result.get("records")
+            if not isinstance(target_records, list) or not target_records:
+                raise RuntimeError(f"{database['id']} foreign-key target query returned no {target!r} row")
+            target_data = target_records[0].get("data")
+            if not isinstance(target_data, dict) or target_data.get(target_field) != source[relationship["sourceField"]]:
+                raise RuntimeError(f"{database['id']} foreign-key target {target}.{target_field} does not match {relationship['sourceRecordset']}.{relationship['sourceField']}")
+
+        empty_recordsets = database.get("emptyRecordsets", [])
+        for collection in empty_recordsets:
+            collection_path = quote(collection, safe="")
+            require_status(args.origin, f"/ovdb/dbs/{database_id}/collections/{collection_path}")
+            query_name = collection.replace("'", "''")
+            query = f"from: {{name: '{query_name}'}}\nlimit: 1\n"
+            result = json.loads(require_status(
+                args.origin,
+                f"/v1/databases/{database_id}/dtql?{urlencode({'q': query})}",
+                headers={"Origin": cors_origin},
+            )[1])
+            if result.get("records") != []:
+                raise RuntimeError(f"{database['id']} expected empty recordset {collection!r} returned rows")
 
         write_collection_path = quote(recordsets[0], safe="")
         status, _, body = request(
@@ -81,7 +154,7 @@ def main() -> None:
         )
         if status != 403:
             raise RuntimeError(f"{database['id']} write was not rejected as read-only: {status} {body[:400]!r}")
-        print(f"verified {database['id']}: profile, {len(recordsets)} collections and queries, CORS, and read-only")
+        print(f"verified {database['id']}: {len(recordsets)} populated queries, {len(empty_recordsets)} empty tables, record lookup, CORS, and read-only")
 
 
 if __name__ == "__main__":
