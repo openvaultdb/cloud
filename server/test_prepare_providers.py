@@ -27,7 +27,9 @@ class PrepareProvidersTest(unittest.TestCase):
         self.assertEqual(["dbo.DatabaseLog", "dbo.ErrorLog"], by_id["adventureworks"]["emptyRecordsets"])
         self.assertEqual({"Production.ProductPhoto": ["ThumbNailPhoto", "LargePhoto"]}, by_id["adventureworks"]["blobSmokeFields"])
         if not all((providers_root / provider["repository"]).is_dir() for provider in providers):
-            self.skipTest("local provider clones are absent; CI exercises immutable remote fetches during fixture preparation")
+            missing = [str(providers_root / provider["repository"]) for provider in providers if not (providers_root / provider["repository"]).is_dir()]
+            present = len(providers) - len(missing)
+            self.skipTest(f"{present}/{len(providers)} configured provider clone directories exist; missing: {', '.join(missing)}; CI exercises immutable remote fetches during fixture preparation")
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)

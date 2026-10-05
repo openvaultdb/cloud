@@ -72,15 +72,28 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 	}
 	databases := make(map[string]*core.Database, len(providers))
 	corsOrigins := make(map[string]struct{})
+	profiles := map[string]server.ReadProfile{}
 	for _, provider := range providers {
 		id, manifest := provider.ID, provider.Manifest
+		if provider.ReadProfile != "" || provider.ServingAdapter != "" || provider.PublisherManifest != nil || provider.PublicDescriptor != nil {
+			if err := validateRuntimeMode(provider, 2); err != nil {
+				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+			}
+		}
 		if manifest == "" {
 			return nil, nil, errors.Join(fmt.Errorf("manifest path for database %q is empty", id), closeMountedDatabases(databases))
 		}
 		if _, exists := databases[id]; exists {
 			return nil, nil, errors.Join(fmt.Errorf("database ID %q is configured more than once", id), closeMountedDatabases(databases))
 		}
-		database, err := mount.File(manifest)
+		var database *core.Database
+		var err error
+		if provider.ReadProfile != "" {
+			database, err = mountSelectedSnapshot(provider)
+			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
+		} else {
+			database, err = mount.File(manifest)
+		}
 		if err != nil {
 			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 		}
@@ -106,10 +119,15 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 	sort.Strings(origins)
 	options := append(cloudServerOptions(),
 		server.WithReadOnly(true),
+		server.WithDatabaseReadProfiles(profiles),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
 		server.WithCORS(server.ParseCORSOrigins(origins)),
 	)
-	handler := server.New("demodb-cloud", databases, options...).Handler()
+	checked, err := server.NewChecked("demodb-cloud", databases, options...)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+	}
+	handler := checked.Handler()
 	return handler, func() error { return closeMountedDatabases(databases) }, nil
 }
 
