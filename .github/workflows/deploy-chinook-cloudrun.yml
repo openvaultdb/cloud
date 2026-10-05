@@ -53,14 +53,21 @@ jobs:
           import json
           from pathlib import Path
 
+          def sha256_file(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as source:
+                  while chunk := source.read(1024 * 1024):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
           fixture = Path("fixture/output")
           inventory = json.loads((fixture / "inventory.json").read_text())
           if inventory.get("version") != 1 or not inventory.get("databases"):
               raise SystemExit("missing generated provider inventory")
           for database in inventory["databases"]:
               source_hash = (fixture / f"{database['id']}.source-sha256").read_text().strip()
-              serving_hash = hashlib.sha256((fixture / f"{database['id']}.sqlite").read_bytes()).hexdigest()
-              license_hash = hashlib.sha256((fixture / database["license"]).read_bytes()).hexdigest()
+              serving_hash = sha256_file(fixture / f"{database['id']}.sqlite")
+              license_hash = sha256_file(fixture / database["license"])
               if source_hash != database["sourceSha256"] or serving_hash != database["servingSha256"] or license_hash != database["licenseSha256"]:
                   raise SystemExit(f"provider receipt mismatch: {database['id']}")
           PY
