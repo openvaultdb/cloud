@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -173,11 +174,17 @@ func sha256File(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
+		readErr := fmt.Errorf("read %q: %w", path, err)
+		if closeErr := file.Close(); closeErr != nil {
+			return "", errors.Join(readErr, fmt.Errorf("close %q: %w", path, closeErr))
+		}
+		return "", readErr
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close %q: %w", path, err)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
