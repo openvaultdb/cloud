@@ -4,23 +4,23 @@
     {
       "id": "adventureworks",
       "repository": "demo-db/adventureworks",
-      "revision": "cd8dcdf2079fe31480ad6d6c024b8c17cb91beea",
+      "revision": "31bdb4eceff01367ce812b2844530ed17a7d35ae",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "4f6189574f821ea439ac46af7e229995aed713af79739bbcb42ba435e60acc10"
+          "sha256": "4e7dc2c5a5542d62bbe89331250ed59731f15a3dff5ce9913640bc7482a1a773"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "462d32735cb3fb85868af977741a83cdb3add508809503934ef7a08daa36d682"
+          "sha256": "10a916207d9d9717473a6d56280fba7da0812b6a2629a9c3c5acd50a822cf7d7"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "34a6f6ae64b03338537f839b16a5cbcb96aa68470238e0f7198ac98d190919f0"
+          "sha256": "1fb1cd951c19b1390ef21ecf38c808bbcc36219c73c3ce63d231b3933c2dfa29"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
-          "sha256": "16209363a4a214a1cc3df0858d1a7c982b07614a2cea8873080cdd18d3e45c34"
+          "sha256": "7a2e45340d00c335c0e4afaf30bec689c2bf92ed236a881ed9a2846b0c68dd44"
         },
         "artifact": {
           "path": "artifacts/adventureworks.sqlite",
@@ -49,7 +49,7 @@
         }
       },
       "recordKeyFormat": "natural",
-      "requirePublishedQuery": false,
+      "requirePublishedQuery": true,
       "smokeRecordsets": [
         "HumanResources.EmployeeDepartmentHistory",
         "HumanResources.Employee",
@@ -79,23 +79,23 @@
     {
       "id": "employees",
       "repository": "demo-db/employees",
-      "revision": "2455bb327aa8444ec496d36e2fe6dcacfc58dc0a",
+      "revision": "2069e26e8fdb60bdb16507f75569a579cf3da7cf",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "2c59493941087ac3846a2105b818c995ec2639636590fcc733d7fcc352471499"
+          "sha256": "010d461cd1f88dbec5eee7c447d874550c9ae6f1934cd3baf8e2999100c93700"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "fb895607de3bc09af5f3c6e2062f293d46f464456ae50b7b5e231996adab9c00"
+          "sha256": "83bc1f52480c1917451e726261fda83e4bdd5ea44ef81b90462f33a8a6234443"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "da4fa1a4b9af3d33a03e2e7f6f97a0ec6630f615cdfa68a1fa069df06b8a1fc9"
+          "sha256": "28275342099e169f40215dcfa951386e23fcb4a86dc9cf7fb49ec5b377252352"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
-          "sha256": "8f0181fb39c5da279368d0a1c8ecbfb1942061f03482bc4ce64b95c9d6434e3c"
+          "sha256": "0de59594be9eca57ad91918125f29240bec6fafa956b279214efa1a9df495d7c"
         },
         "artifact": {
           "path": "artifacts/employees.sqlite",
@@ -108,7 +108,7 @@
         }
       },
       "recordKeyFormat": "natural",
-      "requirePublishedQuery": false,
+      "requirePublishedQuery": true,
       "smokeRecordsets": [
         "employees",
         "dept_emp",
@@ -269,23 +269,23 @@
     {
       "id": "sakila",
       "repository": "demo-db/sakila",
-      "revision": "6567d30aec1592fe0917934a8bbe74ff70b04b01",
+      "revision": "cb9a81a8cbedcd8831737f281f888d5d584fae85",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "bf8d4145d14a36b5de49f4b9e0756e6265f8d2d23b10ab851c7f95b526658778"
+          "sha256": "bc40a385f81f7db203a23e2befdd08a1b1899c0e2f45a034fe3a6cf0eb6a3356"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "f123ebfb9820a473245b7cac38c07c2121469390f80318d9df06c8be51b57210"
+          "sha256": "54b74e47ad29e4c1d68866e89add885ee833728f04c4d68c46c2486346882655"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "57095f0f4fd99cafe4094b42f96a62f7b442a1f5e9c06fb6c9bac9b838adad3a"
+          "sha256": "bf8deefbea0a99f98446c81d6dc9c6d843b01c7ead6071f6c17e8c8e2a3ac46b"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
-          "sha256": "d19c4c448e7a7a61a9a9bdaf051b69da44bcc619707b7491304a6c8fce8b9b6b"
+          "sha256": "a156ef4c3acf85a7cab92ba4ea1dbf38021da7aa481e5b892e29f4f573d5a411"
         },
         "artifact": {
           "path": "artifacts/sakila.sqlite",
@@ -298,7 +298,7 @@
         }
       },
       "recordKeyFormat": "natural",
-      "requirePublishedQuery": false,
+      "requirePublishedQuery": true,
       "smokeRecordsets": [
         "film",
         "film_actor",

@@ -19,10 +19,10 @@ class PrepareProvidersTest(unittest.TestCase):
         providers = prepare_providers.load_inventory(INVENTORY)
         self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [provider["id"] for provider in providers])
         by_id = {provider["id"]: provider for provider in providers}
-        self.assertFalse(by_id["adventureworks"]["requirePublishedQuery"])
-        self.assertFalse(by_id["employees"]["requirePublishedQuery"])
+        self.assertTrue(by_id["adventureworks"]["requirePublishedQuery"])
+        self.assertTrue(by_id["employees"]["requirePublishedQuery"])
         self.assertTrue(by_id["pubs"].get("requirePublishedQuery", True))
-        self.assertFalse(by_id["sakila"]["requirePublishedQuery"])
+        self.assertTrue(by_id["sakila"]["requirePublishedQuery"])
         self.assertIn("film_actor", by_id["sakila"]["smokeRecordsets"])
         self.assertEqual(["dbo.DatabaseLog", "dbo.ErrorLog"], by_id["adventureworks"]["emptyRecordsets"])
         self.assertEqual({"Production.ProductPhoto": ["ThumbNailPhoto", "LargePhoto"]}, by_id["adventureworks"]["blobSmokeFields"])
