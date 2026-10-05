@@ -35,6 +35,21 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+DECIMAL_TEXT_PATTERN = re.compile(r"^\s*DECIMAL_TEXT\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*$", re.IGNORECASE)
+
+
+def field_schema(sql_type: str) -> dict[str, Any]:
+    decimal = DECIMAL_TEXT_PATTERN.fullmatch(sql_type)
+    if decimal:
+        precision, scale = map(int, decimal.groups())
+        if not 1 <= precision <= 1000 or not 0 <= scale <= precision:
+            raise ValueError(f"invalid DECIMAL_TEXT precision and scale: {sql_type!r}")
+        return {"type": "decimal", "decimal": {"precision": precision, "scale": scale, "storage": "text"}}
+    if sql_type.strip().upper().startswith("DECIMAL_TEXT"):
+        raise ValueError(f"invalid DECIMAL_TEXT declaration: {sql_type!r}")
+    return {"type": field_type(sql_type)}
+
+
 def field_type(sql_type: str) -> str:
     kind = sql_type.upper()
     if "INT" in kind:
@@ -267,7 +282,9 @@ def prepare(
 
             manifest.extend((f"    {json.dumps(manifest_identifier(table))}:", "      fields:"))
             for _, name, sql_type, _, _, _ in columns:
-                manifest.append(f"        {json.dumps(manifest_identifier(name))}: {{type: {field_type(sql_type)}}}")
+                schema = field_schema(sql_type)
+                value = json.dumps(schema, separators=(",", ":")) if schema["type"] == "decimal" else f"{{type: {schema['type']}}}"
+                manifest.append(f"        {json.dumps(manifest_identifier(name))}: {value}")
             manifest.append(f'        {json.dumps(generated_objects[table][0])}: {{type: string}}')
 
         for table in tables:

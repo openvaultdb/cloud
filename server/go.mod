@@ -4,7 +4,7 @@ go 1.26.1
 
 toolchain go1.27.0
 
-require github.com/openvaultdb/openvaultdb-go v0.13.0
+require github.com/openvaultdb/openvaultdb-go v0.14.2
 
 require (
 	cloud.google.com/go v0.123.0 // indirect
@@ -17,11 +17,11 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.29.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dal-go/dalgo v0.89.6 // indirect
+	github.com/dal-go/dalgo v0.90.2 // indirect
 	github.com/dal-go/dalgo2firestore v0.10.3 // indirect
 	github.com/dal-go/dalgo2mysql v0.2.2 // indirect
-	github.com/dal-go/dalgo2postgres v0.4.1 // indirect
-	github.com/dal-go/dalgo2sql v0.26.6 // indirect
+	github.com/dal-go/dalgo2postgres v0.6.0 // indirect
+	github.com/dal-go/dalgo2sql v0.27.0 // indirect
 	github.com/dal-go/dalgo2sqlite v0.2.3 // indirect
 	github.com/dal-go/record v0.1.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

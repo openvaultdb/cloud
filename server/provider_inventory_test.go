@@ -41,11 +41,61 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 			if profile.Code != http.StatusOK {
 				t.Fatalf("database profile returned %d: %s", profile.Code, profile.Body.String())
 			}
+			var profileData map[string]any
+			if err := json.Unmarshal(profile.Body.Bytes(), &profileData); err != nil {
+				t.Fatal(err)
+			}
+			decimalColumns := make(map[string]map[string]struct{})
+			if schemas, ok := profileData["schemas"].(map[string]any); ok {
+				if collections, ok := schemas["collections"].(map[string]any); ok {
+					for collectionName, rawCollection := range collections {
+						collection, _ := rawCollection.(map[string]any)
+						fields, _ := collection["fields"].(map[string]any)
+						for fieldName, rawField := range fields {
+							field, _ := rawField.(map[string]any)
+							if field["type"] != "decimal" {
+								continue
+							}
+							decimal, _ := field["decimal"].(map[string]any)
+							precision, precisionOK := decimal["precision"].(float64)
+							scale, scaleOK := decimal["scale"].(float64)
+							if !precisionOK || !scaleOK || precision < 1 || scale < 0 || scale > precision || decimal["storage"] != "text" {
+								t.Fatalf("invalid exact decimal metadata for %s.%s: %#v", collectionName, fieldName, field)
+							}
+							if decimalColumns[collectionName] == nil {
+								decimalColumns[collectionName] = make(map[string]struct{})
+							}
+							decimalColumns[collectionName][fieldName] = struct{}{}
+						}
+					}
+				}
+			}
+			if provider.ID == "adventureworks" && len(decimalColumns) == 0 {
+				t.Fatal("AdventureWorks profile did not publish its actual exact-decimal field descriptors")
+			}
+			if provider.ID == "adventureworks" {
+				if got := countDecimalColumns(decimalColumns); got != 48 {
+					t.Fatalf("AdventureWorks exact-decimal descriptor count = %d, want 48", got)
+				}
+				for _, expected := range []struct {
+					collection, field string
+					precision, scale  float64
+				}{
+					{"Purchasing.PurchaseOrderDetail", "UnitPrice", 19, 4},
+					{"Sales.SalesOrderDetail", "LineTotal", 38, 6},
+					{"Purchasing.PurchaseOrderDetail", "StockedQty", 38, 2},
+				} {
+					if !hasDecimalMetadata(profileData, expected.collection, expected.field, expected.precision, expected.scale) {
+						t.Fatalf("AdventureWorks metadata for %s.%s does not match (%g,%g)", expected.collection, expected.field, expected.precision, expected.scale)
+					}
+				}
+			}
 
 			recordsets := provider.SmokeRecordsets
 			if len(recordsets) == 0 {
 				recordsets = []string{provider.SmokeRecordset}
 			}
+			verifiedDecimalString := false
 			for _, recordset := range recordsets {
 				collectionPath := "/ovdb/dbs/" + url.PathEscape(provider.ID) + "/collections/" + url.PathEscape(recordset)
 				collection := httptest.NewRecorder()
@@ -72,6 +122,15 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 					t.Fatalf("query returned no readable rows from %q: records=%d err=%v body=%s", recordset, len(result.Records), err, response.Body.String())
 				}
 				queriedRows[recordset] = result.Records[0].Data
+				for field := range decimalColumns[recordset] {
+					value := result.Records[0].Data[field]
+					if value != nil {
+						if _, ok := value.(string); !ok {
+							t.Fatalf("exact decimal %s.%s crossed the query API as %T: %#v", recordset, field, value, value)
+						}
+						verifiedDecimalString = true
+					}
+				}
 				if result.Records[0].Key == "" || strings.Contains(result.Records[0].Key, "<nil>") {
 					t.Fatalf("recordset %q returned an invalid stable record key %q", recordset, result.Records[0].Key)
 				}
@@ -107,6 +166,9 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 				if got := response.Header().Get("Access-Control-Allow-Origin"); got != provider.CORSOrigins[0] {
 					t.Fatalf("provider CORS origin %q, want %q", got, provider.CORSOrigins[0])
 				}
+			}
+			if provider.ID == "adventureworks" && !verifiedDecimalString {
+				t.Fatal("AdventureWorks smoke recordsets did not prove a non-null exact decimal remains a JSON string")
 			}
 			for _, relationship := range provider.ForeignKeySmoke {
 				sourceRow := queriedRows[relationship.SourceRecordset]
@@ -181,6 +243,24 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 			t.Errorf("read-only mount/query mutated %s serving fixture: got SHA-256 %s, inventory pins %s", provider.ID, got, provider.ServingSHA256)
 		}
 	}
+}
+
+func countDecimalColumns(collections map[string]map[string]struct{}) int {
+	total := 0
+	for _, fields := range collections {
+		total += len(fields)
+	}
+	return total
+}
+
+func hasDecimalMetadata(profile map[string]any, collectionName, fieldName string, precision, scale float64) bool {
+	schemas, _ := profile["schemas"].(map[string]any)
+	collections, _ := schemas["collections"].(map[string]any)
+	collection, _ := collections[collectionName].(map[string]any)
+	fields, _ := collection["fields"].(map[string]any)
+	field, _ := fields[fieldName].(map[string]any)
+	decimal, _ := field["decimal"].(map[string]any)
+	return field["type"] == "decimal" && decimal["precision"] == precision && decimal["scale"] == scale && decimal["storage"] == "text"
 }
 
 func recordDataMatches(queryData, fetchedData map[string]any) bool {

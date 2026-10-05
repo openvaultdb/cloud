@@ -22,6 +22,7 @@ def make_source(path: Path) -> None:
             "Order ID" INTEGER NOT NULL,
             "Line Number" INTEGER NOT NULL,
             "Unit Price" MONEY NOT NULL,
+            "Exact Price" DECIMAL_TEXT(30,2) NOT NULL,
             "Payload" BLOB,
             PRIMARY KEY ("Order ID", "Line Number"),
             FOREIGN KEY ("Order ID") REFERENCES Orders("Order ID")
@@ -34,7 +35,7 @@ def make_source(path: Path) -> None:
         CREATE TABLE empty_demo (code TEXT PRIMARY KEY);
         CREATE TABLE shadowed_rowid (rowid TEXT, value TEXT);
         INSERT INTO Orders VALUES (1, NULL), (2, 1);
-        INSERT INTO "Order Details" VALUES (1, 1, 3.25, X'00FF10'), (2, 1, 7.5, NULL);
+        INSERT INTO "Order Details" VALUES (1, 1, 3.25, '9007199254740993.12', X'00FF10'), (2, 1, 7.5, '0.50', NULL);
         INSERT INTO discounts VALUES ('customer', '6380');
         INSERT INTO shadowed_rowid VALUES ('duplicate', 'first'), ('duplicate', 'second');
         CREATE VIEW "Order Detail View" AS SELECT "Order ID", "Unit Price" FROM "Order Details";
@@ -89,7 +90,8 @@ class PrepareFixtureTest(unittest.TestCase):
             self.assertIn("Unit Price", text)
             self.assertNotIn('\\"Order Details\\"', text)
             self.assertNotIn('\\"Order ID\\"', text)
-            self.assertIn("{type: number}", text)
+            self.assertIn('"Unit Price": {type: number}', text)
+            self.assertIn('"Exact Price": {"type":"decimal","decimal":{"precision":30,"scale":2,"storage":"text"}}', text)
             self.assertIn('"Payload": {type: any}', text)
             self.assertIn('"discounts":', text)
             self.assertIn('"empty_demo":', text)
@@ -156,6 +158,10 @@ class PrepareFixtureTest(unittest.TestCase):
             finally:
                 serving.close()
 
+    def test_decimal_text_requires_a_valid_declared_precision_and_scale(self) -> None:
+        for declared in ("DECIMAL_TEXT", "DECIMAL_TEXT(0,0)", "DECIMAL_TEXT(8,9)"):
+            with self.subTest(declared=declared), self.assertRaisesRegex(ValueError, "DECIMAL_TEXT"):
+                prepare_fixture.field_schema(declared)
     def test_separate_identity_preserves_native_names_values_and_schema_objects(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
