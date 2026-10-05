@@ -28,8 +28,8 @@ import (
 // The library bounds a join to 10,000 rows and 16 MiB and a grouping to 100,000
 // groups and 64 MiB, but it counts the JSON size of what it holds. The heap holds
 // 1.2 to 4.1 times that, so the sums above use measured memory, not the counted
-// bytes. A grouping that stays under its 64 MiB bound held 142 MiB when it could
-// read 100,000 rows; the row budget below keeps it at 79 MiB or less.
+// bytes. A grouping that could read 100,000 rows held 147 MiB; the row budget below
+// keeps it at 79.5 MiB or less.
 //
 // Chosen against the library defaults (2 in-memory slots, 4 database slots, a
 // 1 GiB spool, a platform concurrency of 80), which add up to far more than the
@@ -41,9 +41,11 @@ import (
 //     of heap. A request that finds the slot taken waits one second and is then
 //     refused with 503 query_capacity.
 //   - MaxSourceRows 40,000: a document that reads more rows than that in memory is
-//     refused with 422 query_budget_exceeded (source_rows). The largest table that
-//     still answers has 31,465 rows. Documents of one database run in the database
-//     and do not read rows into memory.
+//     refused with 422 query_budget_exceeded (source_rows). Three pinned tables of
+//     67,131 to 89,253 rows (Production.WorkOrder, Production.WorkOrderRouting,
+//     Production.TransactionHistoryArchive) can no longer be read in memory. A
+//     document of one database without a subquery or a null test runs in the
+//     database and reads no rows into memory.
 //   - MaxSourceBytes, Timeout and QueueWait are the library defaults, written out so
 //     that the discovery document and this comment state what is enforced.
 //   - JoinEngines sqlite: the only engine this service mounts.
