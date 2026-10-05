@@ -23,8 +23,10 @@ import (
 const mebibyte = 1 << 20
 
 // The figures below are the measurements the arithmetic in limits.go rests on.
-// They were taken in process (no listener) against openvaultdb-go v0.13.0 and
-// the providers pinned in providers.json, as the growth in resident Go memory
+// The original at-rest, database-route, and generic in-memory figures were taken
+// with openvaultdb-go v0.13.0. Collection reads and exact Money workloads were
+// remeasured in process with v0.14.2 and the providers pinned in providers.json,
+// as the growth in resident Go memory
 // (runtime.MemStats Sys minus HeapReleased, sampled every millisecond after a
 // forced collection) while one request ran, including the garbage the collector
 // had not yet reclaimed. TestCloudMeasureSingleCollectionReads (in
@@ -34,13 +36,13 @@ const mebibyte = 1 << 20
 // moves.
 const (
 	// The server with every provider mounted and no request running: 14 MiB of
-	// Go-managed memory, plus the 52.4 MiB Linux binary taken as fully resident,
-	// plus 13 MiB for stacks, socket buffers and runtime metadata.
+	// Go-managed memory, plus the current 52.8 MiB Linux binary (55,397,616 bytes)
+	// assumed resident, plus 13 MiB for stacks, socket buffers and runtime metadata.
 	measuredAtRestBytes = 80 * mebibyte
 	// The largest in-memory request: a cross-database grouping that stops at the
 	// library's 64 MiB aggregation bound held 79.5 MiB; one that stops at the
 	// 40,000-row source budget held 74.4 MiB; a join that stops at the 10,000-row
-	// join bound held 34 MiB. The exact Money grouping by SalesOrderID held 78.5 MiB.
+	// join bound held 34 MiB. The v0.14.2 Money grouping by SalesOrderID held 77.6 MiB.
 	// Rounded up to cover a join plus a grouping in one document.
 	measuredInMemoryBytes = 90 * mebibyte
 	// The largest database-route request: a join of two photo collections that
@@ -49,13 +51,13 @@ const (
 	// The largest request that no gate counts: the read of one whole collection
 	// by the query endpoint (POST or GET /v1/databases/{id}/query), which applies no
 	// default row limit and stops at the library's 8 MiB buffer. Measured on every
-	// one of all 128 collections in the six pinned fixtures across two runs: the
-	// heaviest (Sales.SalesOrderHeaderSalesReason) peaked at 69.0 MiB; other large
-	// collections included Person.BusinessEntityAddress (62.7 MiB),
-	// Person.EmailAddress (58.2 MiB), Person.Address (58.0 MiB), and
-	// Person.PersonPhone (56.1 MiB). Production.TransactionHistory was refused
-	// at the existing 8 MiB response bound. The 72 MiB allowance still covers
-	// this run; collector timing varies, so repeat it with the opt-in measurement.
+	// one of all 128 collections in the six pinned fixtures with v0.14.2: the
+	// heaviest (Sales.SalesOrderHeaderSalesReason) held 68.9 MiB; other large
+	// collections included Person.BusinessEntityAddress (68.0 MiB),
+	// Person.PersonPhone (65.0 MiB), Person.Address (63.5 MiB), and
+	// Person.EmailAddress (60.9 MiB). Three large collections were refused at
+	// the existing query budgets. The 72 MiB allowance still covers this run;
+	// collector timing varies, so repeat it with the opt-in measurement.
 	measuredUngatedBytes = 72 * mebibyte
 	// The in-memory measurements were taken with this source row budget; a larger
 	// budget lets a grouping hold more than they show.

@@ -15,15 +15,15 @@ import (
 // The worst case of one instance is the requests it can run at once, taken from the
 // heaviest class down, each at its largest at the same moment. The figures are
 // measured peaks of resident Go memory (including garbage the collector has not
-// reclaimed yet), taken in process against the providers pinned in providers.json
-// and openvaultdb-go v0.13.0; exact Money grouping is also measured in
-// TestCloudMeasureExactMoneyAggregates. They are repeated as constants in
-// limits_test.go,
-// which fails when the arithmetic stops holding.
+// reclaimed yet). The original at-rest, database-route, and generic query
+// baselines were measured with openvaultdb-go v0.13.0. Collection reads and the
+// exact Money workloads were remeasured with v0.14.2 against the current provider
+// pins. The limits are repeated as constants in limits_test.go, which checks that
+// the arithmetic still fits the deployment.
 //
-//	server at rest                     80 MiB  14 Go-managed + 52.4 binary (all resident) + 13 slack
+//	server at rest                     80 MiB  14 Go-managed + 52.8 MiB binary + 13 slack
 //	snapshot spool       2 slots x 64 MiB = 128 MiB
-//	in-memory query      1 slot  x 90 MiB =  90 MiB  (measured 79.5 grouping, 78.5 Money grouping, 34 join; rounded up)
+//	in-memory query      1 slot  x 90 MiB =  90 MiB  (79.5 generic grouping, 77.6 Money grouping, 34 join; rounded up)
 //	read of a collection 1       x 72 MiB =  72 MiB  (concurrency 2 less the in-memory slot; see below)
 //	total                                   370 MiB of 512: 142 MiB (27.7%) stay free
 //
@@ -31,8 +31,8 @@ import (
 // heaviest request that no gate counts: it applies no default row limit, so the
 // library reads rows until its 8 MiB buffer is full, and the heap holds 6 to 10
 // times the JSON it counts. A measurement over all 128 collections in the six
-// pinned fixtures peaked at 69 MiB across two runs (limits_test.go gives the run). It is
-// heavier than a database-route query
+// pinned fixtures held at most 68.9 MiB in the v0.14.2 run (limits_test.go
+// gives the measurement). It is heavier than a database-route query
 // (64 MiB), so the second request of an instance is a read, not a join. Nothing in
 // this service bounds the number of such reads but the concurrency of the instance:
 // at 3 the worst case is 442 MiB, over the 435 MiB (85%) that
@@ -45,7 +45,7 @@ import (
 // 1.2 to 4.1 times that, so the sums above use measured memory, not the counted
 // bytes. One grouping that could read 100,000 rows held 147 MiB; a separate
 // measured grouping stopped at the 40,000-row budget and held 79.5 MiB. The
-// 31,465-row exact Money grouping held 78.5 MiB.
+// 31,465-row exact Money grouping held 77.6 MiB with v0.14.2.
 //
 // Chosen against the library defaults (2 in-memory slots, 4 database slots, a
 // 1 GiB spool, a platform concurrency of 80), which add up to far more than the

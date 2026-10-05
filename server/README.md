@@ -99,7 +99,7 @@ query endpoint (72 MiB), which no gate counts and which applies no row limit of 
 own: the library reads until an 8 MiB buffer is full. Only the instance's
 concurrency bounds how many such reads run together, which is why it is 2: at 3 the
 worst case is 442 MiB, over the 85% (435 MiB) that `TestCloudLimitsFitTheInstance`
-allows. The exact Money grouping regression reads and groups 31,465 SalesOrderHeader rows, returns the first five ordered groups, and peaked at 78.5 MiB across two runs; Product and PurchaseOrderDetail aggregates peaked at 2.0 MiB and 4.6 MiB. Four Money accumulators at that grouping cardinality return 422 at the existing 64 MiB aggregation cap, with no partial rows. That test reads `--memory` and `--concurrency` from the deploy workflow,
+allows. The exact Money grouping regression reads and groups 31,465 SalesOrderHeader rows, returns the first five ordered groups, and held 77.6 MiB with OpenVaultDB v0.14.2; Product and PurchaseOrderDetail aggregates held 1.7 MiB and 4.1 MiB. Four Money accumulators at that grouping cardinality return 422 at the existing 64 MiB aggregation cap, with no partial rows. The Linux amd64 deployment binary is 55,397,616 bytes (52.8 MiB). That test reads `--memory` and `--concurrency` from the deploy workflow,
 fails when the sum exceeds 85% of the memory or when one more request per instance
 would also fit, so a change to a limit, to the workflow or to the catalogue of
 providers (`TestCloudMeasurementsCoverThePinnedProviders`) has to bring the
