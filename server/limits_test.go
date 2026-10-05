@@ -40,8 +40,8 @@ const (
 	// The largest in-memory request: a cross-database grouping that stops at the
 	// library's 64 MiB aggregation bound held 79.5 MiB; one that stops at the
 	// 40,000-row source budget held 74.4 MiB; a join that stops at the 10,000-row
-	// join bound held 34 MiB. Rounded up to cover a join plus a grouping in one
-	// document.
+	// join bound held 34 MiB. The exact Money grouping by SalesOrderID held 78.5 MiB.
+	// Rounded up to cover a join plus a grouping in one document.
 	measuredInMemoryBytes = 90 * mebibyte
 	// The largest database-route request: a join of two photo collections that
 	// returns 5.6 MB held 42.5 MiB; scaled to the 8 MiB result bound that is 61 MiB.
@@ -49,17 +49,13 @@ const (
 	// The largest request that no gate counts: the read of one whole collection
 	// by the query endpoint (POST or GET /v1/databases/{id}/query), which applies no
 	// default row limit and stops at the library's 8 MiB buffer. Measured on every
-	// one of the 112 collections of the five providers that can be prepared
-	// locally, in seven runs: five collections whose answer is 6.2 to 8.2 MB
-	// (Person.PersonPhone, Person.BusinessEntityAddress, Person.Address,
-	// Person.EmailAddress, Sales.SalesOrderHeaderSalesReason) held 48 to 67.2 MiB,
-	// the heaviest of them varying with the collector's timing; a collection the
-	// buffer refuses
-	// (Production.TransactionHistory) held 40 to 44 MiB. The same collections read
-	// with a limit of 1,000 rows, by the query endpoint or by single-collection
-	// DTQL, held 22.4 MiB at most. Sakila, the sixth provider, was not prepared
-	// locally; its collections together are under 5 MB, which at the worst ratio
-	// seen (10 MiB held per MiB answered) is 48 MiB. Rounded up.
+	// one of all 128 collections in the six pinned fixtures across two runs: the
+	// heaviest (Sales.SalesOrderHeaderSalesReason) peaked at 69.0 MiB; other large
+	// collections included Person.BusinessEntityAddress (62.7 MiB),
+	// Person.EmailAddress (58.2 MiB), Person.Address (58.0 MiB), and
+	// Person.PersonPhone (56.1 MiB). Production.TransactionHistory was refused
+	// at the existing 8 MiB response bound. The 72 MiB allowance still covers
+	// this run; collector timing varies, so repeat it with the opt-in measurement.
 	measuredUngatedBytes = 72 * mebibyte
 	// The in-memory measurements were taken with this source row budget; a larger
 	// budget lets a grouping hold more than they show.
@@ -70,7 +66,7 @@ const (
 
 // measuredProviders is the catalogue the measurements were taken on.
 var measuredProviders = []string{
-	"adventureworks@31bdb4eceff01367ce812b2844530ed17a7d35ae",
+	"adventureworks@5028a27189b487d6fd8025fafc1307aada707fd2",
 	"chinook@26e852cca00101f53a84ef8ee1f1ae389067f5cf",
 	"employees@2069e26e8fdb60bdb16507f75569a579cf3da7cf",
 	"northwind@e74726515c3833620b54b7a50d1d273276dd23c1",

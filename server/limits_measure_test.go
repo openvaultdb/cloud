@@ -122,6 +122,41 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 	}
 }
 
+// TestCloudMeasureExactMoneyAggregates measures the representative Decimal_TEXT
+// requests as a single in-memory slot. It is opt-in because peaks depend on the
+// Go collector and machine; run it alongside the single-collection measurements
+// when the provider inventory or OpenVaultDB dependency changes.
+func TestCloudMeasureExactMoneyAggregates(t *testing.T) {
+	if os.Getenv("OVDB_MEASURE_MEMORY") == "" {
+		t.Skip("set OVDB_MEASURE_MEMORY=1 to measure exact Money aggregate memory")
+	}
+	handler := cloudTestHandler(t)
+	for _, test := range []struct {
+		name, query string
+	}{
+		{name: "Product 504 rows", query: adventureWorksProductMoneyQuery},
+		{name: "PurchaseOrderDetail 8845 rows", query: adventureWorksPurchaseMoneyQuery},
+		{name: "SalesOrderHeader 31465-row grouping", query: adventureWorksHeaderMoneyGroupingQuery},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var code int
+			var answer []byte
+			growth := measureGrowth(func() {
+				response := postAdventureWorksDTQL(t, handler, test.query)
+				code = response.Code
+				answer = response.Body.Bytes()
+			})
+			if code != http.StatusOK {
+				t.Fatalf("exact Money request returned %d: %s", code, answer)
+			}
+			t.Logf("exact Money aggregate held %.1f MiB", float64(growth)/mebibyte)
+			if growth > measuredInMemoryBytes {
+				t.Errorf("exact Money request held %.1f MiB, above the %d MiB in-memory request allowance", float64(growth)/mebibyte, measuredInMemoryBytes/mebibyte)
+			}
+		})
+	}
+}
+
 func wireRequest(t *testing.T, database string, query core.Query) *http.Request {
 	t.Helper()
 	body, err := json.Marshal(query)

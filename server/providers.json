@@ -4,42 +4,42 @@
     {
       "id": "adventureworks",
       "repository": "demo-db/adventureworks",
-      "revision": "31bdb4eceff01367ce812b2844530ed17a7d35ae",
+      "revision": "5028a27189b487d6fd8025fafc1307aada707fd2",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "4e7dc2c5a5542d62bbe89331250ed59731f15a3dff5ce9913640bc7482a1a773"
+          "sha256": "e5304e30db963e53fef0ba7cac939928622cefb7064aedaccd5ba313cf62440c"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "10a916207d9d9717473a6d56280fba7da0812b6a2629a9c3c5acd50a822cf7d7"
+          "sha256": "5b2cb733342ac9e848f2674090e0e534082d48111056ff4e6a3b6d4ef4f693e0"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "1fb1cd951c19b1390ef21ecf38c808bbcc36219c73c3ce63d231b3933c2dfa29"
+          "sha256": "7a79f331492ce2a17c07c4810738abbe6e888a2024b4f7a028d61302052f5c7f"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
-          "sha256": "7a2e45340d00c335c0e4afaf30bec689c2bf92ed236a881ed9a2846b0c68dd44"
+          "sha256": "7885259b70241a932a6200b680ed667c97acfb35bf8d30f5395fe9a9ce22ccd6"
         },
         "artifact": {
           "path": "artifacts/adventureworks.sqlite",
           "compression": "gzip",
           "encodedPath": "artifacts/adventureworks.sqlite.gz",
-          "bytes": 35289451,
-          "sha256": "533165298eb696d330be6a2fc648ba56d985be491d511ca581d7ea64736e1a28",
-          "decodedBytes": 125276160,
-          "decodedSha256": "e0f352f0e3a28ff15158130c237a91d58f1b60fffa7f30d2c412b92df4065dfd",
+          "bytes": 35367459,
+          "sha256": "5516328f621cbbe21083a20f325bc1a6f841e6f709bb6d8bebfebbf48b81d203",
+          "decodedBytes": 126820352,
+          "decodedSha256": "6a105e1982becfe003fc7a307d7cad9d738390cedd79d166c2167fd817168109",
           "chunks": [
             {
               "path": "artifacts/adventureworks.sqlite.gz.part-0001",
               "bytes": 26214400,
-              "sha256": "3c59d3812fbc29d8a3070da9bef2306b25cff219fa08bb3fd82e5838f92d080a"
+              "sha256": "60e1d23ec00f1938e39262cd2e30a85a29aada525def56a65960312e1a9c5ac6"
             },
             {
               "path": "artifacts/adventureworks.sqlite.gz.part-0002",
-              "bytes": 9075051,
-              "sha256": "80b1a2c58648469aebe5b47b9dfaef3b3c84d14e141b5297e6f5f94953ef28a7"
+              "bytes": 9153059,
+              "sha256": "899a20c972a8f6fdd25b1544a29804c4872b877061dbaa1d6a85478445071e10"
             }
           ]
         },
@@ -53,6 +53,7 @@
       "smokeRecordsets": [
         "HumanResources.EmployeeDepartmentHistory",
         "HumanResources.Employee",
+        "Production.Product",
         "Production.ProductProductPhoto",
         "Production.ProductPhoto",
         "Production.TransactionHistory"

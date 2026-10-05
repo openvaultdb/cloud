@@ -27,7 +27,9 @@ foreign keys, row counts, native columns, primary keys, indexes, and view
 definitions. It preserves composite primary-key order and supports keyless
 tables through SQLite row identity without publishing an invented source key;
 `WITHOUT ROWID` tables use their declared primary key. `MONEY` columns map to
-numeric query fields, BLOB columns remain byte values, and native names,
+numeric query fields, `DECIMAL_TEXT(p,s)` fields retain their provider-declared
+precision and scale with string storage, BLOB columns remain byte values, and
+native names,
 including spaces and punctuation, are preserved in manifests; the SQLite
 adapter quotes them only when generating SQL.
 Chinook keeps its historical comma-separated composite identifiers. The live
@@ -71,6 +73,8 @@ database or table in service code.
 
 ## Limits and the instance memory
 
+AdventureWorks publishes 48 provider-declared exact-decimal field descriptors in its database metadata. These values remain JSON strings through record reads and snapshots. DTQL exact calculations are an explicit `money` opt-in on supported aggregate queries, use bounded 38-digit decimal arithmetic with half-even rounding, and remain subject to the existing source-row and memory limits. Default numeric behavior is unchanged; source computed columns remain snapshots rather than being recomputed.
+
 The Cloud Run service runs with 512 MiB, one vCPU, two concurrent requests per
 instance (`--concurrency=2`) and at most two instances; the deploy workflow states
 all of it. A join the database cannot run as one statement (a document that reads
@@ -89,12 +93,12 @@ library only counts the JSON size of what it holds, so the limits are set in
 Query timeout (10 s), queue wait (1 s) and source bytes (64 MiB) are the library
 defaults. `limits.go` carries the arithmetic: the server at rest, the snapshot spool
 and the two heaviest requests one instance can hold at once add up to 370 MiB of 512.
-Those two are an in-memory join (90 MiB) and a read of a whole collection by the
+Those two are an in-memory request (90 MiB) and a read of a whole collection by the
 query endpoint (72 MiB), which no gate counts and which applies no row limit of its
 own: the library reads until an 8 MiB buffer is full. Only the instance's
 concurrency bounds how many such reads run together, which is why it is 2: at 3 the
 worst case is 442 MiB, over the 85% (435 MiB) that `TestCloudLimitsFitTheInstance`
-allows. That test reads `--memory` and `--concurrency` from the deploy workflow,
+allows. The exact Money grouping regression reads and groups 31,465 SalesOrderHeader rows, returns the first five ordered groups, and peaked at 78.5 MiB across two runs; Product and PurchaseOrderDetail aggregates peaked at 2.0 MiB and 4.6 MiB. Four Money accumulators at that grouping cardinality return 422 at the existing 64 MiB aggregation cap, with no partial rows. That test reads `--memory` and `--concurrency` from the deploy workflow,
 fails when the sum exceeds 85% of the memory or when one more request per instance
 would also fit, so a change to a limit, to the workflow or to the catalogue of
 providers (`TestCloudMeasurementsCoverThePinnedProviders`) has to bring the

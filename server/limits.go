@@ -16,20 +16,23 @@ import (
 // heaviest class down, each at its largest at the same moment. The figures are
 // measured peaks of resident Go memory (including garbage the collector has not
 // reclaimed yet), taken in process against the providers pinned in providers.json
-// and openvaultdb-go v0.13.0; they are repeated as constants in limits_test.go,
+// and openvaultdb-go v0.13.0; exact Money grouping is also measured in
+// TestCloudMeasureExactMoneyAggregates. They are repeated as constants in
+// limits_test.go,
 // which fails when the arithmetic stops holding.
 //
 //	server at rest                     80 MiB  14 Go-managed + 52.4 binary (all resident) + 13 slack
 //	snapshot spool       2 slots x 64 MiB = 128 MiB
-//	in-memory query      1 slot  x 90 MiB =  90 MiB  (measured 79.5 grouping, 34 join; rounded up)
+//	in-memory query      1 slot  x 90 MiB =  90 MiB  (measured 79.5 grouping, 78.5 Money grouping, 34 join; rounded up)
 //	read of a collection 1       x 72 MiB =  72 MiB  (concurrency 2 less the in-memory slot; see below)
 //	total                                   370 MiB of 512: 142 MiB (27.7%) stay free
 //
 // A read of a collection by the query endpoint (/v1/databases/{id}/query) is the
 // heaviest request that no gate counts: it applies no default row limit, so the
 // library reads rows until its 8 MiB buffer is full, and the heap holds 6 to 10
-// times the JSON it counts. The heaviest of the 112 pinned collections held 67.2
-// MiB (limits_test.go gives the runs). It is heavier than a database-route query
+// times the JSON it counts. A measurement over all 128 collections in the six
+// pinned fixtures peaked at 69 MiB across two runs (limits_test.go gives the run). It is
+// heavier than a database-route query
 // (64 MiB), so the second request of an instance is a read, not a join. Nothing in
 // this service bounds the number of such reads but the concurrency of the instance:
 // at 3 the worst case is 442 MiB, over the 435 MiB (85%) that
@@ -40,8 +43,9 @@ import (
 // The library bounds a join to 10,000 rows and 16 MiB and a grouping to 100,000
 // groups and 64 MiB, but it counts the JSON size of what it holds. The heap holds
 // 1.2 to 4.1 times that, so the sums above use measured memory, not the counted
-// bytes. A grouping that could read 100,000 rows held 147 MiB; the row budget below
-// keeps it at 79.5 MiB or less.
+// bytes. One grouping that could read 100,000 rows held 147 MiB; a separate
+// measured grouping stopped at the 40,000-row budget and held 79.5 MiB. The
+// 31,465-row exact Money grouping held 78.5 MiB.
 //
 // Chosen against the library defaults (2 in-memory slots, 4 database slots, a
 // 1 GiB spool, a platform concurrency of 80), which add up to far more than the
