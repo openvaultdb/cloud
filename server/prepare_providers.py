@@ -464,7 +464,13 @@ def validate_provider(
     expected_db_base_url = f"https://cloud.openvaultdb.com/ovdb/dbs/{database_id}" if bounded else f"{server_id.rstrip('/')}/db/{database_id}/"
     if not server_id.startswith("https://") or database_manifest.get("apiUrl") != expected_api_url or database_manifest.get("serverDbBaseUrl") != expected_db_base_url:
         raise ValueError(f"{database_id} OVDB database manifest routes do not match its provider ID")
-    if database_manifest.get("id") != ovdb_capabilities.get("canonicalUrl") or database_manifest.get("homepage") != (manifest.get("homepage") or f"https://{manifest.get('siteHost')}/"):
+    expected_homepage = manifest.get("homepage") or f"https://{manifest.get('siteHost')}/"
+    if bounded and not manifest.get("siteHost"):
+        # No-website publishers use their pinned repository, never a fabricated host.
+        expected_homepage = f"https://github.com/{repository}"
+        if publisher.get("homepage") != expected_homepage or ("homepage" in manifest and manifest["homepage"] != expected_homepage):
+            raise ValueError(f"{database_id} no-website homepage must be its pinned HTTPS repository")
+    if database_manifest.get("id") != ovdb_capabilities.get("canonicalUrl") or database_manifest.get("homepage") != expected_homepage:
         raise ValueError(f"{database_id} public identity or homepage differs from its provider manifest")
     if not isinstance(contract.get("schema", {}).get("tables"), list):
         raise ValueError(f"{database_id} provider contract has no native table schema")

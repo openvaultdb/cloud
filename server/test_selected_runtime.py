@@ -79,6 +79,52 @@ def build_inventory(directory):
 
 
 class SelectedPreparationTest(unittest.TestCase):
+    def test_no_website_homepage_is_exact_pinned_repository(self):
+        for variation in ("absent-source-homepage", "canonical", "unrelated", "wrong-repository", "http", "null-source-homepage", "missing-publisher-homepage", "missing-descriptor-homepage"):
+            with self.subTest(variation=variation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                provider = build_provider(root, "candidate", 1, 1)
+                folder = root / provider["repository"]
+                manifest = json.loads((folder / "provider.json").read_bytes())
+                publisher = json.loads((folder / "ovdb.yaml").read_bytes())
+                descriptor = json.loads((folder / "descriptor.json").read_bytes())
+                if variation == "absent-source-homepage":
+                    del manifest["homepage"]
+                elif variation == "null-source-homepage":
+                    manifest["homepage"] = None
+                elif variation == "missing-publisher-homepage":
+                    del publisher["homepage"]
+                elif variation == "missing-descriptor-homepage":
+                    del descriptor["homepage"]
+                elif variation in ("unrelated", "wrong-repository", "http"):
+                    homepage = {"unrelated": "https://unrelated.example.test/", "wrong-repository": "https://github.com/synthetic/other", "http": "http://github.com/synthetic/candidate"}[variation]
+                    # Agreement alone must not authorize an unrelated no-website homepage.
+                    for document in (manifest, publisher, descriptor):
+                        document["homepage"] = homepage
+                for kind, filename, document in (("manifest", "provider.json", manifest), ("databaseManifest", "descriptor.json", descriptor), ("publisherManifest", "ovdb.yaml", publisher)):
+                    data = json.dumps(document).encode()
+                    (folder / filename).write_bytes(data)
+                    pin = provider["publisherManifest"] if kind == "publisherManifest" else provider["files"][kind]
+                    pin.update(bytes=len(data), sha256=prepare_providers.sha256(data))
+                fetch = lambda _repository, _revision, path: (folder / path).read_bytes()
+                if variation in ("absent-source-homepage", "canonical"):
+                    prepare_providers.validate_provider(provider, fetch)
+                else:
+                    with self.assertRaises(ValueError):
+                        prepare_providers.validate_provider(provider, fetch)
+
+    def test_legacy_website_homepage_fallback_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = build_provider(root, "legacy", 1, 1, bounded=False)
+            folder = root / provider["repository"]
+            manifest = json.loads((folder / "provider.json").read_bytes())
+            del manifest["homepage"]
+            data = json.dumps(manifest).encode()
+            (folder / "provider.json").write_bytes(data)
+            provider["files"]["manifest"].update(bytes=len(data), sha256=prepare_providers.sha256(data))
+            prepare_providers.validate_provider(provider, lambda _repository, _revision, path: (folder / path).read_bytes())
+
     def test_native16_selected11_and_legacy(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
