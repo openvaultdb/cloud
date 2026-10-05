@@ -36,9 +36,10 @@ Chinook keeps its historical comma-separated composite identifiers. The live
 OVDB mount exposes physical tables; provider views remain represented in the
 published schema metadata and exports.
 
-The adapter currently reserves a native column named `id` (case-insensitively), because the
+The default legacy adapter reserves a native column named `id` (case-insensitively), because the
 read-only record adapter uses that name for serving identity. A source table
-with that column fails preparation explicitly rather than overwriting it.
+with that column fails legacy preparation explicitly. The offline opt-in adapter
+described below preserves that source field and allocates a separate serving column.
 The generated `data.id` in OVDB record responses is this derived serving
 identity; it is absent from source exports and native provider schema/model
 metadata. Native primary keys and adapter record identities remain separate.
@@ -141,3 +142,60 @@ by the Cloudflare Worker deploy. Deployment keeps the existing Cloud Run
 service, region, memory and CPU, Worker origin, and compatibility environment
 variables; the per-instance concurrency, which the memory arithmetic depends on, is
 written out in the deploy command.
+
+## Offline opt-in preparation
+
+Production `providers.json` remains version 1. Its six providers keep their
+existing `id` serving column, key formats, YAML and runtime receipt shape.
+The preparer accepts only inventory versions 1 and 2, known entry fields, and
+pinned file descriptors. Unknown versions, adapter/profile values or fields
+fail before provider fetching.
+
+A separate development inventory can use version 2 and opt each entry into
+`servingAdapter: "separate-id/1"` and `readProfile: "bounded-immutable/1"`.
+The adapter chooses `__ovdb_record_id`, or the smallest unused positive suffix,
+against actual case-insensitive column names. It similarly allocates its unique
+index against existing schema objects. Native `id`/`ID`, helper-like names,
+indexes, foreign keys, views, and typed native values remain intact. Native row
+values are verified with a streaming typed digest in primary-key/rowid order.
+Transport IDs use the existing `recordKeyFormat`; their strings do not establish
+native identifier semantics. Empty or non-unique transport identities refuse
+preparation. Sources remain unchanged unless the caller explicitly consumes a
+verified temporary staging source.
+
+Only opt-in YAML adds `storage.sqlite.record_keys` and `busy_timeout: 0s`.
+The YAML owns the complete table-to-serving-column map. Version 2 generated
+`inventory.json` adds `manifestSha256` and copies supplied adapter/profile
+values, without a second key map. This is **offline artifact preparation only**:
+the current Go runtime rejects inventory version 2, and its existing manifest
+parser rejects the new SQLite fields. `readProfile` is a future runtime policy
+input; preparing it does not enforce HTTP limits or authorize publication.
+Do not change production provider entries until released OVDB/SQL prerequisites
+and the separately reviewed runtime integration have landed.
+
+The follow-on adoption work owns public route/homepage/descriptor/attribution
+preparation, descriptor field naming, runtime inventory validation, verified
+manifest mounting, four-pin immutable reads, request deadlines/order/CORS,
+smoke, and full six-plus-two capacity/publication proof. This offline version 2
+subset deliberately refuses those future input fields rather than silently
+ignoring them. W1 no-website wrappers therefore await that integration.
+
+All immutable network assets use the exact raw GitHub HTTPS origin and a full
+40-hex commit. Every relative path segment is validated before URL encoding;
+redirects, including same-origin redirects, are refused before following.
+Physical files remain bounded at 25 MiB, encoded gzip streams at 512 MiB and
+decoded fixtures at 2 GiB. Ordered pinned stream fragments and gzip members
+are verified independently and in aggregate; partial temporary files are
+removed after failures. HTTP error bodies are closed without reading or
+logging them. Deployment receipt hashes use streaming reads with unchanged
+SHA-256 semantics, targets, resources and workflow triggers.
+
+Focused synthetic verification (no provider corpus download or service start):
+
+```sh
+wb run -- python3 -m unittest discover -s server -p 'test_*.py' -v
+```
+
+Successful Cloud Worker CI on `main` triggers the existing production deployment
+workflows. PR validation does not deploy; the landing owner controls when to
+merge this offline change.

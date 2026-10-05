@@ -10,10 +10,11 @@ import json
 import os
 import re
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import prepare_fixture
 
@@ -25,15 +26,21 @@ MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_ENCODED_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_DECODED_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 RAW_GITHUB_ORIGIN = "https://raw.githubusercontent.com"
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
+PROVIDER_FIELDS = {"id", "repository", "revision", "recordKeyFormat", "requirePublishedQuery", "smokeRecordsets", "emptyRecordsets", "blobSmokeFields", "foreignKeySmoke", "files", "corsOrigins"}
+PREPARATION_FIELDS = {"servingAdapter", "readProfile"}
 
 
 def safe_relative_path(value: Any, context: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value:
-        raise ValueError(f"{context} must be a non-empty POSIX relative path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+    if not isinstance(value, str) or not value or any(character in value for character in "\\?#%") or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{context} must be a non-empty safe POSIX relative path")
+    # Inspect the original segments: PurePosixPath would silently collapse ./ or //.
+    if any(part in ("", ".", "..") for part in value.split("/")):
         raise ValueError(f"{context} must not escape the provider root")
-    return path.as_posix()
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        raise ValueError(f"{context} must not escape the provider root")
+    return value
 
 
 def read_json(data: bytes, context: str) -> dict[str, Any]:
@@ -100,14 +107,24 @@ def validate_sqlite_export(database_id: str, exports: list[dict[str, Any]], arti
 
 
 def load_inventory(path: Path) -> list[dict[str, Any]]:
-    document = read_json(path.read_bytes(), str(path))
-    if document.get("version") != 1 or not isinstance(document.get("databases"), list):
-        raise ValueError("provider inventory must use version 1 with a databases array")
+    return validate_inventory(read_json(path.read_bytes(), str(path)))
+
+
+def validate_inventory(document: dict[str, Any]) -> list[dict[str, Any]]:
+    version = document.get("version")
+    if type(version) is not int or version not in (1, 2) or set(document) != {"version", "databases"} or not isinstance(document.get("databases"), list):
+        raise ValueError("provider inventory must use version 1 or 2 with only a databases array")
     providers = document["databases"]
     seen_ids: set[str] = set()
     for provider in providers:
         if not isinstance(provider, dict):
             raise ValueError("each provider inventory entry must be a JSON object")
+        allowed_fields = PROVIDER_FIELDS | (PREPARATION_FIELDS if version == 2 else set())
+        if set(provider) - allowed_fields:
+            raise ValueError(f"provider inventory version {version} has unknown entry fields: {sorted(set(provider) - allowed_fields)}")
+        for field, accepted in (("servingAdapter", "separate-id/1"), ("readProfile", "bounded-immutable/1")):
+            if field in provider and provider[field] != accepted:
+                raise ValueError(f"unsupported {field}: {provider[field]!r}")
         database_id = provider.get("id")
         if not isinstance(database_id, str) or not DATABASE_ID_PATTERN.fullmatch(database_id):
             raise ValueError(f"invalid provider database id: {database_id!r}")
@@ -115,7 +132,7 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
             raise ValueError(f"duplicate provider database id: {database_id}")
         seen_ids.add(database_id)
         repository = provider.get("repository")
-        if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        if not isinstance(repository, str) or not REPOSITORY_PATTERN.fullmatch(repository):
             raise ValueError(f"invalid GitHub repository for {database_id}")
         if not isinstance(provider.get("revision"), str) or not COMMIT_PATTERN.fullmatch(provider["revision"]):
             raise ValueError(f"{database_id} revision must be an immutable full Git commit SHA")
@@ -165,12 +182,17 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
         for file_key, descriptor in files.items():
             if not isinstance(descriptor, dict):
                 raise ValueError(f"{database_id} {file_key} pin must be an object")
+            fields = {"path", "sha256", "bytes"} | ({"compression", "encodedPath", "decodedBytes", "decodedSha256", "chunks"} if file_key == "artifact" else set())
+            if set(descriptor) - fields:
+                raise ValueError(f"{database_id} {file_key} pin has unknown fields")
+            if "bytes" in descriptor and file_key != "artifact" and (type(descriptor["bytes"]) is not int or not 0 < descriptor["bytes"] <= MAX_ARTIFACT_BYTES):
+                raise ValueError(f"{database_id} {file_key} pin has invalid bytes")
             safe_relative_path(descriptor.get("path"), f"{database_id} {file_key} path")
             if not isinstance(descriptor.get("sha256"), str) or not SHA256_PATTERN.fullmatch(descriptor["sha256"]):
                 raise ValueError(f"{database_id} {file_key} must pin a SHA-256")
         artifact = files["artifact"]
         if artifact.get("compression") is None:
-            if not isinstance(artifact.get("bytes"), int) or artifact["bytes"] <= 0 or artifact["bytes"] > MAX_ARTIFACT_BYTES:
+            if type(artifact.get("bytes")) is not int or artifact["bytes"] <= 0 or artifact["bytes"] > MAX_ARTIFACT_BYTES:
                 raise ValueError(f"{database_id} artifact must be between 1 byte and {MAX_ARTIFACT_BYTES} bytes")
         else:
             if artifact.get("compression") != "gzip":
@@ -178,11 +200,11 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
             encoded_path = safe_relative_path(artifact.get("encodedPath"), f"{database_id} artifact encodedPath")
             if encoded_path != artifact["path"] + ".gz":
                 raise ValueError(f"{database_id} gzip artifact encodedPath must be logical path plus .gz")
-            if not isinstance(artifact.get("bytes"), int) or artifact["bytes"] <= 0:
+            if type(artifact.get("bytes")) is not int or artifact["bytes"] <= 0:
                 raise ValueError(f"{database_id} gzip artifact bytes must describe the encoded stream")
             if artifact["bytes"] > MAX_ENCODED_ARTIFACT_BYTES:
                 raise ValueError(f"{database_id} gzip artifact exceeds the {MAX_ENCODED_ARTIFACT_BYTES} byte encoded-stream limit")
-            if not isinstance(artifact.get("decodedBytes"), int) or not 0 < artifact["decodedBytes"] <= MAX_DECODED_ARTIFACT_BYTES:
+            if type(artifact.get("decodedBytes")) is not int or not 0 < artifact["decodedBytes"] <= MAX_DECODED_ARTIFACT_BYTES:
                 raise ValueError(f"{database_id} gzip artifact decodedBytes must be between 1 byte and {MAX_DECODED_ARTIFACT_BYTES} bytes")
             if not isinstance(artifact.get("decodedSha256"), str) or not SHA256_PATTERN.fullmatch(artifact["decodedSha256"]):
                 raise ValueError(f"{database_id} gzip artifact must pin the decoded SHA-256")
@@ -193,14 +215,14 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
                 seen_chunks: set[str] = set()
                 encoded_bytes = 0
                 for chunk in chunks:
-                    if not isinstance(chunk, dict):
+                    if not isinstance(chunk, dict) or set(chunk) != {"path", "sha256", "bytes"}:
                         raise ValueError(f"{database_id} gzip artifact chunks must be objects")
                     chunk_path = safe_relative_path(chunk.get("path"), f"{database_id} artifact chunk path")
                     if chunk_path in seen_chunks:
                         raise ValueError(f"{database_id} gzip artifact has a duplicate chunk path: {chunk_path}")
                     seen_chunks.add(chunk_path)
                     size = chunk.get("bytes")
-                    if not isinstance(size, int) or not 0 < size <= MAX_ARTIFACT_BYTES:
+                    if type(size) is not int or not 0 < size <= MAX_ARTIFACT_BYTES:
                         raise ValueError(f"{database_id} artifact chunks must be between 1 byte and {MAX_ARTIFACT_BYTES} bytes")
                     if not isinstance(chunk.get("sha256"), str) or not SHA256_PATTERN.fullmatch(chunk["sha256"]):
                         raise ValueError(f"{database_id} artifact chunks must pin a SHA-256")
@@ -231,11 +253,40 @@ def load_inventory(path: Path) -> list[dict[str, Any]]:
     return providers
 
 
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never let Location expand the immutable inventory fetch allowlist."""
+
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        response.close()
+        raise ValueError(f"immutable provider redirect refused: HTTP {code}")
+
+
+def immutable_url(repository: str, revision: str, relative_path: str) -> str:
+    if not isinstance(repository, str) or not REPOSITORY_PATTERN.fullmatch(repository):
+        raise ValueError("invalid immutable GitHub repository")
+    if not isinstance(revision, str) or not COMMIT_PATTERN.fullmatch(revision):
+        raise ValueError("revision must be an immutable full Git commit SHA")
+    path = safe_relative_path(relative_path, "provider file path")
+    url = f"{RAW_GITHUB_ORIGIN}/{repository}/{revision}/" + "/".join(quote(segment, safe="") for segment in path.split("/"))
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.netloc != "raw.githubusercontent.com" or parsed.query or parsed.fragment:
+        raise ValueError("immutable provider URL must use the exact raw GitHub HTTPS origin")
+    return url
+
+
 def default_fetch(repository: str, revision: str, relative_path: str) -> bytes:
-    url = f"{RAW_GITHUB_ORIGIN}/{repository}/{revision}/{relative_path}"
-    request = urllib.request.Request(url, headers={"User-Agent": "DemoDB-Cloud-fixture-verifier/1"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        data = response.read(MAX_ARTIFACT_BYTES + 1)
+    request = urllib.request.Request(immutable_url(repository, revision, relative_path), headers={"User-Agent": "DemoDB-Cloud-fixture-verifier/1"})
+    # A dedicated opener prevents application/global opener configuration from
+    # introducing redirects, cookies, or a looser provider origin policy.
+    opener = urllib.request.build_opener(RefuseRedirects())
+    try:
+        with opener.open(request, timeout=30) as response:
+            data = response.read(MAX_ARTIFACT_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        # Do not copy a remote error body/Location into logs; close without reading.
+        status = error.code
+        error.close()
+        raise ValueError(f"immutable provider request failed: HTTP {status}") from None
     if len(data) > MAX_ARTIFACT_BYTES:
         raise ValueError(f"provider file exceeds the {MAX_ARTIFACT_BYTES} byte build limit: {relative_path}")
     return data
@@ -278,6 +329,8 @@ def _fetch_verified_artifact(
                 advertised = advertised_files.get(path)
                 if not isinstance(advertised, dict) or advertised.get("sha256") != chunk["sha256"] or advertised.get("bytes") != chunk["bytes"]:
                     raise ValueError(f"{database_id} artifact chunk {path} disagrees with provider checksums")
+                if len(data) > MAX_ARTIFACT_BYTES or encoded_bytes + len(data) > MAX_ENCODED_ARTIFACT_BYTES or encoded_bytes + len(data) > descriptor["bytes"]:
+                    raise ValueError(f"{database_id} encoded artifact exceeds its pinned size")
                 stream.write(data)
                 encoded_digest.update(data)
                 encoded_bytes += len(data)
@@ -286,7 +339,7 @@ def _fetch_verified_artifact(
         decoded_digest = hashlib.sha256()
         decoded_bytes = 0
         with gzip.open(encoded_path, "rb") as compressed, artifact_output.open("wb") as decoded:
-            while chunk := compressed.read(1024 * 1024):
+            while chunk := compressed.read(min(1024 * 1024, descriptor["decodedBytes"] - decoded_bytes + 1, MAX_DECODED_ARTIFACT_BYTES - decoded_bytes + 1)):
                 decoded_bytes += len(chunk)
                 if decoded_bytes > descriptor["decodedBytes"] or decoded_bytes > MAX_DECODED_ARTIFACT_BYTES:
                     raise ValueError(f"{database_id} decoded artifact exceeds its pinned size")
@@ -321,6 +374,8 @@ def validate_provider(
         if key == "artifact":
             continue
         data = fetch(repository, revision, descriptor["path"])
+        if len(data) > MAX_ARTIFACT_BYTES:
+            raise ValueError(f"{database_id} {key} exceeds the physical file limit")
         expected_bytes = descriptor.get("bytes")
         verify_blob(data, descriptor["sha256"], expected_bytes, f"{database_id} {key}")
         fetched[key] = data
@@ -440,14 +495,25 @@ def validate_provider(
 
 
 def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = None) -> Path:
-    providers = load_inventory(inventory)
+    document = read_json(inventory.read_bytes(), str(inventory))
+    providers = validate_inventory(document)
+    inventory_version = document["version"]
     output.mkdir(parents=True, exist_ok=True)
     runtime_databases: list[dict[str, Any]] = []
     for provider in providers:
         def fetch(repository: str, revision: str, relative_path: str) -> bytes:
             if local_root is None:
                 return default_fetch(repository, revision, relative_path)
-            return (local_root / repository / relative_path).read_bytes()
+            immutable_url(repository, revision, relative_path)
+            provider_root = (local_root / repository).resolve()
+            local_path = (provider_root / relative_path).resolve()
+            if not local_path.is_relative_to(provider_root):
+                raise ValueError("local provider file escapes its repository")
+            with local_path.open("rb") as local_file:
+                data = local_file.read(MAX_ARTIFACT_BYTES + 1)
+            if len(data) > MAX_ARTIFACT_BYTES:
+                raise ValueError("local provider file exceeds the physical file limit")
+            return data
 
         database_id = provider["id"]
         artifact = provider["files"]["artifact"]
@@ -472,6 +538,7 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                 artifact.get("decodedSha256", artifact["sha256"]),
                 provider["recordKeyFormat"],
                 consume_source=True,
+                serving_adapter=provider.get("servingAdapter"),
             )
         finally:
             source_path.unlink(missing_ok=True)
@@ -495,8 +562,13 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                 "foreignKeySmoke": provider.get("foreignKeySmoke", []),
             }
         )
+        if inventory_version == 2:
+            runtime_databases[-1]["manifestSha256"] = prepare_fixture.sha256_file(manifest_path)
+            for field in sorted(PREPARATION_FIELDS):
+                if field in provider:
+                    runtime_databases[-1][field] = provider[field]
     runtime_path = output / "inventory.json"
-    runtime_path.write_text(json.dumps({"version": 1, "databases": runtime_databases}, indent=2) + "\n", encoding="utf-8")
+    runtime_path.write_text(json.dumps({"version": inventory_version, "databases": runtime_databases}, indent=2) + "\n", encoding="utf-8")
     return runtime_path
 
 

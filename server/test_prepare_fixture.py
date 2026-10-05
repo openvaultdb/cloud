@@ -3,6 +3,7 @@ import importlib.util
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -161,6 +162,121 @@ class PrepareFixtureTest(unittest.TestCase):
         for declared in ("DECIMAL_TEXT", "DECIMAL_TEXT(0,0)", "DECIMAL_TEXT(8,9)"):
             with self.subTest(declared=declared), self.assertRaisesRegex(ValueError, "DECIMAL_TEXT"):
                 prepare_fixture.field_schema(declared)
+    def test_separate_identity_preserves_native_names_values_and_schema_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "native.sqlite"
+            native = sqlite3.connect(source)
+            native.executescript("""
+                CREATE TABLE organizations (id TEXT PRIMARY KEY, __OVDB_RECORD_ID TEXT, __ovdb_record_id_1 TEXT, payload BLOB, nullable TEXT, number REAL);
+                CREATE INDEX ovdb_organizations_id ON organizations(nullable);
+                CREATE TABLE ovdb_organizations_id_1 (code INTEGER PRIMARY KEY);
+                CREATE TABLE capitals (ID INTEGER PRIMARY KEY, parent TEXT REFERENCES organizations(id));
+                CREATE INDEX ovdb_native_index ON capitals(parent);
+                CREATE TABLE composite (country TEXT, place INTEGER, PRIMARY KEY(country, place)) WITHOUT ROWID;
+                CREATE TABLE generated_native (ID INTEGER PRIMARY KEY, "__OVDB_RECORD_ID" TEXT GENERATED ALWAYS AS ('source-' || ID) VIRTUAL);
+                INSERT INTO generated_native(ID) VALUES (4);
+                CREATE TABLE empty_native (ID TEXT PRIMARY KEY);
+                CREATE TABLE keyless (ID TEXT, payload BLOB);
+                CREATE VIEW native_view AS SELECT id, nullable, payload FROM organizations;
+                INSERT INTO organizations VALUES ('https://ror.org/a% b', 'native', 'native-1', X'00FF10', NULL, 1.25), ('second', '', '', X'', '', 2);
+                INSERT INTO capitals VALUES (1, 'second');
+                INSERT INTO composite VALUES ('GB', 2), ('IE', 3);
+                INSERT INTO keyless VALUES ('duplicate', NULL), ('duplicate', X'00');
+            """)
+            native.commit()
+            tables = [row[0] for row in native.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            columns = {name: list(native.execute(f"PRAGMA table_info({prepare_fixture.quote_identifier(name)})")) for name in tables}
+            metadata = {name: prepare_fixture.table_metadata(native, name) for name in tables}
+            digests = {name: prepare_fixture.native_value_digest(native, name, columns[name]) for name in tables}
+            native.close()
+            source_hash = prepare_fixture.sha256_file(source)
+            manifest = prepare_fixture.prepare(source, root / "out", "fixture", source_hash, "natural", serving_adapter="separate-id/1")
+            self.assertEqual(source_hash, prepare_fixture.sha256_file(source))
+            text = manifest.read_text()
+            self.assertIn('"organizations": "__ovdb_record_id_2"', text)
+            self.assertIn('busy_timeout: 0s', text)
+            self.assertIn('"id": {type: string}', text)
+            self.assertIn('"ID": {type: integer}', text)
+            self.assertIn('"generated_native": "__ovdb_record_id_1"', text)
+            self.assertIn('"__OVDB_RECORD_ID": {type: string}', text)
+            serving = sqlite3.connect(root / "out/fixture.sqlite")
+            try:
+                for name in tables:
+                    helper = "__ovdb_record_id_2" if name == "organizations" else "__ovdb_record_id_1" if name == "generated_native" else "__ovdb_record_id"
+                    index = "ovdb_organizations_id_2" if name == "organizations" else "ovdb_" + name + "_id"
+                    self.assertEqual(metadata[name], prepare_fixture.table_metadata(serving, name, (helper, index)))
+                    self.assertEqual(digests[name], prepare_fixture.native_value_digest(serving, name, columns[name]))
+                self.assertEqual(('https://ror.org/a% b', 'native', 'native-1', b'\x00\xff\x10', None), serving.execute("SELECT id, __OVDB_RECORD_ID, __ovdb_record_id_1, payload, nullable FROM organizations WHERE id LIKE 'https:%'").fetchone())
+                self.assertEqual(2, serving.execute("SELECT COUNT(DISTINCT __ovdb_record_id) FROM keyless").fetchone()[0])
+                self.assertEqual([], serving.execute("PRAGMA foreign_key_check").fetchall())
+                self.assertEqual(2, len(serving.execute("SELECT * FROM native_view").fetchall()))
+            finally:
+                serving.close()
+            again = prepare_fixture.prepare(source, root / "again", "fixture", source_hash, "natural", serving_adapter="separate-id/1")
+            self.assertEqual(manifest.read_bytes(), again.read_bytes())
+            self.assertEqual(prepare_fixture.sha256_file(root / "out/fixture.sqlite"), prepare_fixture.sha256_file(root / "again/fixture.sqlite"))
+
+    def test_native_digest_detects_typed_changes_and_adapter_corruption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.sqlite"
+            native = sqlite3.connect(source)
+            native.executescript("CREATE TABLE sample (code TEXT PRIMARY KEY, value); INSERT INTO sample VALUES ('a', NULL), ('b', X'00');")
+            native.commit()
+            columns = list(native.execute("PRAGMA table_info(sample)"))
+            before = prepare_fixture.native_value_digest(native, "sample", columns)
+            native.execute("UPDATE sample SET value='' WHERE code='a'")
+            self.assertNotEqual(before, prepare_fixture.native_value_digest(native, "sample", columns))
+            native.rollback()
+            native.close()
+            add_ids = prepare_fixture.add_record_ids
+            def corrupt(connection, table, columns, key_format, serving_adapter):
+                generated = add_ids(connection, table, columns, key_format, serving_adapter)
+                connection.execute("UPDATE sample SET value='' WHERE code='a'")
+                return generated
+            with patch.object(prepare_fixture, "add_record_ids", corrupt), self.assertRaisesRegex(ValueError, "native row values"):
+                prepare_fixture.prepare(source, root / "out", "fixture", prepare_fixture.sha256_file(source), "natural", serving_adapter="separate-id/1")
+
+    def test_legacy_manifest_bytes_and_composite_formats_remain_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.sqlite"
+            native = sqlite3.connect(source)
+            native.executescript("CREATE TABLE sample (code TEXT, part INTEGER, PRIMARY KEY(code, part)); INSERT INTO sample VALUES ('a,b', 2);")
+            native.close()
+            manifest = prepare_fixture.prepare(source, root / "out", "fixture", prepare_fixture.sha256_file(source), "legacy")
+            self.assertEqual(b'database: {id: fixture, schema_mode: strict, cache_ttl: 24h}\nstorage: {engine: sqlite, path: ./fixture.sqlite}\nschemas:\n  collections:\n    "sample":\n      fields:\n        "code": {type: string}\n        "part": {type: integer}\n        "id": {type: string}\n', manifest.read_bytes())
+            serving = sqlite3.connect(root / "out/fixture.sqlite")
+            self.assertEqual('a,b,2', serving.execute("SELECT id FROM sample").fetchone()[0])
+            serving.close()
+            self.assertEqual('ovdb:W3sidHlwZSI6InN0ciIsInZhbHVlIjoiYSxiIn0seyJ0eXBlIjoiaW50IiwidmFsdWUiOjJ9XQ', prepare_fixture.record_id(('a,b', 2), "natural"))
+
+    def test_separate_identity_rejects_empty_keys_and_unknown_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.sqlite"
+            native = sqlite3.connect(source)
+            native.executescript("CREATE TABLE sample (id TEXT PRIMARY KEY); INSERT INTO sample VALUES ('');")
+            native.close()
+            with self.assertRaisesRegex(ValueError, "empty serving ID"):
+                prepare_fixture.prepare(source, root / "out", "fixture", prepare_fixture.sha256_file(source), "natural", serving_adapter="separate-id/1")
+            with self.assertRaisesRegex(ValueError, "unknown serving adapter"):
+                prepare_fixture.prepare(source, root / "out", "fixture", prepare_fixture.sha256_file(source), "natural", serving_adapter="next")
+
+    def test_separate_identity_refuses_colliding_legacy_composite_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.sqlite"
+            native = sqlite3.connect(source)
+            native.executescript("CREATE TABLE sample (a TEXT, b TEXT, PRIMARY KEY(a, b)); INSERT INTO sample VALUES ('a,b', 'c'), ('a', 'b,c');")
+            native.close()
+            digest = prepare_fixture.sha256_file(source)
+            with self.assertRaises(sqlite3.IntegrityError):
+                prepare_fixture.prepare(source, root / "out", "fixture", digest, "legacy", serving_adapter="separate-id/1")
+            self.assertFalse((root / "out/fixture.sqlite").exists())
+            self.assertEqual(digest, prepare_fixture.sha256_file(source))
+            prepare_fixture.prepare(source, root / "natural", "fixture", digest, "natural", serving_adapter="separate-id/1")
 
     def test_rejects_foreign_key_violations_and_invalid_ids(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
