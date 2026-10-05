@@ -88,7 +88,8 @@ jobs:
         run: |
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
           # --concurrency is written out because the memory arithmetic in
-          # server/limits.go depends on it; the platform default is 80.
+          # server/limits.go depends on it (the platform default is 80);
+          # TestCloudLimitsFitTheInstance reads it from here.
           gcloud run deploy "${SERVICE_NAME}" \
             --image="${IMAGE}" \
             --region="${REGION}" \
@@ -98,7 +99,7 @@ jobs:
             --min-instances=0 \
             --max-instances=2 \
             --memory=512Mi \
-            --concurrency=5 \
+            --concurrency=2 \
             --cpu=1 \
             --timeout=120 \
             --quiet

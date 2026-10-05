@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,9 +27,11 @@ const mebibyte = 1 << 20
 // the providers pinned in providers.json, as the growth in resident Go memory
 // (runtime.MemStats Sys minus HeapReleased, sampled every millisecond after a
 // forced collection) while one request ran, including the garbage the collector
-// had not yet reclaimed. Re-measure them when the
-// library is bumped or a provider is added or re-pinned; the test
-// TestCloudMeasurementsCoverThePinnedProviders fails when the catalogue moves.
+// had not yet reclaimed. TestCloudMeasureSingleCollectionReads (in
+// limits_measure_test.go) repeats the measurement of the last class on demand.
+// Re-measure them when the library is bumped or a provider is added or re-pinned;
+// the test TestCloudMeasurementsCoverThePinnedProviders fails when the catalogue
+// moves.
 const (
 	// The server with every provider mounted and no request running: 14 MiB of
 	// Go-managed memory, plus the 52.4 MiB Linux binary taken as fully resident,
@@ -43,9 +46,20 @@ const (
 	// The largest database-route request: a join of two photo collections that
 	// returns 5.6 MB held 42.5 MiB; scaled to the 8 MiB result bound that is 61 MiB.
 	measuredDatabaseRouteBytes = 64 * mebibyte
-	// The largest request that no gate counts (a single-collection read): the
-	// 2.7 MB answer of the photo collection held 21.2 MiB.
-	measuredUngatedBytes = 24 * mebibyte
+	// The largest request that no gate counts: the read of one whole collection
+	// by the query endpoint (POST or GET /v1/databases/{id}/query), which applies no
+	// default row limit and stops at the library's 8 MiB buffer. Measured on every
+	// one of the 112 collections of the five providers that can be prepared
+	// locally, in seven runs: four collections whose answer is 6.2 to 8.2 MB
+	// (Person.PersonPhone, Person.BusinessEntityAddress, Person.Address,
+	// Sales.SalesOrderHeaderSalesReason) held 48 to 67.2 MiB, the heaviest of them
+	// varying with the collector's timing; a collection the buffer refuses
+	// (Production.TransactionHistory) held 40 to 44 MiB. The same collections read
+	// with a limit of 1,000 rows, by the query endpoint or by single-collection
+	// DTQL, held 22.4 MiB at most. Sakila, the sixth provider, was not prepared
+	// locally; its collections together are under 5 MB, which at the worst ratio
+	// seen (10 MiB held per MiB answered) is 48 MiB. Rounded up.
+	measuredUngatedBytes = 72 * mebibyte
 	// The in-memory measurements were taken with this source row budget; a larger
 	// budget lets a grouping hold more than they show.
 	measuredSourceRows = 40_000
@@ -63,17 +77,35 @@ var measuredProviders = []string{
 	"sakila@cb9a81a8cbedcd8831737f281f888d5d584fae85",
 }
 
-// worstCaseBytes is the memory one instance can hold when every request it may
-// run at once is the largest of its class: the server at rest, every snapshot
-// slot full, every gated slot busy, and every other request of the instance's
-// concurrency a read that no gate counts.
+// requestClass is a kind of request an instance may run: how many may run at
+// once and the measured peak of one of them.
+type requestClass struct {
+	slots int
+	bytes int64
+}
+
+// worstCaseBytes is the memory one instance can hold when the requests it may run
+// at once are the heaviest it can be handed: the server at rest, every snapshot
+// slot full, and as many requests as the concurrency allows, taken from the
+// classes in order of weight, each class as often as its gate lets it in. A class
+// that no gate counts (a read of a collection) is limited by the concurrency alone,
+// so a request that could take a gated slot but weighs more as an ungated read
+// takes the ungated one.
 func worstCaseBytes(queries server.QueryLimits, snapshots server.SnapshotLimits, concurrency int) int64 {
-	ungated := max(concurrency-queries.InMemory-queries.Database, 0)
-	return measuredAtRestBytes +
-		int64(snapshots.Slots)*snapshots.Bytes +
-		int64(queries.InMemory)*measuredInMemoryBytes +
-		int64(queries.Database)*measuredDatabaseRouteBytes +
-		int64(ungated)*measuredUngatedBytes
+	classes := []requestClass{
+		{queries.InMemory, measuredInMemoryBytes},
+		{queries.Database, measuredDatabaseRouteBytes},
+		{concurrency, measuredUngatedBytes},
+	}
+	slices.SortFunc(classes, func(a, b requestClass) int { return cmp.Compare(b.bytes, a.bytes) })
+	total := measuredAtRestBytes + int64(snapshots.Slots)*snapshots.Bytes
+	free := concurrency
+	for _, class := range classes {
+		admitted := min(class.slots, free)
+		total += int64(admitted) * class.bytes
+		free -= admitted
+	}
+	return total
 }
 
 func readServerFile(t *testing.T, elements ...string) string {
@@ -127,6 +159,13 @@ func TestCloudLimitsFitTheInstance(t *testing.T) {
 	}
 
 	// Controls: the same check must be able to fail.
+	t.Run("one more request per instance does not fit", func(t *testing.T) {
+		// The deployed concurrency is the largest that fits, not a number picked
+		// below a limit that is further away.
+		if got := worstCaseBytes(queries, snapshots, concurrency+1); got <= budget {
+			t.Errorf("concurrency %d gives %d MiB, within %d MiB: the deployed concurrency %d is not the largest that fits", concurrency+1, got/mebibyte, budget/mebibyte, concurrency)
+		}
+	})
 	t.Run("the platform default concurrency does not fit", func(t *testing.T) {
 		if got := worstCaseBytes(queries, snapshots, 80); got <= budget {
 			t.Errorf("concurrency 80 gives %d MiB, within %d MiB: the check cannot fail", got/mebibyte, budget/mebibyte)
@@ -137,6 +176,29 @@ func TestCloudLimitsFitTheInstance(t *testing.T) {
 			t.Errorf("library defaults give %d MiB, within %d MiB: the limits would not need to be set", got/mebibyte, budget/mebibyte)
 		}
 	})
+}
+
+func TestCloudWorstCaseTakesTheHeaviestRequests(t *testing.T) {
+	queries, snapshots := cloudQueryLimits(), cloudSnapshotLimits()
+	atRest := int64(measuredAtRestBytes) + int64(snapshots.Slots)*snapshots.Bytes
+	for _, test := range []struct {
+		concurrency int
+		want        int64
+	}{
+		{1, measuredInMemoryBytes},
+		// The second slot goes to a read that no gate counts (72 MiB), not to the
+		// database route (64 MiB): the heavier request takes it.
+		{2, measuredInMemoryBytes + measuredUngatedBytes},
+		{3, measuredInMemoryBytes + 2*measuredUngatedBytes},
+	} {
+		if got := worstCaseBytes(queries, snapshots, test.concurrency) - atRest; got != test.want {
+			t.Errorf("concurrency %d: requests hold %d MiB, want %d MiB", test.concurrency, got/mebibyte, test.want/mebibyte)
+		}
+	}
+	// A class a gate admits once is counted once, whatever the concurrency.
+	if got := worstCaseBytes(server.QueryLimits{InMemory: 1, Database: 1}, snapshots, 100) - atRest; got != measuredInMemoryBytes+99*measuredUngatedBytes {
+		t.Errorf("concurrency 100: requests hold %d MiB", got/mebibyte)
+	}
 }
 
 func TestCloudMeasurementsCoverThePinnedProviders(t *testing.T) {
@@ -221,7 +283,8 @@ func assertCloudQueryDiscovery(t *testing.T, handler http.Handler) {
 }
 
 // cloudTestHandler mounts the named providers from the prepared fixtures, as the
-// journey tests do, and skips when they are not prepared.
+// journey tests do, and skips when they are not prepared. Without names it mounts
+// every provider of the inventory.
 func cloudTestHandler(t *testing.T, ids ...string) http.Handler {
 	t.Helper()
 	inventoryPath := os.Getenv("SAMPLE_DATABASES_INVENTORY")
@@ -231,6 +294,11 @@ func cloudTestHandler(t *testing.T, ids ...string) http.Handler {
 	all, err := loadRuntimeInventory(inventoryPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(ids) == 0 {
+		for _, provider := range all {
+			ids = append(ids, provider.ID)
+		}
 	}
 	var providers []runtimeDatabase
 	for _, id := range ids {
@@ -345,6 +413,77 @@ func TestCloudRefusesInMemoryQueriesOverTheBudget(t *testing.T) {
 			t.Errorf("got %d on route %q, want 200 on the in-memory route", answer.Code, answer.Execution.Route)
 		}
 	})
+}
+
+// The query endpoint of one database (POST /v1/databases/{id}/query) is not
+// behind the query gate and applies no default row limit: the library reads a
+// collection into memory until its answer reaches an 8 MiB buffer, then refuses.
+// The arithmetic of limits.go counts it as the heaviest request that no gate
+// counts, so this test reads every collection of every mounted database through
+// it and checks the answer stays inside that buffer, whatever the library does
+// with a larger one. The memory a read holds is not what the test looks at; the
+// measurement of it is TestCloudMeasureSingleCollectionReads.
+func TestCloudSingleCollectionReadsStayInsideTheLibraryBuffer(t *testing.T) {
+	const (
+		// The library counts the JSON of the data and the key of every row up to
+		// 8 MiB; the answer adds the field names of the envelope.
+		answerBound = 9 * mebibyte
+		// An answer is "large" when it is within a factor of two of the buffer.
+		largeAnswer = 4 * mebibyte
+	)
+	handler := cloudTestHandler(t)
+	var databases []string
+	for _, entry := range getJSON(t, handler, "/v1/databases")["databases"].([]any) {
+		databases = append(databases, entry.(map[string]any)["id"].(string))
+	}
+	var largest, answered, refused int
+	for _, id := range databases {
+		for _, collection := range getJSON(t, handler, "/v1/databases/"+id)["collections"].([]any) {
+			code, body := wireRead(t, handler, id, collection.(string))
+			switch {
+			case code == http.StatusOK:
+				answered++
+				largest = max(largest, len(body))
+				if len(body) > answerBound {
+					t.Errorf("%s %s: an unlimited read answered %d MiB, above the %d MiB bound the memory figure rests on", id, collection, len(body)/mebibyte, answerBound/mebibyte)
+				}
+			case code >= http.StatusBadRequest:
+				refused++
+				if len(body) > 4096 {
+					t.Errorf("%s %s: the refusal %d is %d bytes long", id, collection, code, len(body))
+				}
+			default:
+				t.Errorf("%s %s: unexpected status %d", id, collection, code)
+			}
+		}
+	}
+	if answered == 0 {
+		t.Fatalf("no collection of %v answered: the test read nothing", databases)
+	}
+
+	// Controls: only when AdventureWorks is mounted, whose collections reach the
+	// buffer; a smaller local inventory skips them.
+	if !slices.Contains(databases, "adventureworks") {
+		t.Logf("adventureworks is not mounted: %d answered, %d refused, largest answer %d bytes; controls skipped", answered, refused, largest)
+		return
+	}
+	t.Run("the read reaches the buffer", func(t *testing.T) {
+		if largest < largeAnswer {
+			t.Errorf("the largest answer is %d bytes: no collection reaches the buffer, so the test cannot show the bound holds", largest)
+		}
+	})
+	t.Run("the buffer refuses what it cannot hold", func(t *testing.T) {
+		if code, _ := wireRead(t, handler, "adventureworks", "Production.TransactionHistory"); code < http.StatusBadRequest {
+			t.Errorf("a collection of more than 100,000 rows answered %d: the library no longer stops a read at its buffer, so the memory figure no longer bounds it", code)
+		}
+	})
+}
+
+func wireRead(t *testing.T, handler http.Handler, database, collection string) (int, []byte) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, wireRequest(t, database, core.Query{Collection: collection}))
+	return response.Code, response.Body.Bytes()
 }
 
 func TestPostgresPreviewStaysOff(t *testing.T) {
