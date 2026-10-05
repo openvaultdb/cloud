@@ -1,0 +1,29 @@
+name: Protected image runtime
+on:
+  pull_request:
+    paths: ['server/**', '.github/workflows/image-runtime.yml']
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/image-runtime.yml']
+permissions:
+  contents: read
+jobs:
+  synthetic-linux-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: server/go.sum
+      - name: Finite Linux protected-image compatibility and refusal experiment
+        working-directory: server
+        run: python3 test_image_runtime.py
+      - name: Preserve exact synthetic-image evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: protected-image-runtime
+          path: server/image-runtime-report.json
+          if-no-files-found: error

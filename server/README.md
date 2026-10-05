@@ -243,3 +243,67 @@ wb run -- python3 -m unittest discover -s server -p 'test_*.py' -v
 Successful Cloud Worker CI on `main` triggers the existing production deployment
 workflows. PR validation does not deploy; the landing owner controls when to
 merge this offline change.
+
+### Explicit selected storage at startup
+
+The production scratch image fixes `OVDB_SELECTED_STORAGE=protected-image` and
+uses only `/srv/fixture/inventory.json`. Before inventory access, Linux startup
+requires actual UID/GID 65532 and checks `/`, `/srv`, the fixture directory and
+its complete consumed tree: root ownership, ordinary directories without
+non-owner writes, regular singly-linked nonwritable files, no symlinks/special
+files, bounded metadata/SQLite sizes and no SQLite journal/WAL/SHM companions.
+Preparation rejects nested, hidden, linked and special output entries. The flat
+file set permits numeric Dockerfile frontend 1.2 `COPY --chmod=0444`; this avoids
+requiring newer symbolic-mode support. The build sets modes and owners using
+`COPY`; startup never chmods or copies
+image assets. `/tmp` is separately created with sticky mode 1777 for existing
+bounded legacy spools. Changing paths, using a legacy manifest override,
+observing relevant permission-bypass capabilities or an additional mount over
+`/srv`/the fixture tree, or failing any pin/profile check aborts before a handler
+or listener. There is no automatic fallback or partial provider omission.
+
+The trusted build/deploy owner must inspect the final merged image filesystem
+and record the exact image digest and revision configuration: no covering
+volume, mutable backing, external writer or application authority that defeats
+these permissions. The process owner/platform administrator remains trusted.
+Available Linux UID/group/capability/NoNewPrivs/mount observations are recorded;
+missing `/proc` observations alone rely on that admitted Cloud deployment
+profile rather than pretending to provide universal platform attestation.
+Observed unsafe evidence is never waived. NoNewPrivs is diagnostic and does not
+revoke existing authority ([Linux documentation](https://docs.kernel.org/userspace-api/no_new_privs.html)).
+
+Each SQLite file is streamed and pinned once at inventory admission, with
+checkpointed rollback-mode header and opened-file identity checks. Selected
+mounts reopen the exact protected manifest and `./<id>.sqlite` through the
+existing library API; the same fixed paths apply to driver, schema, sandbox and
+later connection opens. Direct-mode close/failure never removes image assets.
+All native diagnostics remain physically present and outside public routes.
+The production inventory remains the six legacy providers.
+
+For selected development/tests explicitly set `OVDB_SELECTED_STORAGE=sealed-copy`
+and `SAMPLE_DATABASES_INVENTORY` to the prepared inventory. This retains the
+captured private copy and cleanup/replacement tests. Unset storage retains the
+historical legacy-only environment contract; it refuses selected providers.
+Protected-image mode refuses non-Linux hosts.
+
+`python3 test_image_runtime.py` requires an already-running Linux Docker engine;
+it never installs/starts one. The disjoint `image-runtime.yml` CI job runs the
+finite synthetic experiment without listeners, mapped ports, secrets or deploys.
+It builds the production Dockerfile, records the final image config and entry
+modes, runs the real guard and checked handler as UID 65532, proves 16 native /
+11 selected tables, schema/ordinary/key reads, real SQLite reconnection, full
+handler reopen, denied SQL/filesystem writes, no selected writable copy, and
+hostile-image refusal. Its JSON receipt is a CI artifact. Cross-compilation and
+host tests do not substitute for this Linux result.
+
+This component does not admit actual Geo/ROR capacity. Complete six-plus-two
+fidelity/key proof, measured instance peak <=435 MiB under unchanged 512 MiB /
+1 CPU / concurrency 2, retained legacy spools, idle recovery and the existing
+10-second cancellation contract remain gates. Full startup must finish before
+listening within the actual configured startup-probe budget and Cloud Run's
+four-minute startup limit; record the observed margin. Tiny fixtures do not
+prove these conditions. The deploy owner must separately verify the actual
+Cloud revision and total memory accounting ([Cloud Run startup contract](https://docs.cloud.google.com/run/docs/container-contract#startup),
+[memory limits](https://docs.cloud.google.com/run/docs/configuring/services/memory-limits)).
+Transport pins/CORS, descriptor routes, wrappers and Directory/App public
+admission remain separate downstream gates.
