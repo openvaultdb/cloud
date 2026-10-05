@@ -18,11 +18,7 @@ import (
 )
 
 func main() {
-	databases, err := configuredDatabases()
-	if err != nil {
-		log.Fatalf("load sample database inventory: %v", err)
-	}
-	handler, closeDatabases, err := newHandlerWithProviders(databases)
+	databases, handler, closeDatabases, err := configuredHandler()
 	if err != nil {
 		log.Fatalf("mount sample databases: %v", err)
 	}
@@ -66,6 +62,16 @@ func newHandlerWithManifests(manifests map[string]string) (http.Handler, func() 
 }
 
 func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() error, error) {
+	return newHandlerWithStorage(providers, sealedCopy, nil)
+}
+
+func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage, image *protectedImage) (http.Handler, func() error, error) {
+	if strategy != sealedCopy && strategy != protectedImageStorage {
+		return nil, nil, errors.New("unsupported selected storage strategy")
+	}
+	if strategy == protectedImageStorage && image == nil {
+		return nil, nil, errors.New("protected-image startup proof is missing")
+	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
 	if len(providers) == 0 {
 		return nil, nil, errors.New("no sample database manifests configured")
@@ -89,7 +95,11 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		var database *core.Database
 		var err error
 		if provider.ReadProfile != "" {
-			database, err = mountSelectedSnapshot(provider)
+			if strategy == protectedImageStorage {
+				database, err = mountSelectedImage(provider, image)
+			} else {
+				database, err = mountSelectedSnapshot(provider)
+			}
 			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
 		} else {
 			database, err = mount.File(manifest)

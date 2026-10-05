@@ -578,6 +578,15 @@ def validate_provider(
     return fetched
 
 
+def validate_image_layout(output: Path) -> None:
+    """The numeric Docker COPY contract requires a flat ordinary file set."""
+    for entry in output.iterdir():
+        if entry.name.startswith(".") or entry.is_symlink() or not entry.is_file() or entry.stat().st_nlink != 1:
+            raise ValueError(f"image fixture output must be flat nonhidden ordinary files: {entry.name}")
+    if not (output / "inventory.json").is_file():
+        raise ValueError("image fixture output has no inventory.json")
+
+
 def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = None) -> Path:
     document = read_json(inventory.read_bytes(), str(inventory))
     providers = validate_inventory(document)
@@ -662,6 +671,7 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                     runtime_databases[-1][field] = provider[field]
     runtime_path = output / "inventory.json"
     runtime_path.write_text(json.dumps({"version": inventory_version, "databases": runtime_databases}, indent=2) + "\n", encoding="utf-8")
+    validate_image_layout(output)
     return runtime_path
 
 

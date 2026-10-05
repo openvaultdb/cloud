@@ -65,6 +65,18 @@ type runtimeForeignKeySmoke struct {
 }
 
 func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
+	return loadRuntimeInventoryWithImage(path, nil)
+}
+
+func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtimeDatabase, error) {
+	if image != nil {
+		if path != defaultRuntimeInventoryPath || image.root != protectedFixtureRoot {
+			return nil, errors.New("inventory outside admitted protected image")
+		}
+		if _, exists := image.files[path]; !exists {
+			return nil, errors.New("inventory lacks protected image admission")
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read runtime provider inventory %q: %w", path, err)
@@ -169,7 +181,14 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 		if actual != database.SourceSHA256 {
 			return nil, fmt.Errorf("runtime provider %q source hash receipt does not match its inventory pin", database.ID)
 		}
-		actualHash, hashErr := sha256File(filepath.Join(base, database.ID+".sqlite"))
+		sqlitePath := filepath.Join(base, database.ID+".sqlite")
+		var actualHash string
+		var hashErr error
+		if image != nil {
+			actualHash, hashErr = image.hashSQLite(sqlitePath)
+		} else {
+			actualHash, hashErr = sha256File(sqlitePath)
+		}
 		if hashErr != nil {
 			return nil, fmt.Errorf("runtime provider %q serving SQLite: %w", database.ID, hashErr)
 		}
@@ -193,6 +212,9 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 			if _, err := verifySelectedFiles(*database, base); err != nil {
 				return nil, fmt.Errorf("runtime provider %q: %w", database.ID, err)
 			}
+		}
+		if image != nil {
+			image.verifiedSQLite[sqlitePath] = actualHash
 		}
 		database.Manifest = filepath.Join(base, database.Manifest)
 		database.License = filepath.Join(base, database.License)
