@@ -196,6 +196,7 @@ func (image *protectedImage) hashSQLite(path string) (hash string, err error) {
 	if err != nil {
 		return "", err
 	}
+	log.Printf("protected-image SQLite %s device=%d inode=%d bytes=%d", filepath.Base(path), before.device, before.inode, before.size)
 	if before != expected {
 		return "", errors.New("protected SQLite identity changed before hashing")
 	}
@@ -237,20 +238,6 @@ func mountSelectedImage(provider runtimeDatabase, image *protectedImage) (*core.
 	// All later manifest, driver/metadata, pool and sandbox opens use these exact
 	// protected paths. No full-size copy, rewritten manifest or close-time deletion.
 	return mount.FileWithOptions(provider.Manifest, mount.Options{CatalogueDir: image.root})
-}
-
-func recordImageDiagnostics(status, mounts []byte, statusErr, mountsErr error) {
-	log.Printf("protected-image kernel observations: status_available=%t mountinfo_available=%t", statusErr == nil, mountsErr == nil)
-	if statusErr == nil {
-		for _, line := range strings.Split(string(status), "\n") {
-			if strings.HasPrefix(line, "Uid:") || strings.HasPrefix(line, "Gid:") || strings.HasPrefix(line, "Groups:") || strings.HasPrefix(line, "Cap") || strings.HasPrefix(line, "NoNewPrivs:") {
-				log.Printf("protected-image %s", line)
-			}
-		}
-	}
-	if mountsErr == nil {
-		log.Printf("protected-image mountinfo: %d bytes inspected", len(mounts))
-	}
 }
 
 // Available diagnostics may refuse observed privilege/mount bypass. Missing proc

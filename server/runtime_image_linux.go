@@ -5,14 +5,16 @@ package main
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
+	"strings"
 	"syscall"
 )
 
 func imageEntryFromInfo(info os.FileInfo) (imageEntry, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return imageEntry{}, errors.New("Linux file identity is unavailable")
+		return imageEntry{}, errors.New("linux file identity is unavailable")
 	}
 	return imageEntry{mode: info.Mode(), uid: stat.Uid, links: stat.Nlink, device: uint64(stat.Dev), inode: stat.Ino, size: info.Size()}, nil
 }
@@ -64,4 +66,18 @@ func admitProtectedImage() (*protectedImage, error) {
 		return names, closeErr
 	}
 	return inspectProtectedTree(protectedFixtureRoot, inspect, names)
+}
+
+func recordImageDiagnostics(status, mounts []byte, statusErr, mountsErr error) {
+	log.Printf("protected-image kernel observations: status_available=%t mountinfo_available=%t", statusErr == nil, mountsErr == nil)
+	if statusErr == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if strings.HasPrefix(line, "Uid:") || strings.HasPrefix(line, "Gid:") || strings.HasPrefix(line, "Groups:") || strings.HasPrefix(line, "Cap") || strings.HasPrefix(line, "NoNewPrivs:") {
+				log.Printf("protected-image %s", line)
+			}
+		}
+	}
+	if mountsErr == nil {
+		log.Printf("protected-image mountinfo: %d bytes inspected", len(mounts))
+	}
 }
