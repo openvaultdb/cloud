@@ -69,6 +69,52 @@ tables. Providers may declare native binary columns in `blobSmokeFields`; the
 generic smoke journey confirms non-empty encoded values without naming a
 database or table in service code.
 
+## Limits and the instance memory
+
+The Cloud Run service runs with 512 MiB, one vCPU, two concurrent requests per
+instance (`--concurrency=2`) and at most two instances; the deploy workflow states
+all of it. A join the database cannot run as one statement (a document that reads
+two databases, a subquery, a null test) is computed in the server's memory, and the
+library only counts the JSON size of what it holds, so the limits are set in
+[`limits.go`](limits.go) from measured memory, not from the counted bytes:
+
+| Limit | Value | Library default |
+| --- | --- | --- |
+| In-memory query slots | 1 | 2 |
+| Database-route query slots | 1 | 4 |
+| Rows one request may read from sources | 40,000 | 100,000 |
+| Snapshot spool | 2 slots of 64 MiB | 2 slots of 512 MiB |
+| Join engines | `sqlite` | `sqlite`, `ingitdb` |
+
+Query timeout (10 s), queue wait (1 s) and source bytes (64 MiB) are the library
+defaults. `limits.go` carries the arithmetic: the server at rest, the snapshot spool
+and the two heaviest requests one instance can hold at once add up to 370 MiB of 512.
+Those two are an in-memory join (90 MiB) and a read of a whole collection by the
+query endpoint (72 MiB), which no gate counts and which applies no row limit of its
+own: the library reads until an 8 MiB buffer is full. Only the instance's
+concurrency bounds how many such reads run together, which is why it is 2: at 3 the
+worst case is 442 MiB, over the 85% (435 MiB) that `TestCloudLimitsFitTheInstance`
+allows. That test reads `--memory` and `--concurrency` from the deploy workflow,
+fails when the sum exceeds 85% of the memory or when one more request per instance
+would also fit, so a change to a limit, to the workflow or to the catalogue of
+providers (`TestCloudMeasurementsCoverThePinnedProviders`) has to bring the
+arithmetic along. `TestCloudSingleCollectionReadsStayInsideTheLibraryBuffer` reads
+every collection through the query endpoint and fails when an answer outgrows the
+buffer the figure is measured on; `TestCloudMeasureSingleCollectionReads` (set
+`OVDB_MEASURE_MEMORY=1`) repeats the memory measurement itself. A request over a
+limit gets the library's answer: `422 query_budget_exceeded` with the budget it
+reached, `503 query_capacity` when no slot frees within the queue wait, `413
+snapshot_too_large` for a larger snapshot. A whole-collection read that outgrows the
+8 MiB buffer is answered `500` by the library, as before the bump; adding a limit on
+that endpoint belongs to the library. `/.well-known/openvaultdb` states the limits
+and the join engines this server enforces. It also states the library's fixed
+ceiling of 100,000 groups; with a budget of 40,000 source rows a grouping cannot
+reach more groups than the rows it reads, so 40,000 is the effective ceiling.
+
+Structured queries on PostgreSQL stay off: neither the server code nor the deploy
+workflow sets the library's preview switch, and `TestPostgresPreviewStaysOff` fails
+if either does.
+
 ## Add a database
 
 Publish its immutable source fixture, provider manifest, contract, checksums,
@@ -78,7 +124,9 @@ SHA-256/byte-size pins for the six declared files. `prepare_providers.py`
 rejects mismatched metadata before mounting. The new provider is automatically
 included in the generated runtime inventory, per-entry CORS list, fixture
 integrity checks, and generic deploy smoke journey; the server's Go code does
-not branch on database IDs.
+not branch on database IDs. A new or re-pinned provider also changes the memory
+the limits were measured against: re-measure as described in
+[`limits.go`](limits.go) and update it together with `limits_test.go`.
 
 The CI job builds and tests the Linux binary with all pinned fixtures, then
 publishes that exact binary plus the verified fixture directory. The Cloud Run
@@ -86,5 +134,6 @@ deploy job checks the binary and every provider receipt, deploys the existing
 service, and runs profile, collection, query, CORS, and read-only checks for
 each inventory entry before it publishes the service-origin receipt consumed
 by the Cloudflare Worker deploy. Deployment keeps the existing Cloud Run
-service, region, resource limits, Worker origin, and compatibility environment
-variables.
+service, region, memory and CPU, Worker origin, and compatibility environment
+variables; the per-instance concurrency, which the memory arithmetic depends on, is
+written out in the deploy command.

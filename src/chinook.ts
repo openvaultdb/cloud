@@ -30,7 +30,7 @@ export async function proxyChinook(
       redirect: "manual",
     });
     const responseHeaders = new Headers();
-    for (const name of ["Content-Type", "Cache-Control", "Location", "Link", "Vary", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age", "X-Content-Type-Options", "Content-Security-Policy"] as const) {
+    for (const name of ["Content-Type", "Cache-Control", "Location", "Link", "Vary", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age", "Retry-After", "X-Content-Type-Options", "Content-Security-Policy"] as const) {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
