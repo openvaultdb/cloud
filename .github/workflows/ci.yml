@@ -53,7 +53,7 @@ jobs:
         echo "SAMPLE_DATABASES_INVENTORY=${SAMPLE_DATABASES_INVENTORY}" >> "${GITHUB_ENV}"
         echo "CHINOOK_MANIFEST=${CHINOOK_MANIFEST}" >> "${GITHUB_ENV}"
         echo "NORTHWIND_MANIFEST=${NORTHWIND_MANIFEST}" >> "${GITHUB_ENV}"
-        GOCACHE="${RUNNER_TEMP}/go-cache" go test ./... -run 'Test(Public(Chinook|Northwind)Journey|InventoryMountAndQueryEveryProvider|LoadRuntimeInventory)' -count=1
+        GOCACHE="${RUNNER_TEMP}/go-cache" go test ./... -run 'Test(Public(Chinook|Northwind)Journey|InventoryMountAndQueryEveryProvider|LoadRuntimeInventory|Cloud|PostgresPreviewStaysOff)' -count=1
         GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o ovdb-cloud .
         chmod +x ovdb-cloud
         sha256sum ovdb-cloud > ovdb-cloud.sha256

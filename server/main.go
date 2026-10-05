@@ -104,11 +104,12 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		origins = append(origins, origin)
 	}
 	sort.Strings(origins)
-	handler := server.New("demodb-cloud", databases,
+	options := append(cloudServerOptions(),
 		server.WithReadOnly(true),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
 		server.WithCORS(server.ParseCORSOrigins(origins)),
-	).Handler()
+	)
+	handler := server.New("demodb-cloud", databases, options...).Handler()
 	return handler, func() error { return closeMountedDatabases(databases) }, nil
 }
 

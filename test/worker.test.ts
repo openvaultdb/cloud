@@ -325,6 +325,25 @@ describe("public Chinook OVDB proxy", () => {
     expect(forwarded[2].url).toBe(dtqlURL.replace(baseURL, "https://chinook-ovdb.example.run.app"));
   });
 
+  it("forwards Retry-After of a capacity refusal and still drops Set-Cookie", async () => {
+    const chinookWorker = createWorker(async () =>
+      Response.json(
+        { error: { code: "query_capacity" } },
+        { status: 503, headers: { "Retry-After": "1", "Set-Cookie": "should-not-leak=1" } },
+      ),
+    );
+    const fetchChinook = chinookWorker.fetch as unknown as typeof fetchWorker;
+    const chinookEnv = { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env;
+    const response = await fetchChinook(new Request(`${baseURL}/v1/dtql`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "from: {database: chinook, name: Album}" }),
+    }), chinookEnv, createExecutionContext());
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("1");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+  });
+
   it("returns a service error until the Cloud Run origin is configured", async () => {
     const response = await call("/ovdb/dbs/chinook");
     expect(response.status).toBe(503);
