@@ -328,3 +328,168 @@ func TestDescriptorFlagsRequireActualBooleans(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeMetadataExactMembers(t *testing.T) {
+	path, _ := selectedInventoryFixture(t)
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every closed pin member and every new runtime binding must use its exact
+	// original spelling. Case variants are invalid even alongside canonical keys.
+	for _, pinName := range []string{"publisherManifest", "publicDescriptor"} {
+		for _, field := range []string{"path", "sha256", "bytes"} {
+			for _, mutation := range []string{"alias-only", "alias-plus-canonical", "missing", "null", "wrong-type", "unknown"} {
+				t.Run(pinName+"/"+field+"/"+mutation, func(t *testing.T) {
+					var document map[string]any
+					_ = json.Unmarshal(original, &document)
+					entry := document["databases"].([]any)[0].(map[string]any)
+					pin := entry[pinName].(map[string]any)
+					originalValue := pin[field]
+					switch mutation {
+					case "alias-only":
+						delete(pin, field)
+						pin[strings.ToUpper(field[:1])+field[1:]] = originalValue
+					case "alias-plus-canonical":
+						pin[strings.ToUpper(field[:1])+field[1:]] = originalValue
+					case "missing":
+						delete(pin, field)
+					case "null":
+						pin[field] = nil
+					case "wrong-type":
+						pin[field] = []any{}
+					case "unknown":
+						pin["extra"] = true
+					}
+					encoded, _ := json.Marshal(document)
+					if err := validateRuntimeMembers(encoded); err == nil {
+						t.Fatal("closed pin accepted malformed member")
+					}
+					negativePath := filepath.Join(filepath.Dir(path), "member-negative.json")
+					if err := os.WriteFile(negativePath, encoded, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := loadRuntimeInventory(negativePath); err == nil {
+						t.Fatal("malformed pin reached runtime load")
+					}
+				})
+			}
+		}
+	}
+	for _, field := range []string{"manifestSha256", "readProfile", "servingAdapter", "publisherManifest", "publicDescriptor", "requirePublishedQuery"} {
+		for _, mutation := range []string{"alias-only", "alias-plus-canonical", "missing", "null", "wrong-type", "unknown"} {
+			t.Run(field+"/"+mutation, func(t *testing.T) {
+				var document map[string]any
+				_ = json.Unmarshal(original, &document)
+				entry := document["databases"].([]any)[0].(map[string]any)
+				value := entry[field]
+				switch mutation {
+				case "alias-only":
+					delete(entry, field)
+					entry[strings.ToUpper(field[:1])+field[1:]] = value
+				case "alias-plus-canonical":
+					entry[strings.ToUpper(field[:1])+field[1:]] = value
+				case "missing":
+					delete(entry, field)
+				case "null":
+					entry[field] = nil
+				case "wrong-type":
+					entry[field] = []any{}
+				case "unknown":
+					entry[field+"Extra"] = value
+				}
+				encoded, _ := json.Marshal(document)
+				negativePath := filepath.Join(filepath.Dir(path), "binding-negative.json")
+				if err := os.WriteFile(negativePath, encoded, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := loadRuntimeInventory(negativePath); err == nil {
+					t.Fatal("malformed runtime binding accepted")
+				}
+			})
+		}
+	}
+	if err := validateRuntimeMembers(original); err != nil {
+		t.Fatal("canonical generated inventory rejected", err)
+	}
+}
+func TestDescriptorMetadataExactConsumedMembers(t *testing.T) {
+	_, providers := selectedInventoryFixture(t)
+	provider := providers[0]
+	path := filepath.Join(filepath.Dir(provider.Manifest), provider.ID+".descriptor.json")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"format", "localId", "id", "homepage", "serverId", "serverDbBaseUrl", "apiUrl", "deployment", "capabilities", "recordsets"} {
+		for _, mutation := range []string{"alias-only", "alias-plus-canonical", "missing", "null", "wrong-type"} {
+			t.Run(field+"/"+mutation, func(t *testing.T) {
+				var document map[string]any
+				_ = json.Unmarshal(original, &document)
+				value := document[field]
+				switch mutation {
+				case "alias-only":
+					delete(document, field)
+					document[strings.ToUpper(field[:1])+field[1:]] = value
+				case "alias-plus-canonical":
+					document[strings.ToUpper(field[:1])+field[1:]] = value
+				case "missing":
+					delete(document, field)
+				case "null":
+					document[field] = nil
+				case "wrong-type":
+					document[field] = false
+				}
+				encoded, _ := json.Marshal(document)
+				if err := validateDescriptorMembers(encoded); err == nil {
+					t.Fatal("malformed descriptor binding accepted")
+				}
+				if err := os.WriteFile(path, encoded, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				defer os.WriteFile(path, original, 0o600)
+				candidate := provider
+				pin := *provider.PublicDescriptor
+				pin.Bytes = int64(len(encoded))
+				pin.SHA256 = digest(encoded)
+				candidate.PublicDescriptor = &pin
+				if _, err := verifySelectedFiles(candidate, filepath.Dir(path)); err == nil {
+					t.Fatal("malformed descriptor reached startup linkage")
+				}
+			})
+		}
+	}
+	var document map[string]any
+	_ = json.Unmarshal(original, &document)
+	document["title"] = "Legitimate unconsumed title"
+	document["licences"] = map[string]any{"data": "CC0-1.0"}
+	document["model"] = map[string]any{"id": "modelspec://synthetic/fixture"}
+	encoded, _ := json.Marshal(document)
+	if err := validateDescriptorMembers(encoded); err != nil {
+		t.Fatal("legitimate unrelated metadata refused", err)
+	}
+	for _, container := range []string{"deployment", "capabilities"} {
+		var document map[string]any
+		_ = json.Unmarshal(original, &document)
+		nested := document[container].(map[string]any)
+		field := "engine"
+		if container == "capabilities" {
+			field = "read"
+		}
+		value := nested[field]
+		delete(nested, field)
+		nested[strings.ToUpper(field[:1])+field[1:]] = value
+		encoded, _ := json.Marshal(document)
+		if err := os.WriteFile(path, encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		candidate := provider
+		pin := *provider.PublicDescriptor
+		pin.Bytes = int64(len(encoded))
+		pin.SHA256 = digest(encoded)
+		candidate.PublicDescriptor = &pin
+		if _, err := verifySelectedFiles(candidate, filepath.Dir(path)); err == nil {
+			t.Fatal("existing nested exact map check weakened")
+		}
+	}
+}

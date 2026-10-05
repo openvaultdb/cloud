@@ -70,7 +70,7 @@ func loadRuntimeInventory(path string) ([]runtimeDatabase, error) {
 		return nil, fmt.Errorf("read runtime provider inventory %q: %w", path, err)
 	}
 	var inventory runtimeInventory
-	if err := rejectDuplicateJSON(data); err != nil {
+	if err := validateRuntimeMembers(data); err != nil {
 		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))

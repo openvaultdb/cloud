@@ -131,3 +131,59 @@ class SelectedPreparationTest(unittest.TestCase):
                     return data if path == "ovdb.yaml" else (folder / path).read_bytes()
                 with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                     prepare_providers.validate_provider(provider, fetch)
+
+    def test_descriptor_canonical_member_parity_before_artifact_fetch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = build_provider(root, "fixture", 2, 1)
+            folder = root / original["repository"]
+            baseline = json.loads((folder / "descriptor.json").read_bytes())
+            for field in ("format", "localId", "id", "homepage", "serverId", "serverDbBaseUrl", "apiUrl", "deployment", "capabilities", "recordsets"):
+                for mutation in ("alias-only", "alias-plus-canonical", "missing", "null", "wrong-type"):
+                    provider = copy.deepcopy(original)
+                    document = copy.deepcopy(baseline)
+                    value = document[field]
+                    if mutation == "alias-only":
+                        document[field[0].upper() + field[1:]] = document.pop(field)
+                    elif mutation == "alias-plus-canonical":
+                        document[field[0].upper() + field[1:]] = value
+                    elif mutation == "missing":
+                        document.pop(field)
+                    elif mutation == "null":
+                        document[field] = None
+                    else:
+                        document[field] = False
+                    data = json.dumps(document).encode()
+                    provider["files"]["databaseManifest"].update(bytes=len(data), sha256=prepare_providers.sha256(data))
+                    def fetch(repository, revision, path):
+                        if path == "native.sqlite":
+                            self.fail("artifact fetched before exact descriptor member admission")
+                        return data if path == "descriptor.json" else (folder / path).read_bytes()
+                    with self.subTest(field=field, mutation=mutation), self.assertRaises(ValueError):
+                        prepare_providers.validate_provider(provider, fetch)
+            document = copy.deepcopy(baseline)
+            document.update(title="Legitimate title", model={"id": "modelspec://synthetic/fixture"})
+            prepare_providers.validate_descriptor_members(document)
+
+    def test_publisher_pin_and_envelope_member_spelling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            provider = build_provider(Path(temporary), "fixture", 2, 1)
+            for pin_name in ("publisherManifest", "publicDescriptor"):
+                for field in ("path", "sha256", "bytes"):
+                    for duplicate in (False, True):
+                        mutated = copy.deepcopy(provider)
+                        # Public runtime pin originates from files.databaseManifest.
+                        pin = mutated["publisherManifest"] if pin_name == "publisherManifest" else mutated["files"]["databaseManifest"]
+                        pin[field[0].upper() + field[1:]] = pin[field]
+                        if not duplicate:
+                            pin.pop(field)
+                        with self.subTest(pin=pin_name, field=field, duplicate=duplicate), self.assertRaises(ValueError):
+                            prepare_providers.validate_inventory({"version": 2, "databases": [mutated]})
+            for field in ("readProfile", "servingAdapter", "publisherManifest", "requirePublishedQuery"):
+                for duplicate in (False, True):
+                    mutated = copy.deepcopy(provider)
+                    mutated[field[0].upper() + field[1:]] = mutated[field]
+                    if not duplicate:
+                        mutated.pop(field)
+                    with self.subTest(binding=field, duplicate=duplicate), self.assertRaises(ValueError):
+                        prepare_providers.validate_inventory({"version": 2, "databases": [mutated]})

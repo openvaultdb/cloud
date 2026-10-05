@@ -155,7 +155,7 @@ func verifySelectedFiles(p runtimeDatabase, base string) (*selectedFiles, error)
 			} `json:"columns"`
 		} `json:"recordsets"`
 	}
-	if err := rejectDuplicateJSON(f.descriptor); err != nil {
+	if err := validateDescriptorMembers(f.descriptor); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(f.descriptor, &descriptor); err != nil {
@@ -374,4 +374,139 @@ func checkedDescriptorCapabilities(flags map[string]json.RawMessage, query bool)
 		}
 	}
 	return true
+}
+
+// canonicalMembers checks the original JSON member spelling and presence before
+// encoding/json can match a case alias to a tagged Go field. Unconsumed public
+// descriptor metadata stays open; consumed bindings and runtime pins stay exact.
+func canonicalMembers(data []byte, required, optional map[string]byte, closed bool) (map[string]json.RawMessage, error) {
+	if len(bytes.TrimSpace(data)) == 0 || bytes.TrimSpace(data)[0] != '{' {
+		return nil, errors.New("JSON binding must be an object")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	expected := make(map[string]byte, len(required)+len(optional))
+	for name, kind := range required {
+		expected[name] = kind
+	}
+	for name, kind := range optional {
+		expected[name] = kind
+	}
+	for name, value := range object {
+		kind, known := expected[name]
+		if !known {
+			for canonical := range expected {
+				if strings.EqualFold(name, canonical) {
+					return nil, fmt.Errorf("JSON binding member %q must use canonical spelling %q", name, canonical)
+				}
+			}
+			if closed {
+				return nil, fmt.Errorf("unknown JSON binding member %q", name)
+			}
+			continue
+		}
+		raw := bytes.TrimSpace(value)
+		if kind == 'a' {
+			continue
+		}
+		if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+			return nil, fmt.Errorf("JSON binding member %q cannot be null", name)
+		}
+		matches := kind == 'a' || raw[0] == kind || (kind == 'b' && (bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")))) || (kind == 'n' && (raw[0] == '-' || (raw[0] >= '0' && raw[0] <= '9')))
+		if !matches {
+			return nil, fmt.Errorf("JSON binding member %q has wrong type", name)
+		}
+	}
+	for name := range required {
+		if _, exists := object[name]; !exists {
+			return nil, fmt.Errorf("JSON binding lacks canonical member %q", name)
+		}
+	}
+	return object, nil
+}
+
+func runtimeMemberKinds(value any) map[string]byte {
+	result := map[string]byte{}
+	typeOf := reflect.TypeOf(value)
+	for index := 0; index < typeOf.NumField(); index++ {
+		field := typeOf.Field(index)
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			result[name] = 'a'
+		}
+	}
+	return result
+}
+func validateRuntimeMembers(data []byte) error {
+	if err := rejectDuplicateJSON(data); err != nil {
+		return err
+	}
+	inventory, err := canonicalMembers(data, map[string]byte{"version": 'n', "databases": '['}, nil, true)
+	if err != nil {
+		return err
+	}
+	var entries []json.RawMessage
+	if err := json.Unmarshal(inventory["databases"], &entries); err != nil {
+		return err
+	}
+	kinds := runtimeMemberKinds(runtimeDatabase{})
+	kinds["manifestSha256"] = '"'
+	kinds["servingAdapter"] = '"'
+	kinds["readProfile"] = '"'
+	kinds["publisherManifest"] = '{'
+	kinds["publicDescriptor"] = '{'
+	kinds["requirePublishedQuery"] = 'b'
+	for _, entry := range entries {
+		members, err := canonicalMembers(entry, nil, kinds, true)
+		if err != nil {
+			return err
+		}
+		for _, name := range []string{"publisherManifest", "publicDescriptor"} {
+			if pin, present := members[name]; present {
+				if _, err := canonicalMembers(pin, map[string]byte{"path": '"', "sha256": '"', "bytes": 'n'}, nil, true); err != nil {
+					return err
+				}
+			}
+		}
+		for name, accepted := range map[string]string{"servingAdapter": "separate-id/1", "readProfile": "bounded-immutable/1"} {
+			if raw, present := members[name]; present {
+				var value string
+				if json.Unmarshal(raw, &value) != nil || value != accepted {
+					return fmt.Errorf("unsupported explicit runtime %s", name)
+				}
+			}
+		}
+	}
+	return nil
+}
+func validateDescriptorMembers(data []byte) error {
+	if err := rejectDuplicateJSON(data); err != nil {
+		return err
+	}
+	members, err := canonicalMembers(data, map[string]byte{"format": '"', "localId": '"', "id": '"', "homepage": '"', "serverId": '"', "serverDbBaseUrl": '"', "apiUrl": '"', "deployment": '{', "capabilities": '{', "recordsets": '['}, nil, false)
+	if err != nil {
+		return err
+	}
+	var recordsets []json.RawMessage
+	if err := json.Unmarshal(members["recordsets"], &recordsets); err != nil {
+		return err
+	}
+	for _, raw := range recordsets {
+		recordset, err := canonicalMembers(raw, map[string]byte{"name": '"', "columns": '['}, map[string]byte{"kind": '"'}, false)
+		if err != nil {
+			return err
+		}
+		var columns []json.RawMessage
+		if err := json.Unmarshal(recordset["columns"], &columns); err != nil {
+			return err
+		}
+		for _, column := range columns {
+			if _, err := canonicalMembers(column, map[string]byte{"name": '"', "type": '"'}, nil, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

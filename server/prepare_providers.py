@@ -61,6 +61,31 @@ def read_json(data: bytes, context: str) -> dict[str, Any]:
     return value
 
 
+
+def canonical_descriptor_members(document: Any, required: dict[str, type], optional: dict[str, type] | None = None) -> dict[str, Any]:
+    if not isinstance(document, dict):
+        raise ValueError("descriptor binding must be an object")
+    expected = {**required, **(optional or {})}
+    for name, value in document.items():
+        if name not in expected:
+            if any(name.casefold() == canonical.casefold() for canonical in expected):
+                raise ValueError("descriptor binding uses a case alias")
+            continue  # Preserve legitimate unrelated descriptor schema metadata.
+        if type(value) is not expected[name]:
+            raise ValueError("descriptor binding has a null or wrong-type member")
+    if set(required) - set(document):
+        raise ValueError("descriptor binding lacks a canonical member")
+    return document
+
+
+def validate_descriptor_members(document: dict[str, Any]) -> None:
+    canonical_descriptor_members(document, {**{name: str for name in ("format", "localId", "id", "homepage", "serverId", "serverDbBaseUrl", "apiUrl")}, "deployment": dict, "capabilities": dict, "recordsets": list})
+    for recordset in document["recordsets"]:
+        canonical_descriptor_members(recordset, {"name": str, "columns": list}, {"kind": str})
+        for column in recordset["columns"]:
+            canonical_descriptor_members(column, {"name": str, "type": str})
+
+
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -405,6 +430,8 @@ def validate_provider(
     checksums = read_json(fetched["checksums"], f"{database_id} provider checksums")
 
     database_manifest = read_json(fetched["databaseManifest"], f"{database_id} OVDB database manifest")
+    if provider.get("readProfile") == "bounded-immutable/1":
+        validate_descriptor_members(database_manifest)
     if manifest.get("id") != database_id or contract.get("manifest", {}).get("id") != database_id:
         raise ValueError(f"{database_id} provider ID differs between manifest and contract")
     if contract.get("contractVersion") != 1 or checksums.get("contractVersion") != 1:
