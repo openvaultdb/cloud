@@ -95,82 +95,134 @@ def hostile_export(data, mutation):
     return output.getvalue()
 
 
+def cleanup(arguments, timeout, receipt):
+    """Try only owned resources; cleanup failure remains a failed gate."""
+    try:
+        run(arguments, timeout=timeout)
+        return True
+    except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+        receipt.setdefault("cleanup_errors", []).append({"argv": arguments, "error": str(error)})
+        receipt["outcome"] = "failed"
+        print("Linux image cleanup FAILED:", error, file=sys.stderr)
+        return False
+
+
+def remove_container(name, containers, receipt):
+    if cleanup(["docker", "rm", "-f", name], 30, receipt):
+        containers.remove(name)
+        return True
+    return False
+
+
+def exercise(receipt, prefix, containers, image, mode, expected="", extra=()):
+    name = prefix + "-runtime-" + uuid.uuid4().hex[:12]
+    # No auto-removal: explicit bounded cleanup owns the complete lifecycle.
+    containers.append(name)
+    receipt.setdefault("owned_containers", []).append(name)
+    arguments = ["docker", "run", "--name", name, "--network=none", "--memory=512m", "--cpus=1", *extra,
+                 "-e", "OVDB_IMAGE_TEST=" + mode, "-e", "OVDB_IMAGE_EXPECT=" + expected,
+                 image, "-test.run=^TestProtectedImageLinuxJourney$", "-test.v", "-test.timeout=60s"]
+    started = time.monotonic()
+    command = {"argv": arguments, "outcome": "failed"}
+    receipt["commands"].append(command)
+    try:
+        output = run(arguments, timeout=90).decode()
+        command["output"] = output
+        print(output, end="", flush=True)
+        if "--- PASS: TestProtectedImageLinuxJourney" not in output or "--- SKIP:" in output:
+            raise RuntimeError("image experiment did not execute successfully")
+        command.update(outcome="passed", exit=0)
+    except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+        command["error"] = str(error)
+        raise
+    finally:
+        command["seconds"] = time.monotonic() - started
+        removed = remove_container(name, containers, receipt)
+    if not removed:
+        raise RuntimeError("runtime container cleanup failed")
+
+
+def experiment(receipt, prefix, images, containers):
+    # This fails clearly when unavailable; it never converts missing Docker into a skip.
+    engine = json.loads(run(["docker", "info", "--format", "{{json .}}"], timeout=30))
+    if engine.get("OSType") != "linux": raise RuntimeError("image experiment requires an existing Linux Docker engine")
+    receipt["docker_server"] = {k: engine.get(k) for k in ("ServerVersion", "OSType", "Architecture")}
+    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
+        directory = Path(temporary)
+        context = directory / "context"
+        context.mkdir()
+        generated = directory / "generated"
+        generated.mkdir()
+        inventory = test_selected_runtime.build_inventory(generated)
+        prepare_providers.validate_image_layout(inventory.parent)
+        shutil.copytree(inventory.parent, context / "fixture" / "output")
+        shutil.copy("fixture/UPSTREAM-LICENSE.md", context / "fixture" / "UPSTREAM-LICENSE.md")
+        shutil.copy("Dockerfile", context / "Dockerfile")
+        shutil.copytree("image-layout", context / "image-layout")
+        environment = {**os.environ, "GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"}
+        run(["go", "build", "-trimpath", "-o", str(context / "ovdb-cloud"), "."], timeout=300, environment=environment)
+        run(["go", "test", "-c", "-o", str(context / "image-test"), "."], timeout=300, environment=environment)
+        base = prefix + ":production-layout"
+        images.append(base)
+        run(["docker", "build", "--platform=linux/amd64", "-t", base, str(context)], timeout=300)
+        receipt["production_image"] = json.loads(run(["docker", "image", "inspect", base]))[0]
+        (context / "Dockerfile.test").write_text(f"FROM {base}\nCOPY --chown=0:0 --chmod=0555 image-test /srv/image-test\nENTRYPOINT [\"/srv/image-test\"]\n")
+        accepted = prefix + ":accepted"
+        images.append(accepted)
+        run(["docker", "build", "--platform=linux/amd64", "-f", str(context / "Dockerfile.test"), "-t", accepted, str(context)], timeout=120)
+        # Register the owned name before creation, including client-timeout paths.
+        container = prefix + "-export"
+        containers.append(container)
+        receipt.setdefault("owned_containers", []).append(container)
+        run(["docker", "create", "--name", container, accepted])
+        exported = run(["docker", "export", container])
+        receipt["final_entries"] = validate_export(exported)
+        receipt["export_sha256"] = hashlib.sha256(exported).hexdigest()
+        if not remove_container(container, containers, receipt):
+            raise RuntimeError("export container cleanup failed")
+        exercise(receipt, prefix, containers, accepted, "accept")
+        mutations = {"ancestor": "directory", "writable": "writable, linked", "owner": "not root-owned",
+                     "symlink": "writable, linked", "hardlink": "writable, linked", "fifo": "writable, linked",
+                     "wal-sidecar": "sidecar", "wal-header": "checkpointed", "truncated": "EOF", "pin": "hash does not match"}
+        for mutation, expected in mutations.items():
+            image = prefix + ":" + mutation
+            images.append(image)
+            run(["docker", "import", "--change", "USER 65532:65532", "--change", "ENV OVDB_SELECTED_STORAGE=protected-image",
+                 "--change", 'ENTRYPOINT ["/srv/image-test"]', "-", image], input_data=hostile_export(exported, mutation))
+            exercise(receipt, prefix, containers, image, "refuse", expected)
+        exercise(receipt, prefix, containers, accepted, "refuse", "actual UID/GID", ("--user=0:0",))
+        exercise(receipt, prefix, containers, accepted, "refuse", "overlaps protected image",
+                 ("--mount", f"type=bind,src={context / 'fixture' / 'output'},dst=/srv/fixture,readonly",))
+        receipt["outcome"] = "synthetic_image_pass"
+
+
 def main():
     report_path = Path(os.getenv("OVDB_IMAGE_REPORT", "image-runtime-report.json")).resolve()
     receipt = {"experiment": "tiny Linux protected-image runtime", "actual_corpus": False,
                "capacity_accepted": False, "platform_accepted": False, "commands": [],
-               "source_head": run(["git", "rev-parse", "HEAD"]).decode().strip()}
+               "outcome": "failed"}
     prefix = "ovdb-image-test-" + uuid.uuid4().hex[:12]
-    images = []
-    container = None
+    images, containers = [], []
     try:
-        # This fails clearly when unavailable; it never converts missing Docker into a skip.
-        engine = json.loads(run(["docker", "info", "--format", "{{json .}}"], timeout=30))
-        if engine.get("OSType") != "linux": raise RuntimeError("image experiment requires an existing Linux Docker engine")
-        receipt["docker_server"] = {k: engine.get(k) for k in ("ServerVersion", "OSType", "Architecture")}
-        with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
-            directory = Path(temporary)
-            context = directory / "context"
-            context.mkdir()
-            generated = directory / "generated"
-            generated.mkdir()
-            inventory = test_selected_runtime.build_inventory(generated)
-            prepare_providers.validate_image_layout(inventory.parent)
-            shutil.copytree(inventory.parent, context / "fixture" / "output")
-            shutil.copy("fixture/UPSTREAM-LICENSE.md", context / "fixture" / "UPSTREAM-LICENSE.md")
-            shutil.copy("Dockerfile", context / "Dockerfile")
-            shutil.copytree("image-layout", context / "image-layout")
-            environment = {**os.environ, "GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"}
-            run(["go", "build", "-trimpath", "-o", str(context / "ovdb-cloud"), "."], timeout=300, environment=environment)
-            run(["go", "test", "-c", "-o", str(context / "image-test"), "."], timeout=300, environment=environment)
-            base = prefix + ":production-layout"
-            images.append(base)
-            run(["docker", "build", "--platform=linux/amd64", "-t", base, str(context)], timeout=300)
-            receipt["production_image"] = json.loads(run(["docker", "image", "inspect", base]))[0]
-            (context / "Dockerfile.test").write_text(f"FROM {base}\nCOPY --chown=0:0 --chmod=0555 image-test /srv/image-test\nENTRYPOINT [\"/srv/image-test\"]\n")
-            accepted = prefix + ":accepted"
-            images.append(accepted)
-            run(["docker", "build", "--platform=linux/amd64", "-f", str(context / "Dockerfile.test"), "-t", accepted, str(context)], timeout=120)
-            container = run(["docker", "create", accepted]).decode().strip()
-            exported = run(["docker", "export", container])
-            receipt["final_entries"] = validate_export(exported)
-            receipt["export_sha256"] = hashlib.sha256(exported).hexdigest()
-            run(["docker", "rm", container]); container = None
-            def exercise(image, mode, expected="", extra=()):
-                started = time.monotonic()
-                arguments = ["docker", "run", "--rm", "--network=none", "--memory=512m", "--cpus=1", *extra,
-                             "-e", "OVDB_IMAGE_TEST=" + mode, "-e", "OVDB_IMAGE_EXPECT=" + expected,
-                             image, "-test.run=^TestProtectedImageLinuxJourney$", "-test.v", "-test.timeout=60s"]
-                output = run(arguments, timeout=90).decode()
-                print(output, end="", flush=True)
-                if "--- PASS: TestProtectedImageLinuxJourney" not in output or "--- SKIP:" in output:
-                    raise RuntimeError("image experiment did not execute successfully")
-                receipt["commands"].append({"argv": arguments, "seconds": time.monotonic()-started, "output": output, "exit": 0})
-            exercise(accepted, "accept")
-            mutations = {"ancestor": "directory", "writable": "writable, linked", "owner": "not root-owned",
-                         "symlink": "writable, linked", "hardlink": "writable, linked", "fifo": "writable, linked",
-                         "wal-sidecar": "sidecar", "wal-header": "checkpointed", "truncated": "EOF", "pin": "hash does not match"}
-            for mutation, expected in mutations.items():
-                image = prefix + ":" + mutation
-                images.append(image)
-                run(["docker", "import", "--change", "USER 65532:65532", "--change", "ENV OVDB_SELECTED_STORAGE=protected-image",
-                     "--change", 'ENTRYPOINT ["/srv/image-test"]', "-", image], input_data=hostile_export(exported, mutation))
-                exercise(image, "refuse", expected)
-            exercise(accepted, "refuse", "actual UID/GID", ("--user=0:0",))
-            exercise(accepted, "refuse", "overlaps protected image",
-                     ("--mount", f"type=bind,src={context / 'fixture' / 'output'},dst=/srv/fixture,readonly",))
-            receipt["outcome"] = "synthetic_image_pass"
+        receipt["source_head"] = run(["git", "rev-parse", "HEAD"]).decode().strip()
+        experiment(receipt, prefix, images, containers)
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
         receipt["outcome"], receipt["error"] = "failed", str(error)
         print("Linux image experiment FAILED:", error, file=sys.stderr)
-        return 1
     finally:
-        if container:
-            subprocess.run(["docker", "rm", "-f", container], timeout=30, check=False)
-        if images:
-            subprocess.run(["docker", "image", "rm", "-f", *images], timeout=60, check=False)
-        report_path.write_text(json.dumps(receipt, indent=2) + "\n")
-    return 0
+        try:
+            for name in list(containers):
+                remove_container(name, containers, receipt)
+            if images:
+                cleanup(["docker", "image", "rm", "-f", *images], 60, receipt)
+        finally:
+            receipt["owned_images"] = list(images)
+            receipt["remaining_containers"] = list(containers)
+            receipt["cleanup_complete"] = not containers and not receipt.get("cleanup_errors")
+            if not receipt["cleanup_complete"]:
+                receipt["outcome"] = "failed"
+            report_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    return 0 if receipt["outcome"] == "synthetic_image_pass" else 1
 
 
 if __name__ == "__main__":
