@@ -163,22 +163,66 @@ native identifier semantics. Empty or non-unique transport identities refuse
 preparation. Sources remain unchanged unless the caller explicitly consumes a
 verified temporary staging source.
 
-Only opt-in YAML adds `storage.sqlite.record_keys` and `busy_timeout: 0s`.
-The YAML owns the complete table-to-serving-column map. Version 2 generated
-`inventory.json` adds `manifestSha256` and copies supplied adapter/profile
-values, without a second key map. This is **offline artifact preparation only**:
-the current Go runtime rejects inventory version 2, and its existing manifest
-parser rejects the new SQLite fields. `readProfile` is a future runtime policy
-input; preparing it does not enforce HTTP limits or authorize publication.
-Do not change production provider entries until released OVDB/SQL prerequisites
-and the separately reviewed runtime integration have landed.
+For `readProfile: "bounded-immutable/1"`, a closed `publisherManifest`
+`{path, sha256, bytes}` is mandatory. It is fetched from the same repository and
+full revision as other metadata, verified before the SQLite artifact is fetched,
+and parsed by `cmd/publisher-selection` using the existing pinned Go YAML library.
+Opt-in preparation needs the Go toolchain and module cache and invokes the helper
+once per provider. Legacy preparation remains standalone Python. The YAML parser
+rejects aliases, anchors, duplicate keys, unknown root fields, multiple documents
+and files over 2 MiB.
 
-The follow-on adoption work owns public route/homepage/descriptor/attribution
-preparation, descriptor field naming, runtime inventory validation, verified
-manifest mounting, four-pin immutable reads, request deadlines/order/CORS,
-smoke, and full six-plus-two capacity/publication proof. This offline version 2
-subset deliberately refuses those future input fields rather than silently
-ignoring them. W1 no-website wrappers therefore await that integration.
+The pinned publisher's `recordsets` is the sole selection authority. Only those
+physical tables receive serving helpers, indexes, schema collections and the
+complete `storage.sqlite.record_keys` map with `busy_timeout: 0s`. All native
+tables, including unselected diagnostics, retain their metadata and typed values
+in the serving copy. The public descriptor's selected native schema, homepage,
+Cloud routes and query availability must agree with provider/publisher metadata.
+There is no provider-name selection branch or second authored selection list.
+
+Runtime inventory version 2 adds `manifestSha256`, adapter/profile and publisher
+pin, a closed `publicDescriptor` pin and explicit boolean `requirePublishedQuery`.
+Preparation copies checked bytes to `<id>.publisher.yaml` and `<id>.descriptor.json`;
+original pin paths identify the files in the same pinned provider repository.
+Before mounting, runtime checks these pins, selection, generated schema/key
+allocation and native field types, exact routes and descriptor capability flags.
+Mixed version 2 inventories include legacy entries with manifest hashes. Version 1
+retains its receipt shape and refuses opt-in profile fields.
+
+Bounded startup streams SQLite through a held handle into a new private directory,
+hashes exactly the copied bytes, writes exactly the hashed/parsed manifest bytes
+there, then seals the directory (0500) and files (0400) before mounting. The driver
+opens private paths; replacing original files cannot replace mounted bytes. The
+service exposes only the handler, with no remount API. This trusts the process
+owner and OS credentials; another process with the same credentials deliberately
+modifying private files is outside this boundary. Closing a database removes its
+snapshot; failed startup removes staging copies. Metadata is bounded to 2 MiB per
+file and SQLite to 2 GiB per provider. The additional complete disk copy and startup
+hashing cost require six-plus-two capacity measurement; tiny fixtures establish no
+production memory/disk or latency headroom. Using the current native snapshot
+sizes only as an estimate, ROR's 238,563,328 bytes add 227.51 MiB (44.44% of
+512 MiB); Geo's 75,304,960 bytes add 71.82 MiB. Together these copies alone are
+299.33 MiB (58.46%), before serving helpers, the six legacy providers, heap,
+SQLite connections/cache and snapshot spooling. These are source-size arithmetic,
+not measured serving sizes or admitted memory use. Cloud Run's [writable
+filesystem uses instance memory](https://docs.cloud.google.com/run/docs/container-contract#filesystem).
+If this copy approach fails the later unchanged 512 MiB capacity gate, an image
+immutable binding must receive its own reviewed identity proof; do not increase
+resources or truncate native diagnostics to conceal the cost.
+
+`server.NewChecked` derives immutable per-database profiles from checked inventory.
+Candidate query advertisement stays false; final advertisement requires matching
+descriptor flags. The library mount verifies every selected serving ID. Legacy
+providers retain their read/snapshot behavior and existing limits, including the
+48 AdventureWorks decimal fields.
+
+This slice covers server preparation and startup. Production `providers.json`
+still has six providers. Four-pin HTTP guards, deadline/cache middleware, Worker
+propagation, public descriptor routes, attribution downloads, deploy verification
+and smoke, actual Geo/ROR preparation and all-key proof, six-plus-two capacity and
+live journeys, final wrapper repins, Directory and App admission remain downstream
+gates. Opt-in inventories are local test inputs until these gates pass. No public
+provider admission or deployment is authorized by these changes.
 
 All immutable network assets use the exact raw GitHub HTTPS origin and a full
 40-hex commit. Every relative path segment is validated before URL encoding;
