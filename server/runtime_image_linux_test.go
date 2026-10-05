@@ -49,7 +49,7 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 				selectedCount += len(provider.SmokeRecordsets)
 			}
 			for _, table := range provider.SmokeRecordsets {
-				profile := selectedRequest(handler, http.MethodGet, "/v1/databases/"+provider.ID+"/collections/"+table, "")
+				profile := selectedRequest(handler, http.MethodGet, "/ovdb/dbs/"+provider.ID+"/collections/"+table, "")
 				if profile.Code != http.StatusOK {
 					t.Fatalf("schema/metadata: %d %s", profile.Code, profile.Body.String())
 				}
@@ -109,7 +109,7 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 			t.Fatalf("native/selected: %d/%d", nativeCount, selectedCount)
 		}
 		for _, table := range []string{"table_08", "table_09", "table_10", "table_11", "table_12"} {
-			if response := selectedRequest(handler, http.MethodGet, "/v1/databases/candidate/collections/"+table, ""); response.Code == 200 {
+			if response := selectedRequest(handler, http.MethodGet, "/ovdb/dbs/candidate/collections/"+table, ""); response.Code == 200 {
 				t.Fatal("diagnostic metadata exposed")
 			}
 			for _, query := range []string{"from: {name: " + table + "}\nlimit: 1\n", "from: {name: table_00}\nwhere: {op: in, left: {field: native_key}, right: {query: {from: {name: " + table + "}}}}\nlimit: 1\n"} {

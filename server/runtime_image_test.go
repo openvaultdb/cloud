@@ -180,3 +180,29 @@ func TestExplicitSealedCopyStartupRetainsSelectedAndLegacy(t *testing.T) {
 		t.Fatal("copy close removed original")
 	}
 }
+
+func TestImageProofMetadataRoutes(t *testing.T) {
+	_, providers := selectedInventoryFixture(t)
+	handler, closeDBs, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := closeDBs(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, provider := range providers {
+		for _, table := range provider.SmokeRecordsets {
+			response := selectedRequest(handler, "GET", "/ovdb/dbs/"+provider.ID+"/collections/"+table, "")
+			if response.Code != 200 || !strings.Contains(response.Body.String(), "native_key") {
+				t.Fatalf("metadata route: %d %s", response.Code, response.Body.String())
+			}
+		}
+	}
+	for _, path := range []string{"/ovdb/dbs/candidate/collections/table_12", "/v1/databases/candidate/records/table_12/simple"} {
+		if response := selectedRequest(handler, "GET", path, ""); response.Code == 200 {
+			t.Fatal("hidden diagnostic admitted")
+		}
+	}
+}
