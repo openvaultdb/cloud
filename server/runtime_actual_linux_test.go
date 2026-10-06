@@ -45,7 +45,12 @@ func actualEmit(t *testing.T, marker string, receipt map[string]any) {
 }
 
 func actualCgroup() (map[string]any, error) {
-	result := map[string]any{}
+	result := map[string]any{"process_namespace_pid": os.Getpid()}
+	cgroupIdentity, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return nil, err
+	}
+	result["process_cgroup_identity"] = strings.TrimSpace(string(cgroupIdentity))
 	for _, name := range []string{"memory.current", "memory.peak", "memory.max", "cpu.max", "memory.stat", "memory.events"} {
 		data, err := os.ReadFile("/sys/fs/cgroup/" + name)
 		if err != nil {
@@ -652,7 +657,16 @@ func TestActualCapacity(t *testing.T) {
 		t.Fatalf("natural occupancy %d/%d: %v", count, retained, err)
 	}
 	receipt["natural_spools"] = map[string]any{"files": count, "bytes": retained, "slot_close_reuse": true, "stable_page_retry": true, "snapshots": []actualSnapshot{second, reused}}
+	naturalMetrics, err := actualCgroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt["natural_spools_memory"] = naturalMetrics
 	receipt["load_natural_spools"] = actualMatrix(t, handler, w1)
+	observedCount, observedBytes, err := actualSpools()
+	if err != nil || observedCount != 2 || observedBytes != retained {
+		t.Fatal("natural retained envelope expired or changed during workload")
+	}
 	monitor.setPhase("ballast-envelope")
 	ballast := actualEnvelope - retained
 	ballastPath := filepath.Join(os.TempDir(), "ovdb-capacity-envelope-ballast")
@@ -680,8 +694,28 @@ func TestActualCapacity(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	receipt["capacity_envelope"] = map[string]any{"actual_natural_spool_bytes": retained, "separately_labelled_ballast_bytes": written, "total_tmpfs_bytes": retained + written, "ballast_is_snapshot_data": false}
+	info, err := os.Stat(ballastPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocation, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("ballast lacks actual Linux block allocation evidence")
+	}
+	allocatedBytes := allocation.Blocks * 512
+	if written != ballast || info.Size() != ballast || allocatedBytes < ballast {
+		t.Fatal("ballast was not fully written and allocated; sparse files are not envelope proof")
+	}
+	envelopeMetrics, err := actualCgroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt["capacity_envelope"] = map[string]any{"actual_natural_spool_bytes": retained, "requested_ballast_bytes": ballast, "realized_ballast_bytes": info.Size(), "allocated_ballast_block_bytes": allocatedBytes, "separately_labelled_ballast_bytes": written, "total_tmpfs_bytes": retained + info.Size(), "ballast_is_snapshot_data": false, "memory": envelopeMetrics}
 	receipt["load_ballast_envelope"] = actualMatrix(t, handler, w1)
+	observedCount, observedBytes, err = actualSpools()
+	if err != nil || observedCount != 2 || observedBytes != retained {
+		t.Fatal("natural spools expired during ballast workload; full retained-envelope proof incomplete")
+	}
 	monitor.setPhase("idle-five-minute-expiry")
 	expiry, err := time.Parse(time.RFC3339, reused.Expires)
 	if err != nil {

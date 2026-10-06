@@ -277,6 +277,7 @@ def experiment(commands, directory, receipt, prefix, containers, images):
     receipt["owned_containers"].append(production)
     started = time.monotonic()
     commands.run(["docker", "run", "-d", "--name", production, *limits, test], timeout=10)
+    receipt["production_start_identity"] = json.loads(commands.run(["docker", "inspect", production], timeout=10))[0]
     probe = commands.run(["docker", "exec", "-e", "OVDB_ACTUAL_PROBE=1", production,
                           "/srv/actual-test", "-test.run=^TestActualProductionProbe$", "-test.v", "-test.timeout=230s"], timeout=230)
     receipt["production_probe"] = parse_go_receipt(probe, "ACTUAL_PROBE_JSON=")
@@ -297,9 +298,17 @@ def experiment(commands, directory, receipt, prefix, containers, images):
     workload = prefix + "-workload"
     containers.append(workload)
     receipt["owned_containers"].append(workload)
-    output = commands.run(["docker", "run", "--name", workload, *limits, "-e", "OVDB_ACTUAL_CAPACITY=1",
-                           "--entrypoint=/srv/actual-test", test, "-test.run=^TestActualCapacity$",
-                           "-test.v", "-test.timeout=510s"], timeout=530, minimum=345)
+    # Detached start permits exact live host PID/CID binding before observing
+    # logs. The Go result and final exit/OOM state are independently required.
+    commands.budget(530, minimum=345)
+    commands.run(["docker", "create", "--name", workload, *limits, "-e", "OVDB_ACTUAL_CAPACITY=1",
+                  "--entrypoint=/srv/actual-test", test, "-test.run=^TestActualCapacity$",
+                  "-test.v", "-test.timeout=510s"], timeout=10)
+    commands.run(["docker", "start", workload], timeout=10)
+    receipt["workload_start_identity"] = json.loads(commands.run(["docker", "inspect", workload], timeout=10))[0]
+    if not receipt["workload_start_identity"]["State"]["Running"] or receipt["workload_start_identity"]["State"]["Pid"] <= 0:
+        raise RuntimeError("workload has no live stable PID/cgroup identity")
+    output = commands.run(["docker", "logs", "-f", workload], timeout=530, minimum=345)
     receipt["workload"] = parse_go_receipt(output, "ACTUAL_CAPACITY_JSON=")
     workload_info = json.loads(commands.run(["docker", "inspect", workload], timeout=10))[0]
     receipt.setdefault("owned_container_states", {})[workload] = workload_info
