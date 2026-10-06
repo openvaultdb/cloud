@@ -125,6 +125,43 @@ func TestSharedEndpointLargestWork(t *testing.T) {
             self.assertIn("--- PASS: TestSharedEndpointLargestWork", result.stdout)
             self.assertNotIn("--- SKIP:", result.stdout)
 
+    def test_actual_manifest_read_uses_real_loader_resolved_path(self):
+        source = Path(actual.__file__).with_name("runtime_actual_linux_test.go").read_text()
+        start = source.index("\n", source.index("// actualManifestReadStart:")) + 1
+        end = source.index("// actualManifestReadEnd", start)
+        manifest_read = source[start:end]
+        # Compile the actual harness seam into the native package through an
+        # overlay. The existing tiny-fixture factory calls the REAL production
+        # loadRuntimeInventory, including pin validation and path resolution.
+        # No Docker, Linux counters, port or replica loader is involved.
+        regression = r'''
+func TestActualResolvedManifestRead(t *testing.T) {
+ _, providers := selectedInventoryFixture(t)
+ selected := 0
+ for _, provider := range providers {
+  if provider.ReadProfile == "" { continue }
+  selected++
+  if !filepath.IsAbs(provider.Manifest) { t.Fatalf("loader did not resolve %q",provider.Manifest) }
+  bytes, err := actualReadResolvedManifest(provider)
+  if err != nil { t.Fatalf("actual harness could not read loader-resolved manifest: %v",err) }
+  if _,err := manifest.Parse(bytes); err != nil { t.Fatalf("actual resolved manifest invalid: %v",err) }
+  if _,err := os.ReadFile(provider.License); err != nil { t.Fatalf("loader-resolved license invalid: %v",err) }
+ }
+ if selected != 2 { t.Fatalf("missing selected profile fixtures: %d",selected) }
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            probe = root/"manifest_read_test.go"
+            probe.write_text('package main\nimport ("testing"; "os"; "path/filepath"; "github.com/openvaultdb/openvaultdb-go/pkg/manifest")\n'+manifest_read+regression)
+            virtual = Path(actual.__file__).resolve().parent/"cloudproof_resolved_manifest_regression_test.go"
+            overlay = root/"overlay.json"
+            overlay.write_text(json.dumps({"Replace": {str(virtual): str(probe)}}))
+            result = subprocess.run(["go", "test", "-overlay", str(overlay), ".", "-run", "^TestActualResolvedManifestRead$", "-count=1", "-v"], cwd=virtual.parent, capture_output=True, text=True, timeout=120)
+            self.assertEqual(0, result.returncode, result.stdout+result.stderr)
+            self.assertIn("--- PASS: TestActualResolvedManifestRead", result.stdout)
+            self.assertNotIn("--- SKIP:", result.stdout)
+
     def test_exact_workflow_head_refuses_merge_head_before_docker(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary)/"report.json"

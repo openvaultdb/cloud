@@ -439,6 +439,14 @@ func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[str
 	return results
 }
 
+// actualManifestReadStart: portable regression exercises this exact read with the real inventory loader.
+func actualReadResolvedManifest(provider runtimeDatabase) ([]byte, error) {
+	// loadRuntimeInventory already resolves Manifest and License against its base.
+	return os.ReadFile(provider.Manifest)
+}
+
+// actualManifestReadEnd
+
 func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtimeDatabase) ([]actualWork, map[string]any) {
 	t.Helper()
 	selection := actualWorkSelector{}
@@ -462,7 +470,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 		if err != nil {
 			t.Fatal(err)
 		}
-		bytes, err = os.ReadFile(filepath.Join(protectedFixtureRoot, provider.Manifest))
+		bytes, err = actualReadResolvedManifest(provider)
 		if err != nil {
 			t.Fatal(err)
 		}
