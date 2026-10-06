@@ -1,5 +1,7 @@
 name: Actual corpus runtime candidate
 on:
+  pull_request:
+    paths: ['server/**', '.github/workflows/actual-runtime.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -7,10 +9,16 @@ jobs:
   actual-linux-candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      OVDB_ACTUAL_EXPECTED_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+      OVDB_ACTUAL_EVENT: ${{ github.event_name }}
     steps:
       - name: Start finite job budget before prerequisites
         run: echo "OVDB_ACTUAL_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: '1.27.0'

@@ -221,6 +221,13 @@ def parse_go_receipt(output, marker):
     return receipt
 
 
+
+def validate_source_head(actual, expected):
+    if expected and (not prepare_providers.COMMIT_PATTERN.fullmatch(expected) or actual != expected):
+        raise ValueError("checked-out source differs from exact workflow source head")
+    if os.getenv("GITHUB_ACTIONS") == "true" and not expected:
+        raise ValueError("hosted experiment lacks exact workflow source-head binding")
+
 def cleanup_owned(commands, containers, images, receipt):
     errors = receipt.setdefault("cleanup_errors", [])
     for name in list(containers):
@@ -347,6 +354,9 @@ def main():
     images, containers = [], []
     try:
         receipt["source_head"] = commands.run(["git", "rev-parse", "HEAD"], timeout=10).strip()
+        receipt["expected_source_head"] = os.getenv("OVDB_ACTUAL_EXPECTED_SOURCE", "")
+        receipt["workflow_event"] = os.getenv("OVDB_ACTUAL_EVENT", "")
+        validate_source_head(receipt["source_head"], receipt["expected_source_head"])
         with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
             experiment(commands, Path(temporary), receipt, prefix, containers, images)
     except Exception as error:

@@ -66,7 +66,7 @@ class ActualHarnessTest(unittest.TestCase):
                 containers.append("owned-timeout")
                 images.append("owned:image")
                 raise RuntimeError("primary production timeout")
-            with patch.object(actual.sys, "argv", ["test", "--report", str(report)]), patch.object(actual, "experiment", side_effect=failure), patch.object(actual.Commands, "run", side_effect=["source-head", RuntimeError("inspect failed"), RuntimeError("logs failed"), RuntimeError("cleanup failed"), RuntimeError("image cleanup failed")]), contextlib.redirect_stderr(io.StringIO()):
+            with patch.dict(actual.os.environ, {"GITHUB_ACTIONS":"false", "OVDB_ACTUAL_EXPECTED_SOURCE":"", "OVDB_ACTUAL_EVENT":""}), patch.object(actual.sys, "argv", ["test", "--report", str(report)]), patch.object(actual, "experiment", side_effect=failure), patch.object(actual.Commands, "run", side_effect=["source-head", RuntimeError("inspect failed"), RuntimeError("logs failed"), RuntimeError("cleanup failed"), RuntimeError("image cleanup failed")]), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(1, actual.main())
             receipt = json.loads(report.read_bytes())
             self.assertEqual("primary production timeout", receipt["primary_error"])
@@ -88,6 +88,62 @@ class ActualHarnessTest(unittest.TestCase):
         for output in (passed+passed, passed+'--- SKIP: test\n', 'ACTUAL_CAPACITY_JSON={"outcome":"failed"}\n', 'PASS\n', 'ACTUAL_CAPACITY_JSON={"outcome":"passed"}\n'):
             with self.assertRaises(RuntimeError):
                 actual.parse_go_receipt(output, "ACTUAL_CAPACITY_JSON=")
+
+    def test_shared_endpoint_retains_largest_work_using_exact_go_selector(self):
+        source = Path(actual.__file__).with_name("runtime_actual_linux_test.go").read_text()
+        start = source.index("\n", source.index("// actualSelectionStart:")) + 1
+        end = source.index("// actualSelectionEnd", start)
+        selector = source[start:end]
+        # Actual pinned ordering has Geo's largest table after its first table;
+        # ROR's first table is its largest. Exercise the real add/largest seam,
+        # including identical provider endpoints and the full selected body.
+        regression = r'''
+func TestSharedEndpointLargestWork(t *testing.T) {
+ selection := actualWorkSelector{}
+ fixtures := []struct { provider, table string; rows int64 }{
+  {"geonames", "geonames_admin1", 3865},
+  {"geonames", "geonames_alternate_names", 844831},
+  {"ror", "locations", 141722},
+  {"ror", "organizations", 141528},
+  {"ror", "relationships", 72747},
+ }
+ for _, fixture := range fixtures {
+  name := fixture.provider+"/"+fixture.table
+  selection.add(fixture.provider, fixture.rows, actualWork{name:name, path:"/v1/databases/"+fixture.provider+"/dtql", body:name+"-body", want:200})
+ }
+ if len(selection.works)!=len(fixtures) { t.Fatalf("shared endpoints dropped selected works: %d",len(selection.works)) }
+ largest:=selection.largest()
+ if len(largest)!=2 || largest[0].name!="geonames/geonames_alternate_names" || largest[1].name!="ror/locations" { t.Fatalf("wrong largest works: %+v",largest) }
+ if largest[0].body!="geonames/geonames_alternate_names-body" || largest[1].body!="ror/locations-body" { t.Fatal("largest request body lost") }
+}
+'''
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = Path(temporary)/"selection_test.go"
+            probe.write_text('package main\nimport "testing"\n'+selector+regression)
+            result = subprocess.run(["go", "test", str(probe), "-run", "^TestSharedEndpointLargestWork$", "-count=1", "-v"], capture_output=True, text=True, timeout=60)
+            self.assertEqual(0, result.returncode, result.stdout+result.stderr)
+            self.assertIn("--- PASS: TestSharedEndpointLargestWork", result.stdout)
+            self.assertNotIn("--- SKIP:", result.stdout)
+
+    def test_exact_workflow_head_refuses_merge_head_before_docker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary)/"report.json"
+            with patch.dict(actual.os.environ, {"GITHUB_ACTIONS":"true", "OVDB_ACTUAL_EXPECTED_SOURCE":"b"*40}), patch.object(actual.sys, "argv", ["test", "--report", str(report)]), patch.object(actual.Commands, "run", return_value="a"*40), patch.object(actual, "experiment") as experiment, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(1, actual.main())
+                experiment.assert_not_called()
+            receipt = json.loads(report.read_bytes())
+            self.assertEqual("a"*40, receipt["source_head"])
+            self.assertEqual("b"*40, receipt["expected_source_head"])
+            self.assertEqual("failed", receipt["outcome"])
+            self.assertIn("exact workflow source head", receipt["primary_error"])
+            self.assertTrue(receipt["cleanup_complete"])
+
+    def test_hosted_source_binding_rejects_missing_or_noncanonical_revision(self):
+        with patch.dict(actual.os.environ, {"GITHUB_ACTIONS":"true"}):
+            for expected in ("", "main", "A"*40):
+                with self.assertRaises(ValueError):
+                    actual.validate_source_head("a"*40, expected)
+            actual.validate_source_head("a"*40, "a"*40)
 
     def test_native_proof_covers_diagnostic_values_not_just_selected_helpers(self):
         with tempfile.TemporaryDirectory() as temporary:

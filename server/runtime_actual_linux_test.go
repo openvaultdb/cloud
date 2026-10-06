@@ -313,11 +313,45 @@ func actualCancel(t *testing.T, handler http.Handler) map[string]any {
 	return map[string]any{"seconds": time.Since(started).Seconds(), "response_status": result.Code, "partial_construction_observed": true, "remaining_spools": count}
 }
 
+// actualSelectionStart: portable regression compiles this exact harness seam.
 type actualWork struct {
 	name, path, body string
 	want             int
 	errorCode, route string
 }
+
+type actualMeasuredWork struct {
+	databaseID string
+	rows       int64
+	work       actualWork
+}
+
+type actualWorkSelector struct{ works []actualMeasuredWork }
+
+func (s *actualWorkSelector) add(databaseID string, rows int64, work actualWork) {
+	// Each selected table is a distinct workload even when endpoints are shared.
+	s.works = append(s.works, actualMeasuredWork{databaseID: databaseID, rows: rows, work: work})
+}
+
+func (s *actualWorkSelector) largest() []actualWork {
+	result := []actualWork{}
+	positions := map[string]int{}
+	maxima := map[string]int64{}
+	for _, measured := range s.works {
+		position, exists := positions[measured.databaseID]
+		if !exists {
+			positions[measured.databaseID] = len(result)
+			maxima[measured.databaseID] = measured.rows
+			result = append(result, measured.work)
+		} else if measured.rows > maxima[measured.databaseID] {
+			maxima[measured.databaseID] = measured.rows
+			result[position] = measured.work
+		}
+	}
+	return result
+}
+
+// actualSelectionEnd
 
 func actualExecute(handler http.Handler, work actualWork) (map[string]any, error) {
 	started := time.Now()
@@ -407,7 +441,7 @@ func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[str
 
 func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtimeDatabase) ([]actualWork, map[string]any) {
 	t.Helper()
-	works := []actualWork{}
+	selection := actualWorkSelector{}
 	proof := map[string]any{}
 	nativeCount, selectedCount := 0, 0
 	var keys int64
@@ -497,9 +531,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 			}
 			// Record every selected table before deriving the largest paired workload.
 			tables = append(tables, map[string]any{"table": table, "rows": count, "last_key_read": true})
-			if len(works) == 0 || works[len(works)-1].path != work.path {
-				works = append(works, work)
-			}
+			selection.add(provider.ID, count, work)
 		}
 		rows, err := raw.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
@@ -545,27 +577,8 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 	}
 	proof["native_tables"], proof["selected_tables"], proof["keys_validated_at_startup"] = nativeCount, selectedCount, keys
 	proof["key_method"] = "production checked mount validates every helper key; Python preparation separately scans all typed native values and all keys; HTTP final-key reads are additional samples"
-	// Derive largest selected table per provider from the measured counts above.
-	largest := []actualWork{}
-	for _, provider := range providers {
-		if provider.ReadProfile == "" {
-			continue
-		}
-		tables := proof[provider.ID].([]map[string]any)
-		maxRows := int64(-1)
-		name := ""
-		for _, table := range tables {
-			if table["rows"].(int64) > maxRows {
-				maxRows = table["rows"].(int64)
-				name = table["table"].(string)
-			}
-		}
-		for _, work := range works {
-			if work.name == provider.ID+"/"+name {
-				largest = append(largest, work)
-			}
-		}
-	}
+	// Derive largest selected table per provider from all actual measured works.
+	largest := selection.largest()
 	if len(largest) != 2 {
 		t.Fatal("missing two actual W1 workloads")
 	}
