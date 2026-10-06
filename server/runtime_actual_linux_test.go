@@ -50,15 +50,16 @@ func actualCgroup() (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("required cgroup v2 %s: %w", name, err)
 		}
-		if name == "memory.current" || name == "memory.peak" || name == "memory.max" {
+		switch name {
+		case "memory.current", "memory.peak", "memory.max":
 			n, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
 			if err != nil {
 				return nil, err
 			}
 			result[name] = n
-		} else if name == "cpu.max" {
+		case "cpu.max":
 			result[name] = strings.TrimSpace(string(data))
-		} else {
+		default:
 			values := map[string]uint64{}
 			fields := strings.Fields(string(data))
 			if len(fields)%2 != 0 {
@@ -242,7 +243,7 @@ func actualCapture(t *testing.T, handler http.Handler, database, query string) a
 		t.Fatalf("natural capture failed: %d %s", response.Code, response.Body.String())
 	}
 	expiry, err := time.Parse(time.RFC3339, snapshot.Expires)
-	if err != nil || expiry.Sub(started) < 299*time.Second || expiry.Sub(time.Now()) > 301*time.Second {
+	if err != nil || expiry.Sub(started) < 299*time.Second || time.Until(expiry) > 301*time.Second {
 		t.Fatalf("actual five-minute expiry: %s %v", snapshot.Expires, err)
 	}
 	return snapshot
