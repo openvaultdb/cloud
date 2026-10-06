@@ -127,11 +127,20 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 		origins = append(origins, origin)
 	}
 	sort.Strings(origins)
+	cors := server.ParseCORSOrigins(origins)
+	if cors != nil {
+		pins := []string{"OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256"}
+		var err error
+		cors, err = cors.WithHeaders(pins, pins)
+		if err != nil {
+			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+		}
+	}
 	options := append(cloudServerOptions(),
 		server.WithReadOnly(true),
 		server.WithDatabaseReadProfiles(profiles),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
-		server.WithCORS(server.ParseCORSOrigins(origins)),
+		server.WithCORS(cors),
 	)
 	checked, err := server.NewChecked("demodb-cloud", databases, options...)
 	if err != nil {

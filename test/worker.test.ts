@@ -287,7 +287,80 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
 });
 
 describe("public Chinook OVDB proxy", () => {
-  it.each(["https://datatug.app", "https://datatug.app.evil.example"])("passes through OPTIONS without synthesizing CORS for %s", async (origin) => {
+  // Synthetic transport contract; these pins do not describe hosted providers.
+  const expectedPins = {
+    "OVDB-Provider-Revision": "a".repeat(40),
+    "OVDB-Source-SHA256": "b".repeat(64),
+    "OVDB-Serving-SHA256": "c".repeat(64),
+    "OVDB-Manifest-SHA256": "d".repeat(64),
+  };
+  const pinNames = Object.keys(expectedPins);
+  const requestedHeaders = ["Content-Type", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close", ...pinNames].join(",");
+
+  it.each(["valid", ...pinNames.map((name) => `missing:${name}`), ...pinNames.map((name) => `changed:${name}`), ...pinNames.map((name) => `empty:${name}`)])(
+    "preserves independently checked request pins: %s", async (control) => {
+      const requests: Request[] = [];
+      const checkedWorker = createWorker(async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        expect(init?.redirect).toBe("manual");
+        const mismatch = Object.entries(expectedPins).find(([name, value]) => request.headers.get(name) !== value);
+        return Response.json(mismatch ? { error: "pin_mismatch", pin: mismatch[0] } : { records: [{ key: "synthetic" }] }, {
+          status: mismatch ? 409 : 200,
+          headers: {
+            ...expectedPins,
+            "Access-Control-Allow-Origin": "https://datatug.app",
+            "Access-Control-Expose-Headers": pinNames.join(","),
+            Authorization: "Bearer upstream-secret", "Set-Cookie": "secret=1",
+            "Access-Control-Allow-Credentials": "true",
+          },
+        });
+      });
+      const headers = new Headers({ ...expectedPins, "Content-Type": "application/json", Origin: "https://datatug.app", Authorization: "Bearer caller-secret", Cookie: "secret=1" });
+      if (control.startsWith("missing:")) headers.delete(control.slice(8));
+      if (control.startsWith("changed:")) headers.set(control.slice(8), "0".repeat(64));
+      if (control.startsWith("empty:")) headers.set(control.slice(6), "");
+      const response = await (checkedWorker.fetch as unknown as typeof fetchWorker)(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+        method: "POST", headers, body: JSON.stringify({ query: "from: {name: Album}\nlimit: 1" }),
+      }), { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
+      expect(requests).toHaveLength(1);
+      for (const name of pinNames) expect(requests[0].headers.get(name)).toBe(headers.get(name));
+      expect(requests[0].headers.get("Authorization")).toBeNull();
+      expect(requests[0].headers.get("Cookie")).toBeNull();
+      expect(response.status).toBe(control === "valid" ? 200 : 409);
+      const body = await response.json() as { records?: unknown[]; error?: string };
+      if (control === "valid") expect(body.records).toHaveLength(1);
+      else { expect(body.error).toBe("pin_mismatch"); expect(body.records).toBeUndefined(); }
+      for (const [name, value] of Object.entries(expectedPins)) expect(response.headers.get(name)).toBe(value);
+      expect(response.headers.get("Access-Control-Expose-Headers")?.split(",")).toEqual(pinNames);
+      expect(response.headers.get("Authorization")).toBeNull();
+      expect(response.headers.get("Set-Cookie")).toBeNull();
+      expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    },
+  );
+
+  it.each([...pinNames, "Access-Control-Expose-Headers"])("does not manufacture an absent upstream response header %s", async (missing) => {
+    const headers = new Headers({ ...expectedPins, "Access-Control-Expose-Headers": pinNames.join(",") });
+    headers.delete(missing);
+    const upstreamWorker = createWorker(async () => Response.json({ records: [] }, { headers }));
+    const response = await (upstreamWorker.fetch as unknown as typeof fetchWorker)(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+      method: "POST", headers: expectedPins, body: "{}",
+    }), { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
+    for (const name of [...pinNames, "Access-Control-Expose-Headers"]) expect(response.headers.get(name)).toBe(headers.get(name));
+    expect(response.headers.get(missing)).toBeNull();
+  });
+
+  it.each(pinNames)("preserves a changed upstream response pin %s for client rejection", async (changed) => {
+    const headers = new Headers({ ...expectedPins, "Access-Control-Expose-Headers": pinNames.join(",") });
+    headers.set(changed, "unexpected-serving-pin");
+    const upstreamWorker = createWorker(async () => Response.json({ records: [] }, { headers }));
+    const response = await (upstreamWorker.fetch as unknown as typeof fetchWorker)(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+      method: "POST", headers: expectedPins, body: "{}",
+    }), { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
+    for (const name of pinNames) expect(response.headers.get(name)).toBe(headers.get(name));
+    expect(response.headers.get(changed)).toBe("unexpected-serving-pin");
+  });
+  it.each(["https://datatug.app", "https://datatug.app.evil.example", "https://evil.datatug.app", "http://datatug.app", "https://datatug.app:444", "null"])("passes through OPTIONS without synthesizing CORS for %s", async (origin) => {
     const forwarded: Request[] = [];
     const allowed = origin === "https://datatug.app";
     const chinookWorker = createWorker(async (input, init) => {
@@ -299,7 +372,7 @@ describe("public Chinook OVDB proxy", () => {
         ...(allowed ? {
           "Access-Control-Allow-Origin": origin,
           "Access-Control-Allow-Methods": "GET,HEAD,POST",
-          "Access-Control-Allow-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close",
+          "Access-Control-Allow-Headers": requestedHeaders,
           "Access-Control-Max-Age": "600",
         } : {}),
         "Set-Cookie": "must-not-leak=1",
@@ -309,13 +382,13 @@ describe("public Chinook OVDB proxy", () => {
     const response = await fetchChinook(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
       method: "OPTIONS", headers: {
         Origin: origin, "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close",
+        "Access-Control-Request-Headers": requestedHeaders,
         Authorization: "Bearer must-not-forward", Cookie: "secret=1",
       },
     }), { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
     expect(response.status).toBe(204);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe(allowed ? origin : null);
-    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(allowed ? "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close" : null);
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(allowed ? requestedHeaders : null);
     expect(response.headers.get("Access-Control-Allow-Methods")).toBe(allowed ? "GET,HEAD,POST" : null);
     expect(response.headers.get("Vary")).toBe("Origin");
     expect(response.headers.get("Set-Cookie")).toBeNull();
@@ -323,7 +396,7 @@ describe("public Chinook OVDB proxy", () => {
     expect(forwarded[0].method).toBe("OPTIONS");
     expect(forwarded[0].headers.get("Origin")).toBe(origin);
     expect(forwarded[0].headers.get("Access-Control-Request-Method")).toBe("POST");
-    expect(forwarded[0].headers.get("Access-Control-Request-Headers")).toBe("Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close");
+    expect(forwarded[0].headers.get("Access-Control-Request-Headers")).toBe(requestedHeaders);
     expect(forwarded[0].headers.get("Authorization")).toBeNull();
     expect(forwarded[0].headers.get("Cookie")).toBeNull();
   });

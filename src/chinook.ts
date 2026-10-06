@@ -3,6 +3,13 @@ import type { UpstreamFetch } from "./proxy";
 
 type ChinookEnv = Env & { CHINOOK_RUN_ORIGIN?: string };
 
+const pinHeaders = [
+  "OVDB-Provider-Revision",
+  "OVDB-Source-SHA256",
+  "OVDB-Serving-SHA256",
+  "OVDB-Manifest-SHA256",
+] as const;
+
 export async function proxyChinook(
   request: Request,
   env: ChinookEnv,
@@ -18,9 +25,9 @@ export async function proxyChinook(
   const publicURL = new URL(request.url);
   const upstreamURL = new URL(publicURL.pathname + publicURL.search, origin);
   const headers = new Headers();
-  for (const name of ["Accept", "Content-Type", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close"] as const) {
+  for (const name of ["Accept", "Content-Type", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close", ...pinHeaders] as const) {
     const value = request.headers.get(name);
-    if (value) headers.set(name, value);
+    if (value !== null) headers.set(name, value);
   }
   try {
     const upstream = await upstreamFetch(upstreamURL, {
@@ -30,9 +37,9 @@ export async function proxyChinook(
       redirect: "manual",
     });
     const responseHeaders = new Headers();
-    for (const name of ["Content-Type", "Cache-Control", "Location", "Link", "Vary", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Max-Age", "Retry-After", "X-Content-Type-Options", "Content-Security-Policy"] as const) {
+    for (const name of ["Content-Type", "Cache-Control", "Location", "Link", "Vary", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Expose-Headers", "Access-Control-Max-Age", "Retry-After", "X-Content-Type-Options", "Content-Security-Policy", ...pinHeaders] as const) {
       const value = upstream.headers.get(name);
-      if (value) responseHeaders.set(name, value);
+      if (value !== null) responseHeaders.set(name, value);
     }
     responseHeaders.set("X-Content-Type-Options", "nosniff");
     return new Response(upstream.body, {
