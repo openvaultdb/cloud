@@ -31,6 +31,28 @@ def require_status(origin: str, path: str, expected: int = 200, **kwargs):
     return headers, body
 
 
+def require_cors(origin: str, database_id: str, cors_origin: str, query_path: str) -> None:
+    for path in (f"/ovdb/dbs/{database_id}", query_path):
+        headers, _ = require_status(origin, path, headers={"Origin": cors_origin})
+        if headers.get("Access-Control-Allow-Origin") != cors_origin:
+            raise RuntimeError(f"{database_id} {path} omitted allowed CORS origin {cors_origin}")
+        if "origin" not in {value.strip().lower() for value in headers.get("Vary", "").split(",")}:
+            raise RuntimeError(f"{database_id} {path} omitted Vary: Origin")
+    headers, _ = require_status(
+        origin, f"/v1/databases/{database_id}/dtql", expected=204, method="OPTIONS",
+        headers={"Origin": cors_origin, "Access-Control-Request-Method": "POST",
+                 "Access-Control-Request-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close"},
+    )
+    if headers.get("Access-Control-Allow-Origin") != cors_origin:
+        raise RuntimeError(f"{database_id} preflight omitted allowed CORS origin {cors_origin}")
+    methods = {value.strip().upper() for value in headers.get("Access-Control-Allow-Methods", "").split(",")}
+    allowed_headers = {value.strip().lower() for value in headers.get("Access-Control-Allow-Headers", "").split(",")}
+    if "POST" not in methods or not {"content-type", "ovdb-page-size", "ovdb-page-token", "ovdb-page-close"} <= allowed_headers:
+        raise RuntimeError(f"{database_id} preflight omitted POST or paging request headers")
+    if "origin" not in {value.strip().lower() for value in headers.get("Vary", "").split(",")}:
+        raise RuntimeError(f"{database_id} preflight omitted Vary: Origin")
+
+
 def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
@@ -53,6 +75,11 @@ def main() -> None:
             raise RuntimeError(f"{database['id']} human profile omitted its public cloud URL")
         require_status(args.origin, f"/v1/databases/{database_id}")
         recordsets = database.get("smokeRecordsets") or [database["smokeRecordset"]]
+        first_name = recordsets[0].replace("'", "''")
+        cors_query = f"from: {{name: '{first_name}'}}\nlimit: 1\n"
+        cors_query_path = f"/v1/databases/{database_id}/dtql?{urlencode({'q': cors_query})}"
+        for declared_origin in database["corsOrigins"]:
+            require_cors(args.origin, database_id, declared_origin, cors_query_path)
         queried_rows = {}
         for collection in recordsets:
             collection_path = quote(collection, safe="")
