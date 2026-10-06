@@ -1,0 +1,25 @@
+name: Actual corpus runtime candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-linux-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: server/go.sum
+      - name: Full eight-provider candidate capacity experiment
+        working-directory: server
+        run: python3 test_actual_runtime.py
+      - name: Preserve unconditional candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: actual-runtime-candidate
+          path: server/actual-runtime-report.json
+          if-no-files-found: error
