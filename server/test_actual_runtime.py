@@ -212,7 +212,8 @@ def prepare_phase(directory):
 
 def parse_go_receipt(output, marker):
     lines = [line[len(marker):] for line in output.splitlines() if line.startswith(marker)]
-    if len(lines) != 1 or "--- SKIP:" in output:
+    expected = {"ACTUAL_CAPACITY_JSON=": "TestActualCapacity", "ACTUAL_PROBE_JSON=": "TestActualProductionProbe"}.get(marker)
+    if not expected or len(lines) != 1 or "--- SKIP:" in output or f"--- PASS: {expected} " not in output:
         raise RuntimeError("missing, repeated or skipped actual experiment receipt")
     receipt = json.loads(lines[0])
     if receipt.get("outcome") != "passed":
@@ -226,7 +227,9 @@ def cleanup_owned(commands, containers, images, receipt):
         # Capture terminal state/OOM and logs even when startup/workload failed.
         for command in (["docker", "inspect", name], ["docker", "logs", "--tail", "30", name]):
             try:
-                commands.run(command, timeout=5, cleanup=True)
+                output = commands.run(command, timeout=5, cleanup=True)
+                if command[1] == "inspect":
+                    receipt.setdefault("owned_container_states", {})[name] = json.loads(output)[0]
             except Exception as error:
                 receipt.setdefault("recovery_observation_errors", []).append(str(error))
         try:
@@ -284,7 +287,9 @@ def experiment(commands, directory, receipt, prefix, containers, images):
     if elapsed >= 240:
         raise RuntimeError("actual executable readiness exceeded the 240s probe ceiling")
     commands.run(["docker", "stop", "-t", "10", production], timeout=15)
-    receipt["production_state"] = json.loads(commands.run(["docker", "inspect", production], timeout=10))[0]["State"]
+    production_info = json.loads(commands.run(["docker", "inspect", production], timeout=10))[0]
+    receipt.setdefault("owned_container_states", {})[production] = production_info
+    receipt["production_state"] = production_info["State"]
     if receipt["production_state"]["OOMKilled"] or receipt["production_state"]["ExitCode"] != 0:
         raise RuntimeError("production failed shutdown or OOMed")
     commands.run(["docker", "rm", production], timeout=10)
@@ -296,7 +301,9 @@ def experiment(commands, directory, receipt, prefix, containers, images):
                            "--entrypoint=/srv/actual-test", test, "-test.run=^TestActualCapacity$",
                            "-test.v", "-test.timeout=510s"], timeout=530, minimum=345)
     receipt["workload"] = parse_go_receipt(output, "ACTUAL_CAPACITY_JSON=")
-    receipt["workload_state"] = json.loads(commands.run(["docker", "inspect", workload], timeout=10))[0]["State"]
+    workload_info = json.loads(commands.run(["docker", "inspect", workload], timeout=10))[0]
+    receipt.setdefault("owned_container_states", {})[workload] = workload_info
+    receipt["workload_state"] = workload_info["State"]
     if receipt["workload_state"]["OOMKilled"] or receipt["workload_state"]["ExitCode"] != 0:
         raise RuntimeError("workload container failed or OOMed")
     receipt["outcome"] = "hosted_linux_candidate_pass"
@@ -316,7 +323,17 @@ def main():
                "capacity_peak_limit_bytes": PEAK_BYTES, "retained_envelope_bytes": ENVELOPE_BYTES,
                "caveat": "Shared warmed image pages can be charged outside Docker cgroup; cold Cloud proof remains mandatory."}
     started = time.monotonic()
-    commands = Commands(receipt, started + SCRIPT_SECONDS)
+    available = SCRIPT_SECONDS
+    # Workflow records its start before checkout/setup so slow prerequisites
+    # cannot consume the cleanup/upload reservation unnoticed.
+    if "OVDB_ACTUAL_JOB_STARTED" in os.environ:
+        try:
+            elapsed = max(0, time.time() - float(os.environ["OVDB_ACTUAL_JOB_STARTED"]))
+            available = min(available, 1200 - elapsed - 60)
+        except ValueError:
+            available = 0
+    receipt["overall_script_budget_seconds"] = available
+    commands = Commands(receipt, started + available)
     prefix = "ovdb-actual-" + uuid.uuid4().hex[:12]
     images, containers = [], []
     try:

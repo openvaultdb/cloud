@@ -83,9 +83,9 @@ class ActualHarnessTest(unittest.TestCase):
                 actual.ballast_bytes(invalid)
 
     def test_go_receipt_rejects_skipped_failed_or_repeated_evidence(self):
-        passed = 'ACTUAL_CAPACITY_JSON={"outcome":"passed"}\n'
+        passed = 'ACTUAL_CAPACITY_JSON={"outcome":"passed"}\n--- PASS: TestActualCapacity (1.00s)\n'
         self.assertEqual("passed", actual.parse_go_receipt(passed, "ACTUAL_CAPACITY_JSON=")["outcome"])
-        for output in (passed+passed, passed+'--- SKIP: test\n', 'ACTUAL_CAPACITY_JSON={"outcome":"failed"}\n', 'PASS\n'):
+        for output in (passed+passed, passed+'--- SKIP: test\n', 'ACTUAL_CAPACITY_JSON={"outcome":"failed"}\n', 'PASS\n', 'ACTUAL_CAPACITY_JSON={"outcome":"passed"}\n'):
             with self.assertRaises(RuntimeError):
                 actual.parse_go_receipt(output, "ACTUAL_CAPACITY_JSON=")
 

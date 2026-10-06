@@ -8,6 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Start finite job budget before prerequisites
+        run: echo "OVDB_ACTUAL_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:

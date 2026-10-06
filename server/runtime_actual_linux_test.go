@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -577,6 +578,14 @@ func TestActualCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt["initial"] = baseline
+	var filesystem syscall.Statfs_t
+	if err := syscall.Statfs(os.TempDir(), &filesystem); err != nil {
+		t.Fatal(err)
+	}
+	if filesystem.Type != 0x01021994 {
+		t.Fatal("writable experiment /tmp is not memory-backed tmpfs")
+	}
+	receipt["temporary_filesystem"] = "verified tmpfs; natural snapshots and labelled ballast charged to container memory"
 	monitor := actualStartMonitor()
 	defer func() {
 		peaks, monitorError := monitor.finish()
