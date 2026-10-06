@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createExecutionContext } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { proxyChinook, createTrustedNoRetentionOVDBProxy, NO_RETENTION_OVDB_TIMEOUT_MS } from "../src/chinook";
 
 import { PROXY_SECRET_HEADER } from "../src/proxy";
 import { createWorker } from "../src/worker";
@@ -287,6 +288,141 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
 });
 
 describe("public Chinook OVDB proxy", () => {
+  const proxyEnv = { ...env, CHINOOK_RUN_ORIGIN: "https://synthetic.example" } as Env;
+  const futureProxy = createTrustedNoRetentionOVDBProxy();
+  it.each([proxyChinook, futureProxy].flatMap((proxy, branch) => ["a".repeat(32), "bad", "a".repeat(32) + "," + "b".repeat(32), ""].map((id) => ({ proxy, branch, id }))))("preserves execution ID verbatim for backend validation: branch $branch, $id", async ({ proxy, branch, id }) => {
+    const request = new Request(`${baseURL}/v1/databases/synthetic/query`, { headers: { "OVDB-Execution-ID": id } });
+    const response = await proxy(request, proxyEnv, async (_input, init) => {
+      expect(new Headers(init?.headers).get("OVDB-Execution-ID")).toBe(id);
+      expect(init?.cache).toBe(branch === 0 ? undefined : "no-store");
+      expect(init?.signal).toBeDefined();
+      return new Response(null, { status: 400, headers: { "Cache-Control": "public,max-age=99" } });
+    });
+    expect(response.headers.get("Cache-Control")).toBe(branch === 0 ? "public,max-age=99" : "no-store");
+  });
+
+  it.each([proxyChinook, futureProxy])("cancels a blocked upstream body on downstream reader cancellation", async (proxy) => {
+    let upstreamCancelled = false;
+    let signal: AbortSignal | null | undefined;
+    const response = await proxy(new Request(`${baseURL}/v1/databases/synthetic/query`), proxyEnv, async (_input, init) => {
+      signal = init?.signal;
+      return new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array([1])); },
+        cancel() { upstreamCancelled = true; },
+      }));
+    });
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+    await reader.cancel();
+    expect(signal?.aborted).toBe(true);
+    expect(upstreamCancelled).toBe(true);
+  });
+
+  it.each([proxyChinook, futureProxy])("propagates request abort after upstream headers and clears pending read", async (proxy) => {
+    const abort = new AbortController();
+    let upstreamCancelled = false;
+    let signal: AbortSignal | null | undefined;
+    const response = await proxy(new Request(`${baseURL}/v1/databases/synthetic/query`, { signal: abort.signal }), proxyEnv, async (_input, init) => {
+      signal = init?.signal;
+      return new Response(new ReadableStream({ cancel() { upstreamCancelled = true; } }));
+    });
+    const pending = response.body!.getReader().read();
+    abort.abort();
+    await expect(pending).rejects.toThrow("OVDB upstream cancelled");
+    expect(signal?.aborted).toBe(true);
+    expect(upstreamCancelled).toBe(true);
+  });
+
+  it("bounds stalled headers and emits fixed diagnostics", async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const pending = futureProxy(new Request(`${baseURL}/v1/synthetic-sensitive-path`), proxyEnv, async (_input, init) =>
+        new Promise((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(new Error("SYNTHETIC_SECRET_ERROR")), { once: true })));
+      await vi.advanceTimersByTimeAsync(NO_RETENTION_OVDB_TIMEOUT_MS);
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.text()).not.toContain("SYNTHETIC_SECRET_ERROR");
+      expect(log).toHaveBeenCalledWith("Chinook OVDB upstream failed");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic-sensitive-path");
+    } finally { log.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it.each([proxyChinook, futureProxy])("cancels before upstream headers arrive", async (proxy) => {
+    const abort = new AbortController();
+    let begin!: () => void;
+    const begun = new Promise<void>((resolve) => { begin = resolve; });
+    const pending = proxy(new Request(`${baseURL}/v1/synthetic`, { signal: abort.signal }), proxyEnv, async (_input, init) => {
+      begin();
+      return new Promise((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    });
+    await begun;
+    abort.abort();
+    expect((await pending).status).toBe(503);
+  });
+
+  it("bounds a stalled response body and cancels its upstream reader", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    try {
+      const response = await futureProxy(new Request(`${baseURL}/v1/synthetic`), proxyEnv, async () =>
+        new Response(new ReadableStream({ cancel() { cancelled = true; } })));
+      const pending = response.body!.getReader().read();
+      const rejected = expect(pending).rejects.toThrow("OVDB upstream cancelled");
+      await vi.advanceTimersByTimeAsync(NO_RETENTION_OVDB_TIMEOUT_MS);
+      await rejected;
+      expect(cancelled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([200, 400, 503])("scopes forced no-store to the future trusted branch for status %s", async (status) => {
+    for (const [proxy, expected] of [[proxyChinook, null], [futureProxy, "no-store"]] as const) {
+      const response = await proxy(new Request(`${baseURL}/v1/synthetic`), proxyEnv, async () => new Response(null, { status }));
+      expect(response.headers.get("Cache-Control")).toBe(expected);
+      expect(response.headers.get("Pragma")).toBe(expected === null ? null : "no-cache");
+    }
+  });
+
+  it("current routing ignores caller policy hints and retains slow sample headers/stream behavior", async () => {
+    vi.useFakeTimers();
+    try {
+      let begin!: () => void;
+      const begun = new Promise<void>((resolve) => { begin = resolve; });
+      let headersReady!: (value: Response) => void;
+      let source!: ReadableStreamDefaultController<Uint8Array>;
+      let upstreamSignal: AbortSignal | null | undefined;
+      const sampleWorker = createWorker(async (_input, init) => {
+        expect(Object.hasOwn(init!, "cache")).toBe(false);
+        upstreamSignal = init?.signal;
+        begin();
+        return new Promise<Response>((resolve) => { headersReady = resolve; });
+      });
+      const pending = (sampleWorker.fetch as unknown as typeof fetchWorker)(new Request(
+        `${baseURL}/v1/databases/chinook/dtql?retention=none&timeoutMs=1`, {
+          headers: { "Cache-Control": "no-store", "OVDB-Retention": "none", "OVDB-Read-Profile": "ecb-daily/1" },
+        }), { ...proxyEnv, OVDB_RETENTION_POLICY: "none" } as Env, createExecutionContext());
+      await begun;
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(NO_RETENTION_OVDB_TIMEOUT_MS * 2);
+      expect(upstreamSignal?.aborted).toBe(false);
+      headersReady(new Response(new ReadableStream<Uint8Array>({ start(controller) { source = controller; } }), {
+        headers: { "Cache-Control": "public, max-age=86400, s-maxage=86400" },
+      }));
+      const response = await pending;
+      expect(response.headers.get("Cache-Control")).toBe("public, max-age=86400, s-maxage=86400");
+      const reader = response.body!.getReader();
+      const read = reader.read();
+      await vi.advanceTimersByTimeAsync(NO_RETENTION_OVDB_TIMEOUT_MS * 2);
+      expect(upstreamSignal?.aborted).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      source.enqueue(new Uint8Array([1]));
+      source.close();
+      expect((await read).value).toEqual(new Uint8Array([1]));
+      expect((await reader.read()).done).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   // Synthetic transport contract; these pins do not describe hosted providers.
   const expectedPins = {
     "OVDB-Provider-Revision": "a".repeat(40),
