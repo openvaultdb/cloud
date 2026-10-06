@@ -287,6 +287,64 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
 });
 
 describe("public Chinook OVDB proxy", () => {
+  it.each(["https://datatug.app", "https://datatug.app.evil.example"])("passes through OPTIONS without synthesizing CORS for %s", async (origin) => {
+    const forwarded: Request[] = [];
+    const allowed = origin === "https://datatug.app";
+    const chinookWorker = createWorker(async (input, init) => {
+      const request = new Request(input, init);
+      forwarded.push(request);
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, { status: 204, headers: {
+        Vary: "Origin",
+        ...(allowed ? {
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Methods": "GET,HEAD,POST",
+          "Access-Control-Allow-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close",
+          "Access-Control-Max-Age": "600",
+        } : {}),
+        "Set-Cookie": "must-not-leak=1",
+      } });
+    });
+    const fetchChinook = chinookWorker.fetch as unknown as typeof fetchWorker;
+    const response = await fetchChinook(new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+      method: "OPTIONS", headers: {
+        Origin: origin, "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close",
+        Authorization: "Bearer must-not-forward", Cookie: "secret=1",
+      },
+    }), { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(allowed ? origin : null);
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(allowed ? "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close" : null);
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(allowed ? "GET,HEAD,POST" : null);
+    expect(response.headers.get("Vary")).toBe("Origin");
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0].method).toBe("OPTIONS");
+    expect(forwarded[0].headers.get("Origin")).toBe(origin);
+    expect(forwarded[0].headers.get("Access-Control-Request-Method")).toBe("POST");
+    expect(forwarded[0].headers.get("Access-Control-Request-Headers")).toBe("Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close");
+    expect(forwarded[0].headers.get("Authorization")).toBeNull();
+    expect(forwarded[0].headers.get("Cookie")).toBeNull();
+  });
+
+  it("returns an upstream redirect without following its untrusted location", async () => {
+    let calls = 0;
+    const chinookWorker = createWorker(async (_input, init) => {
+      calls++;
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, { status: 302, headers: { Location: "https://evil.example/", "Set-Cookie": "must-not-leak=1" } });
+    });
+    const fetchChinook = chinookWorker.fetch as unknown as typeof fetchWorker;
+    const response = await fetchChinook(new Request(`${baseURL}/ovdb/dbs/chinook`, { headers: { Origin: "https://datatug.app" } }),
+      { ...env, CHINOOK_RUN_ORIGIN: "https://chinook-ovdb.example.run.app" } as Env, createExecutionContext());
+    expect(calls).toBe(1);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe("https://evil.example/");
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    expect(response.headers.get("Set-Cookie")).toBeNull();
+  });
+
   it("forwards the generic profile and parameterized DTQL without caller credentials", async () => {
     const forwarded: Request[] = [];
     const chinookWorker = createWorker(async (input, init) => {
