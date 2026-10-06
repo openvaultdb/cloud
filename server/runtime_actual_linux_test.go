@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	dalrecord "github.com/dal-go/record"
 	"github.com/openvaultdb/cloud/server/internal/publisherselection"
 	"github.com/openvaultdb/openvaultdb-go/pkg/manifest"
 )
@@ -386,11 +387,49 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	}
 	return entry, nil
 }
-func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[string]any {
-	t.Helper()
+
+// actualQueriesStart: parser regression compiles the exact generated workload builders.
+func actualOrdinaryQuery(table string, limit int) string {
+	query := "from: {name: '" + strings.ReplaceAll(table, "'", "''") + "'}\n"
+	if limit > 0 {
+		query += fmt.Sprintf("limit: %d\n", limit)
+	}
+	return query
+}
+func actualSelectedQuery(table string) string {
+	// bounded-immutable admits server-owned serving-key order only.
+	return actualOrdinaryQuery(table, 1000)
+}
+func actualCallerOrderQuery(table, field string) string {
+	return actualOrdinaryQuery(table, 0) + "orderBy: [{field: '" + strings.ReplaceAll(field, "'", "''") + "'}]\nlimit: 1000\n"
+}
+func actualCheckOrderedKeys(body []byte, expected []string) error {
+	var page struct {
+		Records []struct {
+			Key string `json:"key"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return err
+	}
+	if len(page.Records) != len(expected) {
+		return fmt.Errorf("serving-key page has %d rows, want %d", len(page.Records), len(expected))
+	}
+	for i, row := range page.Records {
+		if row.Key != expected[i] {
+			return fmt.Errorf("serving-key order at row %d: %q want %q", i, row.Key, expected[i])
+		}
+	}
+	return nil
+}
+
+func actualDiagnosticQueries(table, selected string) []string {
+	return []string{actualOrdinaryQuery(table, 1), "from: {name: '" + strings.ReplaceAll(selected, "'", "''") + "'}\nwhere: {op: In, left: {field: id}, right: {query: {from: {name: '" + strings.ReplaceAll(table, "'", "''") + "'}}}}\nlimit: 1\n"}
+}
+func actualLegacyWorks() []actualWork {
 	grouped := "from:\n  database: adventureworks\n  name: Person.Person\n  alias: d\n  joins:\n    - type: left\n      from: {database: chinook, name: Genre, alias: g}\n      on:\n        - {left: {field: BusinessEntityID, source: d}, op: '==', right: {field: GenreId, source: g}}\ngroupBy: [{field: PersonType, source: d}]\ncolumns:\n  - {field: PersonType, source: d}\n  - {aggregate: {function: count, args: [{star: true}]}, as: n}\nlimit: 5\n"
 	photo := "from:\n  name: Production.ProductProductPhoto\n  alias: p\n  joins:\n    - type: inner\n      from: {name: Production.ProductPhoto, alias: f}\n      on:\n        - {left: {field: ProductPhotoID, source: p}, op: '==', right: {field: ProductPhotoID, source: f}}\ncolumns:\n  - {field: ProductID, source: p}\n  - {field: LargePhoto, source: f}\n  - {field: ThumbNailPhoto, source: f}\nlimit: 1000\n"
-	legacy := []actualWork{
+	return []actualWork{
 		{name: "heaviest-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Sales.SalesOrderHeaderSalesReason"}`, want: 200},
 		{name: "database-photo-join", path: "/v1/databases/adventureworks/dtql", body: photo, want: 200, route: "database"},
 		{name: "database-ordinary", path: "/v1/databases/adventureworks/dtql", body: "from: {name: Person.Person}\nlimit: 1000\n", want: 200},
@@ -398,6 +437,13 @@ func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[str
 		{name: "money-grouping", path: "/v1/databases/adventureworks/dtql", body: adventureWorksHeaderMoneyGroupingQuery, want: 200},
 		{name: "money-budget-refusal", path: "/v1/databases/adventureworks/dtql", body: adventureWorksSalesBudgetMoneyQuery, want: 422, errorCode: "query_budget_exceeded"},
 	}
+}
+
+// actualQueriesEnd
+
+func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[string]any {
+	t.Helper()
+	legacy := actualLegacyWorks()
 	results := []map[string]any{}
 	for _, work := range append(append([]actualWork{}, w1...), legacy...) {
 		entry, err := actualExecute(handler, work)
@@ -456,7 +502,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 	for _, provider := range providers {
 		// Six legacy fixtures also get actual schema and ordinary-read checks.
 		if provider.ReadProfile == "" {
-			result := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", "from: {name: '"+provider.SmokeRecordset+"'}\nlimit: 1\n", nil, context.Background())
+			result := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", actualOrdinaryQuery(provider.SmokeRecordset, 1), nil, context.Background())
 			if result.Code != 200 {
 				t.Fatalf("legacy %s: %d %s", provider.ID, result.Code, result.Body.String())
 			}
@@ -533,12 +579,43 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 			if orderField == "" {
 				t.Fatal("selected native schema has no ordering field")
 			}
-			work := actualWork{name: provider.ID + "/" + table, path: "/v1/databases/" + provider.ID + "/dtql", body: "from: {name: '" + table + "'}\norderBy: ['" + strings.ReplaceAll(orderField, "'", "''") + "']\nlimit: 1000\n", want: 200}
-			if _, err := actualExecute(handler, work); err != nil {
+			work := actualWork{name: provider.ID + "/" + table, path: "/v1/databases/" + provider.ID + "/dtql", body: actualSelectedQuery(table), want: 200}
+			response := actualRequest(handler, http.MethodPost, work.path, work.body, nil, context.Background())
+			if response.Code != 200 {
+				t.Fatalf("%s: %d %s", work.name, response.Code, response.Body.String())
+			}
+			ordered, err := raw.Query("SELECT " + quote(helper) + " FROM " + quote(table) + " ORDER BY " + quote(helper) + " ASC LIMIT 1000")
+			if err != nil {
 				t.Fatal(err)
 			}
+			expected := []string{}
+			for ordered.Next() {
+				var servingKey string
+				if err := ordered.Scan(&servingKey); err != nil {
+					t.Fatal(err)
+				}
+				expected = append(expected, dalrecord.NewKeyWithID(table, servingKey).String())
+			}
+			if err := ordered.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if err := ordered.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := actualCheckOrderedKeys(response.Body.Bytes(), expected); err != nil {
+				t.Fatalf("%s: %v", work.name, err)
+			}
+			if table == publisher.Recordsets[0] {
+				negative := actualWork{name: provider.ID + "/caller-order-refusal", path: work.path, body: actualCallerOrderQuery(table, orderField), want: 400, errorCode: "ordering_unsupported"}
+				refusal, err := actualExecute(handler, negative)
+				if err != nil {
+					t.Fatal(err)
+				}
+				proof[provider.ID+"_caller_order_refusal"] = refusal
+			}
+
 			// Record every selected table before deriving the largest paired workload.
-			tables = append(tables, map[string]any{"table": table, "rows": count, "last_key_read": true})
+			tables = append(tables, map[string]any{"table": table, "rows": count, "last_key_read": true, "serving_key_order_verified": true})
 			selection.add(provider.ID, count, work)
 		}
 		rows, err := raw.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
@@ -569,7 +646,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 					t.Fatal("diagnostic metadata/key did not fail closed")
 				}
 			}
-			for _, query := range []string{"from: {name: '" + table + "'}\nlimit: 1\n", "from: {name: '" + publisher.Recordsets[0] + "'}\nwhere: {op: in, left: {field: id}, right: {query: {from: {name: '" + table + "'}}}}\nlimit: 1\n"} {
+			for _, query := range actualDiagnosticQueries(table, publisher.Recordsets[0]) {
 				if response := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", query, nil, context.Background()); response.Code < 400 || response.Code >= 500 {
 					t.Fatal("diagnostic ordinary/nested query did not fail closed")
 				}
@@ -584,6 +661,8 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 		t.Fatalf("incomplete actual W1 corpus %d/%d/%d", nativeCount, selectedCount, keys)
 	}
 	proof["native_tables"], proof["selected_tables"], proof["keys_validated_at_startup"] = nativeCount, selectedCount, keys
+	proof["ordering_contract"] = "server-owned ascending serving key; caller orderBy rejected for both W1 providers; same tables, limit 1000 and largest-table pairing"
+	proof["caller_order_refusal_cases"] = 2
 	proof["key_method"] = "production checked mount validates every helper key; Python preparation separately scans all typed native values and all keys; HTTP final-key reads are additional samples"
 	// Derive largest selected table per provider from all actual measured works.
 	largest := selection.largest()
@@ -759,7 +838,7 @@ func TestActualCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	monitor.setPhase("post-expiry-recovery")
-	smallQuery := "from: {name: 'Order Details'}\n"
+	smallQuery := actualOrdinaryQuery("Order Details", 0)
 	small := actualCapture(t, handler, "northwind", smallQuery)
 	actualClose(t, handler, "northwind", smallQuery, small)
 	receipt["post_expiry_cancel"] = actualCancel(t, handler)
