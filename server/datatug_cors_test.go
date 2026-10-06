@@ -12,6 +12,8 @@ import (
 
 func TestCloudDataTugCORS(t *testing.T) {
 	const appOrigin = "https://datatug.app"
+	pins := []string{"OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256"}
+	requestHeaders := append([]string{"Content-Type", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close"}, pins...)
 	data, err := os.ReadFile("providers.json")
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +69,7 @@ func TestCloudDataTugCORS(t *testing.T) {
 		}
 		if method == http.MethodOptions {
 			request.Header.Set("Access-Control-Request-Method", "POST")
-			request.Header.Set("Access-Control-Request-Headers", "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close")
+			request.Header.Set("Access-Control-Request-Headers", strings.Join(requestHeaders, ","))
 		}
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -94,6 +96,11 @@ func TestCloudDataTugCORS(t *testing.T) {
 				t.Fatalf("GET %s: %d %s", path, response.Code, response.Body.String())
 			}
 			assertOrigin(response, origin)
+			for _, pin := range pins {
+				if !slices.Contains(strings.Split(response.Header().Get("Access-Control-Expose-Headers"), ","), pin) {
+					t.Fatalf("GET response exposure missing %s", pin)
+				}
+			}
 		}
 		preflight := call(http.MethodOptions, queryPath, origin, "")
 		if preflight.Code != http.StatusNoContent {
@@ -103,7 +110,7 @@ func TestCloudDataTugCORS(t *testing.T) {
 		if !slices.Contains(strings.Split(preflight.Header().Get("Access-Control-Allow-Methods"), ","), "POST") {
 			t.Fatal("preflight POST missing")
 		}
-		for _, header := range []string{"Content-Type", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close"} {
+		for _, header := range requestHeaders {
 			if !slices.Contains(strings.Split(preflight.Header().Get("Access-Control-Allow-Headers"), ","), header) {
 				t.Fatalf("preflight header %s missing", header)
 			}
@@ -114,18 +121,28 @@ func TestCloudDataTugCORS(t *testing.T) {
 		t.Fatalf("bounded DTQL: %d %s", response.Code, response.Body.String())
 	}
 	assertOrigin(response, appOrigin)
+	for _, pin := range pins {
+		if !slices.Contains(strings.Split(response.Header().Get("Access-Control-Expose-Headers"), ","), pin) {
+			t.Fatalf("POST response exposure missing %s", pin)
+		}
+		// The tiny runtime fixture currently produces no serving pin headers;
+		// allowing/exposing a header must never fabricate immutable identity.
+		if response.Header().Get(pin) != "" {
+			t.Fatalf("unexpected fabricated runtime pin %s", pin)
+		}
+	}
 	var page northwindQueryPage
 	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || len(page.Records) != 1 {
 		t.Fatalf("bounded page: %v %s", err, response.Body.String())
 	}
 	for _, origin := range []string{"https://datatug.app.evil.example", "https://evil.datatug.app", "http://datatug.app", "https://datatug.app:444", "null", ""} {
-		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+		for _, method := range []string{http.MethodGet, http.MethodOptions, http.MethodPost} {
 			path := "/ovdb/dbs/final"
-			if method == http.MethodOptions {
+			if method == http.MethodOptions || method == http.MethodPost {
 				path = queryPath
 			}
 			response := call(method, path, origin, "")
-			if response.Header().Get("Access-Control-Allow-Origin") != "" || response.Header().Get("Access-Control-Allow-Credentials") != "" {
+			if response.Header().Get("Access-Control-Allow-Origin") != "" || response.Header().Get("Access-Control-Allow-Credentials") != "" || response.Header().Get("Access-Control-Allow-Headers") != "" || response.Header().Get("Access-Control-Expose-Headers") != "" {
 				t.Fatalf("%s granted CORS to %q", method, origin)
 			}
 		}
