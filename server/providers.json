@@ -68,7 +68,8 @@
       "corsOrigins": [
         "https://adventureworks.demodb.dev",
         "https://demodb.dev",
-        "https://www.demodb.dev"
+        "https://www.demodb.dev",
+        "https://datatug.app"
       ],
       "blobSmokeFields": {
         "Production.ProductPhoto": [
@@ -122,7 +123,8 @@
       "corsOrigins": [
         "https://employees.demodb.dev",
         "https://demodb.dev",
-        "https://www.demodb.dev"
+        "https://www.demodb.dev",
+        "https://datatug.app"
       ]
     },
     {
@@ -169,7 +171,8 @@
         "https://demodb.dev",
         "https://www.demodb.dev",
         "https://chinookdb.com",
-        "https://www.chinookdb.com"
+        "https://www.chinookdb.com",
+        "https://datatug.app"
       ]
     },
     {
@@ -218,7 +221,8 @@
       "corsOrigins": [
         "https://northwind.demodb.dev",
         "https://demodb.dev",
-        "https://www.demodb.dev"
+        "https://www.demodb.dev",
+        "https://datatug.app"
       ]
     },
     {
@@ -264,7 +268,8 @@
       "corsOrigins": [
         "https://pubs.demodb.dev",
         "https://demodb.dev",
-        "https://www.demodb.dev"
+        "https://www.demodb.dev",
+        "https://datatug.app"
       ]
     },
     {
@@ -317,7 +322,8 @@
       "corsOrigins": [
         "https://sakila.demodb.dev",
         "https://demodb.dev",
-        "https://www.demodb.dev"
+        "https://www.demodb.dev",
+        "https://datatug.app"
       ]
     }
   ]
