@@ -38,11 +38,13 @@ response. Neither Worker setting is present in `wrangler.jsonc`; no production
 configuration or deployment is changed by this code.
 
 Synthetic tests enter `configuredHandler` and `createWorker().fetch` with
-invented XML and an injected transport. They do not contact ECB. The
-preparatory B1 proposal is never a runtime input. B1, B2 and B3 admission are
-unclaimed: the Worker and Go entry points have not yet been exercised as one
-cross-runtime chain, and operational sink, Cloud Run and browser evidence is
-still absent. Directory registration and public activation remain blocked.
+invented XML and an injected transport. They do not contact ECB. The opt-in
+`TestECBSelectedCrossRuntimeChain` starts a loopback Go HTTP server and runs a
+Worker test through it. It covers a bounded row, refusal before provider I/O,
+and a marker-bearing provider panic across the selected path. The preparatory
+B1 proposal is never a runtime input. B1, B2 and B3 admission are unclaimed;
+Cloud Run, browser and operational sink evidence is still absent. Directory
+registration and public activation remain blocked.
 
 The Go service mounts the database providers listed in [`providers.json`](providers.json)
 through the real `openvaultdb-go` server. A provider entry pins the GitHub
