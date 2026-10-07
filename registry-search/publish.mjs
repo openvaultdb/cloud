@@ -77,6 +77,23 @@ async function saveState(path, state) {
   await rename(temp, path);
 }
 
+async function pruneInactive(api, active, previous) {
+  const listed = await api('GET', '/collections');
+  if (listed.status !== 200 || !Array.isArray(json(listed))) throw new Error('cannot list search generations');
+  const aliases = await api('GET', '/aliases');
+  if (aliases.status !== 200 || !Array.isArray(json(aliases).aliases)) throw new Error('cannot list search aliases');
+  const referenced = new Set(json(aliases).aliases.map(item => item.collection_name));
+  const retain = new Set([active, previous].filter(Boolean));
+  for (const { name } of json(listed)) {
+    if (/^registry_metadata_[a-f0-9]{24}$/.test(name) && !retain.has(name)) {
+      if (referenced.has(name)) throw new Error('inactive generation has another alias');
+      const removed = await api('DELETE', `/collections/${name}`);
+      if (![200, 404].includes(removed.status)) throw new Error('inactive generation cleanup failed');
+    }
+  }
+  return referenced;
+}
+
 export async function publish(manifest, exports, { api, stateDir, smokeQueries, allowFixtures = false }) {
   validateManifest(manifest, { allowFixtures });
   if (!Array.isArray(smokeQueries) || domains.some(domain => !smokeQueries.some(query => query?.domain === domain))) throw new Error('one smoke query per domain required');
@@ -93,10 +110,17 @@ export async function publish(manifest, exports, { api, stateDir, smokeQueries, 
     if (state?.status === 'published' && active !== `registry_metadata_${state.generation}`) throw new Error('alias drift');
     if (active === collection) {
       if (!state || state.sequence !== manifest.sequence || state.status !== 'published') await saveState(statePath, { sequence: manifest.sequence, generation, status: 'published', previous: state?.previous || null });
+      await pruneInactive(api, collection, state?.previous);
       return { generation, hash, count: documents.length, unchanged: true };
     }
+    // Failed candidates from earlier attempts are safe to remove before retrying.
+    const referenced = await pruneInactive(api, active, state?.previous);
     const existing = await api('GET', `/collections/${collection}`);
-    if (existing.status === 200) await api('DELETE', `/collections/${collection}`);
+    if (existing.status === 200) {
+      if (referenced.has(collection)) throw new Error('candidate generation has another alias');
+      const removed = await api('DELETE', `/collections/${collection}`);
+      if (![200, 404].includes(removed.status)) throw new Error('candidate generation removal failed');
+    }
     await api('POST', '/collections', collectionSchema(collection));
     for (let start = 0; start < documents.length; start += 500) {
       const batch = documents.slice(start, start + 500);
@@ -117,5 +141,7 @@ export async function publish(manifest, exports, { api, stateDir, smokeQueries, 
     const switched = await api('GET', '/aliases/registry_metadata');
     if (switched.status !== 200 || json(switched).collection_name !== collection) throw new Error('alias verification failed');
     await saveState(statePath, { sequence: manifest.sequence, generation, status: 'published', previous: active });
+    try { await pruneInactive(api, collection, active); }
+    catch (error) { throw new Error(`search alias switched; ${error.message}`); }
     return { generation, hash, count: documents.length, previous: active };
 }

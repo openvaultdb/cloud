@@ -1,3 +1,5 @@
+import { productionEngineOrigin } from './engine-policy.mjs';
+
 const domains = new Set(['meaninggraph', 'modelspec', 'ovdb']);
 const kinds = new Set(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
 const origins = new Set(['https://meaninggraph.io', 'https://modelspec.org', 'https://directory.openvaultdb.com']);
@@ -58,7 +60,7 @@ function parseQuery(value) {
 function engineOrigin(env) {
   const url = new URL(env.REGISTRY_TYPESENSE_ORIGIN);
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash) throw new Error('invalid origin');
-  if (env.REGISTRY_SEARCH_MODE === 'production' && (env.REGISTRY_TYPESENSE_DEPLOYMENT !== 'cloud' || !env.REGISTRY_TYPESENSE_CLOUD_HOST || url.hostname !== env.REGISTRY_TYPESENSE_CLOUD_HOST)) throw new Error('cloud origin required');
+  if (env.REGISTRY_SEARCH_MODE === 'production') return productionEngineOrigin(env);
   return url;
 }
 export function createGateway(fetcher = fetch) {
