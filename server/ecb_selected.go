@@ -34,7 +34,7 @@ func validECBProxySecret(value string) bool {
 var selectedECBMount ecbMount = mount.File
 var selectedECBDiagnostic io.Writer = os.Stderr
 
-func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, http.Handler, func() error, error) {
+func configuredHandlerWithECB(startup runtimeStartup) ([]runtimeDatabase, http.Handler, func() error, error) {
 	enabled := os.Getenv("OVDB_ECB_ENABLED")
 	if enabled != "" && enabled != "false" && enabled != "true" {
 		return nil, nil, nil, errECBCandidate

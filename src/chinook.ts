@@ -3,8 +3,11 @@ import type { UpstreamFetch } from "./proxy";
 
 type ChinookEnv = Env & { CHINOOK_RUN_ORIGIN?: string };
 type ECBEnv = Env & { CHINOOK_RUN_ORIGIN?: string; ECB_RUN_ORIGIN?: string; ECB_PROXY_SECRET?: string; ECB_OPERATOR_TOKEN?: string };
+type IANAEnv = Env & { CHINOOK_RUN_ORIGIN?: string; IANA_RUN_ORIGIN?: string; IANA_PROXY_SECRET?: string; IANA_OPERATOR_TOKEN?: string };
 const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret";
 const ecbOperatorTokenHeader = "X-OVDB-ECB-Operator-Token";
+const ianaProxySecretHeader = "X-OVDB-IANA-Proxy-Secret";
+const ianaOperatorTokenHeader = "X-OVDB-IANA-Operator-Token";
 
 const pinHeaders = [
   "OVDB-Provider-Revision",
@@ -13,15 +16,14 @@ const pinHeaders = [
   "OVDB-Manifest-SHA256",
 ] as const;
 
-// This source-only future policy is never selected by current Worker routing.
-// A trusted composition must separately admit its source before using it.
+// Selected operator routes use this only after their separate admission gates.
 export const NO_RETENTION_OVDB_TIMEOUT_MS = 15_000;
 type ProxyPolicy = Readonly<{ noRetention: boolean; timeoutMs?: number }>;
 const samplePolicy: ProxyPolicy = Object.freeze({ noRetention: false });
 const noRetentionPolicy: ProxyPolicy = Object.freeze({ noRetention: true, timeoutMs: NO_RETENTION_OVDB_TIMEOUT_MS });
 
-// Neither request headers/URL/body nor deployment bindings select policy.
-// Only a future reviewed server-side composition can import this factory.
+// Callers cannot select this policy through request headers, URL or body.
+// This factory is for trusted server-side composition, not Worker route input.
 export function createTrustedNoRetentionOVDBProxy(): typeof proxyChinook {
   return (request, env, upstreamFetch) => proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy, env.CHINOOK_RUN_ORIGIN);
 }
@@ -62,6 +64,28 @@ export async function proxyECB(
     "/v1/databases/ecb/dtql", "ECB", env.ECB_PROXY_SECRET);
 }
 
+export async function proxyIANA(request: Request, env: IANAEnv, upstreamFetch: UpstreamFetch): Promise<Response> {
+  if (!env.IANA_PROXY_SECRET || !/^[A-Za-z0-9_-]{32,128}$/u.test(env.IANA_PROXY_SECRET) ||
+    !env.IANA_OPERATOR_TOKEN || !/^[A-Za-z0-9_-]{32,128}$/u.test(env.IANA_OPERATOR_TOKEN) ||
+    !env.IANA_RUN_ORIGIN || env.IANA_RUN_ORIGIN !== env.CHINOOK_RUN_ORIGIN) {
+    return jsonResponse({ error: "IANA OVDB is not configured." }, 503);
+  }
+  const presented = request.headers.get(ianaOperatorTokenHeader);
+  if (!presented || !/^[A-Za-z0-9_-]{32,128}$/u.test(presented)) return jsonResponse({ error: "Not found." }, 404);
+  const encoder = new TextEncoder();
+  const [expected, actual] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(env.IANA_OPERATOR_TOKEN)),
+    crypto.subtle.digest("SHA-256", encoder.encode(presented)),
+  ]);
+  const expectedBytes = new Uint8Array(expected);
+  const actualBytes = new Uint8Array(actual);
+  let difference = 0;
+  for (let index = 0; index < expectedBytes.length; index++) difference |= expectedBytes[index] ^ actualBytes[index];
+  if (difference !== 0) return jsonResponse({ error: "Not found." }, 404);
+  return proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy, env.IANA_RUN_ORIGIN,
+    "/v1/databases/iana-http-status/dtql", "IANA", env.IANA_PROXY_SECRET, ianaProxySecretHeader);
+}
+
 async function proxyWithPolicy(
   request: Request,
   env: Env,
@@ -71,6 +95,7 @@ async function proxyWithPolicy(
   selectedPath?: string,
   service = "Chinook",
   trustedSecret?: string,
+  trustedSecretHeader = ecbProxySecretHeader,
 ): Promise<Response> {
   if (!originValue) {
     return jsonResponse({ error: `${service} OVDB is not configured.` }, 503);
@@ -79,7 +104,7 @@ async function proxyWithPolicy(
   try { origin = new URL(originValue); }
   catch { return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503); }
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash ||
-    (service === "ECB" && (origin.port !== "" || !origin.hostname.endsWith(".run.app") ||
+    ((service === "ECB" || service === "IANA") && (origin.port !== "" || !origin.hostname.endsWith(".run.app") ||
       (originValue !== origin.origin && originValue !== `${origin.origin}/`)))) {
     return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503);
   }
@@ -90,7 +115,7 @@ async function proxyWithPolicy(
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
-  if (trustedSecret) headers.set(ecbProxySecretHeader, trustedSecret);
+  if (trustedSecret) headers.set(trustedSecretHeader, trustedSecret);
   if (request.signal.aborted) return jsonResponse({ error: `${service} OVDB request cancelled.` }, 503);
   const abort = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
