@@ -1,12 +1,15 @@
 # Read-only sample database service
 
-## Dormant ECB original HTTP candidate
+## Operator-selected ECB original HTTP query path
 
-`ecb_candidate.go` compiles a separate, default-off host composition for the
-original ECB daily HTTP resource. Neither `configuredHandler` nor the Worker
-calls it. Directory registration, provider admission, deployment and public
-activation remain blocked; the preparatory OVDB B1 proposal is never accepted
-as runtime configuration.
+`ecb_candidate.go` compiles the pinned host composition for the original ECB
+daily HTTP resource. It remains off by default. The Go service selects it only
+when `OVDB_ECB_ENABLED=true`, `OVDB_ECB_HOST_CONFIG` names a separately
+reviewed operator JSON document, and `OVDB_ECB_PROXY_SECRET` supplies a
+dedicated 32 to 128 character ASCII letter, digit, `_` or `-` secret. A present candidate file alone does nothing.
+The selected Go handler admits only `POST /v1/databases/ecb/dtql`; other ECB
+paths, passive reads and query strings do not reach the ECB provider. Existing
+sample routes retain their current handler.
 
 The candidate assembly requires an operator-owned JSON document with format
 `ovdb-ecb-host-candidate/1`, paths to the original publisher manifest and a
@@ -22,9 +25,24 @@ It uses the stable `openvaultdb-cloud` rights identity and the library's
 `ecb-public-free/1` request profile. Request Host, query data and command-line
 flags cannot select this composition.
 
-The synthetic host test uses invented XML and an injected transport; it does
-not contact ECB. Any future public route needs its own admission decision and
-selected-path sink and browser evidence before activation.
+The Cloudflare Worker has a separate exact route,
+`POST /ecb/v1/databases/ecb/dtql`. It requires `ECB_ENABLED=true` and
+`ECB_RUN_ORIGIN` set to an HTTPS root origin under `.run.app`, with no port,
+credentials, query or fragment. The origin must exactly match the existing
+`CHINOOK_RUN_ORIGIN` binding for that same Go service. `ECB_PROXY_SECRET` must
+hold the same secret as the Go service. The Worker sends it in a dedicated upstream header;
+client-supplied values are discarded. The Go route returns 404 before provider
+I/O when the secret is missing, wrong or duplicated. The Worker forwards the query to the fixed Go path
+through the no-retention proxy, using `cache: no-store` and a `no-store`
+response. Neither Worker setting is present in `wrangler.jsonc`; no production
+configuration or deployment is changed by this code.
+
+Synthetic tests enter `configuredHandler` and `createWorker().fetch` with
+invented XML and an injected transport. They do not contact ECB. The
+preparatory B1 proposal is never a runtime input. B1, B2 and B3 admission are
+unclaimed: the Worker and Go entry points have not yet been exercised as one
+cross-runtime chain, and operational sink, Cloud Run and browser evidence is
+still absent. Directory registration and public activation remain blocked.
 
 The Go service mounts the database providers listed in [`providers.json`](providers.json)
 through the real `openvaultdb-go` server. A provider entry pins the GitHub

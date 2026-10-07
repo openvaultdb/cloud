@@ -38,7 +38,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ErrorLog: safeHTTPErrorLog(os.Stderr)}
 	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	go func() {

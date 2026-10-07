@@ -1,5 +1,5 @@
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
-import { proxyChinook } from "./chinook";
+import { proxyChinook, proxyECB } from "./chinook";
 import {
   proxyCloudDatabase,
   proxyDeviceAuthorization,
@@ -14,6 +14,15 @@ export function createWorker(
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        if (url.pathname === "/ecb/v1/databases/ecb/dtql") {
+          if ((env as Env & { ECB_ENABLED?: string }).ECB_ENABLED !== "true") {
+            return jsonResponse({ error: "ECB OVDB is not configured." }, 503);
+          }
+          if (request.method !== "POST" || url.search !== "") {
+            return jsonResponse({ error: "ECB query request refused." }, 405);
+          }
+          return proxyECB(request, env, upstreamFetch);
+        }
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
             ? authorizationServerMetadata(env)
@@ -175,6 +184,10 @@ export function createWorker(
         }
         return withAssetSecurityHeaders(await env.ASSETS.fetch(request));
       } catch (error) {
+        if (url.pathname.startsWith("/ecb/")) {
+          console.error("ecb_worker_internal_error");
+          return jsonResponse({ error: "ECB OVDB is temporarily unavailable." }, 500);
+        }
         console.error(
           JSON.stringify({
             message: "Unhandled OpenVaultDB Cloud request error",
