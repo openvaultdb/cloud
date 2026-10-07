@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,23 @@ func TestDemoPostgresManifestRejectsInvalidRuntimeConfig(t *testing.T) {
 		if _, err := demoPostgresManifest(provider); err == nil {
 			t.Errorf("invalid native PostgreSQL config was accepted: %#v", provider)
 		}
+	}
+}
+
+func TestPostgreSQLRequestSupportsBodylessMethods(t *testing.T) {
+	for _, method := range []string{http.MethodOptions, http.MethodGet} {
+		t.Run(method, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != method || r.Body != http.NoBody || r.ContentLength != 0 {
+					t.Errorf("bodyless request = method %q, body %T, content length %d", r.Method, r.Body, r.ContentLength)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			response := postgreSQLRequest(t, handler, method, "/v1/databases/chinook-postgresql", "", "https://datatug.app")
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("bodyless %s request status = %d", method, response.Code)
+			}
+		})
 	}
 }
 
@@ -252,7 +270,7 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 
 func postgreSQLRequest(t *testing.T, handler http.Handler, method, path, query string, origins ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	var body *strings.Reader
+	var body io.Reader
 	if method == http.MethodPost {
 		encoded, err := json.Marshal(struct {
 			Query string `json:"query"`
