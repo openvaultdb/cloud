@@ -72,11 +72,14 @@ func TestConfiguredDemoPostgresDefinesSixDistinctReadOnlyMounts(t *testing.T) {
 			t.Errorf("%s manifest does not declare its read-only secret-backed mount: %+v", provider.ID, parsed)
 		}
 		options, err := demoPostgresMountOptions(provider)
-		if err != nil || len(options.ExcludedNativePostgresRelations) != 1 || options.ExcludedNativePostgresRelations[0].Schema != source.databaseID || options.ExcludedNativePostgresRelations[0].Name != "_import_manifest" {
+		if err != nil || options.CatalogueDir != "" || len(options.ExcludedNativePostgresRelations) != 1 || options.ExcludedNativePostgresRelations[0].Schema != source.databaseID || options.ExcludedNativePostgresRelations[0].Name != "_import_manifest" {
 			t.Errorf("%s exclusions = %+v, %v", provider.ID, options.ExcludedNativePostgresRelations, err)
 		}
 		if !reflect.DeepEqual(provider.CORSOrigins, demoPostgresCORSOrigins(source.databaseID)) {
 			t.Errorf("%s CORS origins = %q", provider.ID, provider.CORSOrigins)
+		}
+		if !containsString(provider.CORSOrigins, "https://datatug.app") {
+			t.Errorf("%s is missing the trusted DataTug origin: %q", provider.ID, provider.CORSOrigins)
 		}
 	}
 
@@ -145,6 +148,11 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 
 	for _, source := range demoPostgresSources {
 		id := source.databaseID + "-postgresql"
+		dtqlPath := "/v1/databases/" + id + "/dtql"
+		preflight := postgreSQLRequest(t, handler, http.MethodOptions, dtqlPath, "", "https://datatug.app")
+		if preflight.Code != http.StatusNoContent || preflight.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app" || !strings.Contains(preflight.Header().Get("Access-Control-Allow-Methods"), "POST") || !strings.Contains(strings.ToLower(preflight.Header().Get("Access-Control-Allow-Headers")), "content-type") {
+			t.Fatalf("%s DataTug DTQL preflight: %d headers=%v body=%s", id, preflight.Code, preflight.Header(), preflight.Body.String())
+		}
 		descriptorResponse := postgreSQLRequest(t, handler, http.MethodGet, "/v1/databases/"+id, "")
 		if descriptorResponse.Code != http.StatusOK {
 			t.Fatalf("%s descriptor: %d %s", id, descriptorResponse.Code, descriptorResponse.Body.String())
@@ -199,9 +207,12 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 			sort.Strings(fieldNames)
 			if !readDone && len(fieldNames) > 0 {
 				query := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: %s}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(fieldNames[0]))
-				response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/dtql", query)
+				response := postgreSQLRequest(t, handler, http.MethodPost, dtqlPath, query, "https://datatug.app")
 				if response.Code != http.StatusOK {
 					t.Fatalf("%s read by returned collection ID %q: %d %s", id, collectionID, response.Code, response.Body.String())
+				}
+				if response.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app" {
+					t.Fatalf("%s DTQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
 				}
 				readDone = true
 			}
@@ -239,7 +250,7 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 	}
 }
 
-func postgreSQLRequest(t *testing.T, handler http.Handler, method, path, query string) *httptest.ResponseRecorder {
+func postgreSQLRequest(t *testing.T, handler http.Handler, method, path, query string, origins ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body *strings.Reader
 	if method == http.MethodPost {
@@ -255,10 +266,26 @@ func postgreSQLRequest(t *testing.T, handler http.Handler, method, path, query s
 		body = strings.NewReader(string(encoded))
 	}
 	request := httptest.NewRequest(method, path, body)
+	if len(origins) > 0 {
+		request.Header.Set("Origin", origins[0])
+	}
+	if method == http.MethodOptions {
+		request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		request.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	}
 	if method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

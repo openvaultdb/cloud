@@ -77,6 +77,7 @@ func demoPostgresCORSOrigins(databaseID string) []string {
 		"https://demodb.dev",
 		"https://www.demodb.dev",
 		"https://" + databaseID + ".demodb.dev",
+		"https://datatug.app",
 	}
 }
 
@@ -105,6 +106,9 @@ func demoPostgresMountOptions(provider runtimeDatabase) (mount.Options, error) {
 		return mount.Options{}, err
 	}
 	return mount.Options{
+		// Strict schema mode never loads or observes inferred catalogues. Keep
+		// CatalogueDir unset so the temporary manifest directory is not retained
+		// as a path that core could later write.
 		ExcludedNativePostgresRelations: []schema.NativeCollectionSource{{
 			Schema: provider.nativePostgres.schemaName,
 			Name:   "_import_manifest",
@@ -139,7 +143,6 @@ func mountDemoPostgres(provider runtimeDatabase) (db *core.Database, resultErr e
 	if err != nil {
 		return nil, err
 	}
-	options.CatalogueDir = directory
 	db, err = mount.FileWithOptions(manifestPath, options)
 	if err != nil {
 		return nil, err
