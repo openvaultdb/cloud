@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -217,12 +218,16 @@ func readText(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func readKeyValues(path string) (map[string]uint64, error) {
+func readKeyValues(path string) (_ map[string]uint64, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("read cgroup metric %s: %w", filepath.Base(path), err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close cgroup metric %s: %w", filepath.Base(path), closeErr))
+		}
+	}()
 	values := map[string]uint64{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
