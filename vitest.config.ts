@@ -13,6 +13,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           OVDB_DEVICE_AUTH_PROXY_SECRET: "test-proxy-secret",
+          ...(process.env.ECB_CHAIN_BRIDGE_URL ? { ECB_CHAIN_BRIDGE_URL: process.env.ECB_CHAIN_BRIDGE_URL } : {}),
         },
       },
     })),

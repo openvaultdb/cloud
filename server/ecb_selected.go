@@ -32,6 +32,7 @@ func validECBProxySecret(value string) bool {
 // The mount seam lets the selected-path test use invented XML and an in-memory
 // transport. Production always uses the library's normal pinned HTTP mount.
 var selectedECBMount ecbMount = mount.File
+var selectedECBDiagnostic io.Writer = os.Stderr
 
 func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, http.Handler, func() error, error) {
 	enabled := os.Getenv("OVDB_ECB_ENABLED")
@@ -49,7 +50,7 @@ func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, ht
 		}
 		proxySecretHash = sha256.Sum256([]byte(proxySecret))
 		var err error
-		ecbHandler, closeECB, err = assembleECBHostCandidate(os.Getenv("OVDB_ECB_HOST_CONFIG"), selectedECBMount, os.Stderr)
+		ecbHandler, closeECB, err = assembleECBHostCandidate(os.Getenv("OVDB_ECB_HOST_CONFIG"), selectedECBMount, selectedECBDiagnostic)
 		if err != nil {
 			return nil, nil, nil, errECBCandidate
 		}
