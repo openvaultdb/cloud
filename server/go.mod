@@ -5,6 +5,7 @@ go 1.26.1
 toolchain go1.27.0
 
 require (
+	github.com/dal-go/dalgo2http v0.3.0
 	github.com/dal-go/record v0.1.4
 	github.com/openvaultdb/openvaultdb-go v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -23,7 +24,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dal-go/dalgo v0.93.0 // indirect
 	github.com/dal-go/dalgo2firestore v0.10.3 // indirect
-	github.com/dal-go/dalgo2http v0.3.0 // indirect
 	github.com/dal-go/dalgo2mysql v0.2.2 // indirect
 	github.com/dal-go/dalgo2postgres v0.8.0 // indirect
 	github.com/dal-go/dalgo2sql v0.29.0 // indirect

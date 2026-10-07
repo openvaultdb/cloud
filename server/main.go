@@ -18,6 +18,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		if err := runSourceFreeProbe(os.Args[1:], os.Stdout); err != nil {
+			log.Fatal("source-free probe failed")
+		}
+		return
+	}
 	databases, handler, closeDatabases, err := configuredHandler()
 	if err != nil {
 		log.Fatalf("mount sample databases: %v", err)
