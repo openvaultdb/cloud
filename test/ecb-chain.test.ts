@@ -6,6 +6,7 @@ import { createWorker } from "../src/worker";
 const publicURL = "https://cloud.openvaultdb.com/ecb/v1/databases/ecb/dtql";
 const origin = "https://synthetic-ecb.a.run.app";
 const secret = "synthetic-ecb-proxy-secret-32-bytes-long";
+const operatorToken = "synthetic-operator-token-32-bytes-long";
 const marker = "synthetic-private-error-marker";
 const query = "from: {name: daily}\ncolumns: [{field: time}, {field: currency}, {field: rate}]\nlimit: 1\n";
 
@@ -31,6 +32,7 @@ it.skipIf(!bridgeURL)("drives the selected Worker request through configuredHand
       const request = new Request(input, init);
       expect(request.url).toBe(`${origin}/v1/databases/ecb/dtql`);
       expect(request.headers.get("X-OVDB-ECB-Proxy-Secret")).toBe(secret);
+      expect(request.headers.get("X-OVDB-ECB-Operator-Token")).toBeNull();
       expect(request.headers.get("Authorization")).toBeNull();
       expect(request.headers.get("Cookie")).toBeNull();
       const upstream = await fetch(new Request(`${bridgeURL}/v1/databases/ecb/dtql`, init));
@@ -38,14 +40,15 @@ it.skipIf(!bridgeURL)("drives the selected Worker request through configuredHand
       return upstream;
     });
     const environment = { ...env, ECB_ENABLED: "true", CHINOOK_RUN_ORIGIN: origin,
-      ECB_RUN_ORIGIN: origin, ECB_PROXY_SECRET: secret } as Env;
+      ECB_RUN_ORIGIN: origin, ECB_PROXY_SECRET: secret, ECB_OPERATOR_TOKEN: operatorToken } as Env;
     const invoke = (request: Request, selectedEnv = environment): Promise<Response> => Promise.resolve(
       (worker.fetch as (request: Request, env: Env, context: ExecutionContext) => Response | Promise<Response>)(
         request, selectedEnv, createExecutionContext(),
       ),
     );
     const body = () => new Request(publicURL, { method: "POST", body: query,
-      headers: { Authorization: `Bearer ${marker}`, Cookie: marker, "X-OVDB-ECB-Proxy-Secret": marker } });
+      headers: { Authorization: `Bearer ${marker}`, Cookie: marker, "X-OVDB-ECB-Proxy-Secret": marker,
+        "X-OVDB-ECB-Operator-Token": operatorToken } });
 
     const success = await invoke(body());
     expect(success.status).toBe(200);

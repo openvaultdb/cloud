@@ -14,7 +14,9 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
 	"github.com/openvaultdb/openvaultdb-go/pkg/license"
@@ -23,9 +25,8 @@ import (
 	"github.com/openvaultdb/openvaultdb-go/pkg/server"
 )
 
-// The candidate has no call from configuredHandler or the public listener.
-// An operator must supply a separate opt-in document before this composition
-// can be exercised; the preparatory OVDB proposal is never a runtime input.
+// The candidate can be selected only through the separate operator admission
+// and host configuration; the preparatory OVDB proposal is never a runtime input.
 const (
 	ecbHostFormat      = "ovdb-ecb-host-candidate/1"
 	ecbPublisherSHA    = "399ce77bc4513b1a819f61e26a54fe8e6c46569b2b45ea078582d9ad6758697e"
@@ -70,7 +71,68 @@ type ecbHostConfig struct {
 	Binding           providerreads.Binding `json:"binding"`
 }
 
+// The admission is an operator-owned decision, separate from the publisher's
+// blocked proposal and from the transport manifest. Its digest is supplied
+// independently by the selected service configuration.
+type ecbAdmission struct {
+	Format                  string `json:"format"`
+	Decision                string `json:"decision"`
+	ApprovedBy              string `json:"approvedBy"`
+	ApprovedAt              string `json:"approvedAt"`
+	HostConfigSHA256        string `json:"hostConfigSHA256"`
+	PublisherManifestSHA256 string `json:"publisherManifestSHA256"`
+	RightsDigest            string `json:"rightsDigest"`
+	ExecutorID              string `json:"executorId"`
+	ResourceID              string `json:"resourceId"`
+	Method                  string `json:"method"`
+	Path                    string `json:"path"`
+	MaxReadsPerExecution    int    `json:"maxReadsPerExecution"`
+	MaxRows                 int    `json:"maxRows"`
+	PublicAccess            bool   `json:"publicAccess"`
+	PaidAccess              bool   `json:"paidAccess"`
+}
+
 var errECBCandidate = errors.New("ECB candidate configuration refused")
+
+func checkedECBAdmission(path, digest, configPath string) (string, error) {
+	if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
+		return "", errECBCandidate
+	}
+	data, err := readECBFile(path, 4096)
+	if err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != digest || rejectDuplicateJSON(data) != nil {
+		return "", errECBCandidate
+	}
+	if _, err := canonicalMembers(data, map[string]byte{
+		"format": '"', "decision": '"', "approvedBy": '"', "approvedAt": '"',
+		"hostConfigSHA256": '"', "publisherManifestSHA256": '"', "rightsDigest": '"',
+		"executorId": '"', "resourceId": '"', "method": '"', "path": '"',
+		"maxReadsPerExecution": 'n', "maxRows": 'n', "publicAccess": 'b', "paidAccess": 'b',
+	}, nil, true); err != nil {
+		return "", errECBCandidate
+	}
+	var admission ecbAdmission
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&admission) != nil || decoder.Decode(new(any)) != io.EOF {
+		return "", errECBCandidate
+	}
+	approvedAt, err := time.Parse(time.RFC3339, admission.ApprovedAt)
+	if err != nil || approvedAt.IsZero() || admission.ApprovedBy == "" || strings.TrimSpace(admission.ApprovedBy) != admission.ApprovedBy {
+		return "", errECBCandidate
+	}
+	config, err := readECBFile(configPath, 32<<10)
+	if err != nil || admission.HostConfigSHA256 != fmt.Sprintf("%x", sha256.Sum256(config)) ||
+		admission.Format != "ovdb-ecb-b1-operator-admission/1" ||
+		admission.Decision != "operator-free-transient-read-only" ||
+		admission.PublisherManifestSHA256 != ecbPublisherSHA || admission.RightsDigest != ecbRightsSHA ||
+		admission.ExecutorID != "openvaultdb-cloud" || admission.ResourceID != "ecb-daily" ||
+		admission.Method != http.MethodPost || admission.Path != ecbQueryPath ||
+		admission.MaxReadsPerExecution != 1 || admission.MaxRows != 50 ||
+		admission.PublicAccess || admission.PaidAccess {
+		return "", errECBCandidate
+	}
+	return admission.HostConfigSHA256, nil
+}
 
 func readECBFile(path string, limit int64) ([]byte, error) {
 	if path == "" {
@@ -88,9 +150,12 @@ func readECBFile(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func checkedECBConfig(path string) (ecbHostConfig, error) {
+func checkedECBConfig(path string, expectedDigest ...string) (ecbHostConfig, error) {
 	data, err := readECBFile(path, 32<<10)
 	if err != nil || rejectDuplicateJSON(data) != nil {
+		return ecbHostConfig{}, errECBCandidate
+	}
+	if len(expectedDigest) > 1 || (len(expectedDigest) == 1 && fmt.Sprintf("%x", sha256.Sum256(data)) != expectedDigest[0]) {
 		return ecbHostConfig{}, errECBCandidate
 	}
 	if _, err := canonicalMembers(data, map[string]byte{
@@ -140,8 +205,8 @@ func checkedECBConfig(path string) (ecbHostConfig, error) {
 
 type ecbMount func(string) (*core.Database, error)
 
-func assembleECBHostCandidate(configPath string, open ecbMount, diagnostic io.Writer) (http.Handler, func() error, error) {
-	config, err := checkedECBConfig(configPath)
+func assembleECBHostCandidate(configPath string, open ecbMount, diagnostic io.Writer, expectedDigest ...string) (http.Handler, func() error, error) {
+	config, err := checkedECBConfig(configPath, expectedDigest...)
 	if err != nil {
 		return nil, nil, errECBCandidate
 	}
