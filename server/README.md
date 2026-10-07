@@ -101,6 +101,10 @@ operator-reviewed decision and remains unclaimed by these tests. B2 and B3
 remain open; Cloud Run, browser and operational sink evidence is still absent. Directory
 registration and public activation remain blocked.
 
+The separate [IANA operator query component](IANA.md) is also default off and
+synthetic-only. It requires its own reviewed admission and credentials; this ECB
+configuration does not enable it.
+
 The Go service mounts the database providers listed in [`providers.json`](providers.json)
 through the real `openvaultdb-go` server. A provider entry pins the GitHub
 repository commit, provider manifest, contract, checksum index, public database

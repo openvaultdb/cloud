@@ -14,6 +14,7 @@ export default defineConfig({
         bindings: {
           OVDB_DEVICE_AUTH_PROXY_SECRET: "test-proxy-secret",
           ...(process.env.ECB_CHAIN_BRIDGE_URL ? { ECB_CHAIN_BRIDGE_URL: process.env.ECB_CHAIN_BRIDGE_URL } : {}),
+          ...(process.env.IANA_CHAIN_BRIDGE_URL ? { IANA_CHAIN_BRIDGE_URL: process.env.IANA_CHAIN_BRIDGE_URL } : {}),
         },
       },
     })),

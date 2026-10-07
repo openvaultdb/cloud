@@ -30,6 +30,8 @@ github.com/dal-go/dalgo2firestore v0.10.3 h1:AQSFCh0T+mao61lg2flJYqgbU/lpWIQ6bUY
 github.com/dal-go/dalgo2firestore v0.10.3/go.mod h1:qWHAAOz9AVKdseFVQaaaoIUtzZFxFnQnzMUqaPTavTA=
 github.com/dal-go/dalgo2http v0.3.0 h1:WmbHDrGqcpS1zfrY45xMTLc6VbUrTcpjDHYfGAbZYVA=
 github.com/dal-go/dalgo2http v0.3.0/go.mod h1:9D70F2oimIPSz9r5iKki5xuepReCAMSSla9TmgmuVcs=
+github.com/dal-go/dalgo2http v0.4.0 h1:vtkwd8x88kP4XLEZCt7kTFa5xJfQojJWJRKBHGEBg0k=
+github.com/dal-go/dalgo2http v0.4.0/go.mod h1:9D70F2oimIPSz9r5iKki5xuepReCAMSSla9TmgmuVcs=
 github.com/dal-go/dalgo2mysql v0.2.2 h1:RLilKnl+6FBncKQ6SThVumNifwvNX0KBn0GccZe8UdQ=
 github.com/dal-go/dalgo2mysql v0.2.2/go.mod h1:R4gD1rMSghwfw06inlSMKW/AnJGvyiQqydLIciKp+PI=
 github.com/dal-go/dalgo2postgres v0.9.1 h1:UGGEIQXTlTr/9pneyz9fSKT6x+CJhvugX/6PMBukPUc=
@@ -118,6 +120,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/openvaultdb/openvaultdb-go v0.22.3 h1:e209tgeAJE01VosOLLxpZc1sz0iDf5zHOPCUqzdGxXc=
 github.com/openvaultdb/openvaultdb-go v0.22.3/go.mod h1:J2AeTR+vMvVLauwscUIQHC7uYbzcyGjF3XWYqdAcybU=
+github.com/openvaultdb/openvaultdb-go v0.23.0 h1:Qr05RS3oxizmY+M3QpB4Lm0YA5W3ssdms1tUjWGsvvQ=
+github.com/openvaultdb/openvaultdb-go v0.23.0/go.mod h1:mlj+iBhTQi4WOmuiUsuTQz/S497HKBsFx1BqWdLSZxU=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
