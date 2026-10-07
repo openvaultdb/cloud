@@ -136,9 +136,12 @@ the limits were measured against: re-measure as described in
 The CI job builds and tests the Linux binary with all pinned fixtures, then
 publishes that exact binary plus the verified fixture directory. The Cloud Run
 deploy job checks the binary and every provider receipt, deploys the existing
-service, and runs profile, collection, query, CORS, and read-only checks for
-each inventory entry before it publishes the service-origin receipt consumed
-by the Cloudflare Worker deploy. Deployment keeps the existing Cloud Run
+service, and publishes the validated service-origin and source-SHA metadata
+consumed by the Cloudflare Worker deploy. Live profile, collection, query, CORS,
+and read-only checks run only when the repository variable
+`OVDB_CLOUD_RUN_SMOKE_ENABLED` is `true`; an unset variable skips those HTTP
+checks while retaining deployment and metadata publication. This metadata alone
+does not prove live query behavior. Deployment keeps the existing Cloud Run
 service, region, memory and CPU, Worker origin, and compatibility environment
 variables; the per-instance concurrency, which the memory arithmetic depends on, is
 written out in the deploy command.

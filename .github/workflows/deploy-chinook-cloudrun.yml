@@ -111,13 +111,41 @@ jobs:
             --timeout=120 \
             --quiet
 
-      - name: Verify live profile and cacheable DTQL
+      - name: Record deployed service origin and source
+        id: deployment
         working-directory: server
         run: |
           SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
             --project="${PROJECT_ID}" --region="${REGION}" \
             --format='value(status.url)')
           test -n "${SERVICE_URL}"
+          [[ "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          python3 - "${SERVICE_URL}" <<'PY'
+          import sys
+          from urllib.parse import urlsplit
+
+          origin = sys.argv[1]
+          url = urlsplit(origin)
+          if (any(ord(char) < 33 for char in origin)
+                  or url.scheme != "https"
+                  or not url.hostname or not url.hostname.endswith(".run.app")
+                  or url.netloc != url.hostname
+                  or url.path or url.query or url.fragment):
+              raise SystemExit("invalid Chinook Cloud Run origin")
+          PY
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
+          printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
+          echo "origin=${SERVICE_URL}" >> "${GITHUB_OUTPUT}"
+
+      # Live HTTP queries remain off until an operator explicitly opts in.
+      # Deployment metadata above is required even when these checks are skipped.
+      - name: Verify live profile and cacheable DTQL
+        if: ${{ vars.OVDB_CLOUD_RUN_SMOKE_ENABLED == 'true' }}
+        working-directory: server
+        env:
+          SERVICE_URL: ${{ steps.deployment.outputs.origin }}
+        run: |
           curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
             "${SERVICE_URL}/ovdb/dbs/chinook" > "${RUNNER_TEMP}/chinook-profile.html"
           grep -q 'https://cloud.openvaultdb.com/ovdb/dbs/chinook' "${RUNNER_TEMP}/chinook-profile.html"
@@ -151,10 +179,8 @@ jobs:
           grep -iq '^access-control-allow-origin: https://northwind.demodb.dev' "${RUNNER_TEMP}/northwind-headers"
           python3 smoke_inventory.py --origin "${SERVICE_URL}" --inventory fixture/output/inventory.json
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
-          printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
-          printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
 
-      - name: Publish verified service origin for the Worker deploy
+      - name: Publish deployment metadata for the Worker deploy
         uses: actions/upload-artifact@v7
         with:
           name: chinook-cloudrun-deployment
