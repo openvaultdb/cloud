@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stableId, collectionSchema } from '../schema.mjs';
-import { originForDocument, corePriority, repositoryTerms, searchFields } from '../provenance.mjs';
+import { originForDocument, corePriority, kindPriority, repositoryTerms, searchFields, searchFieldsForQuery } from '../provenance.mjs';
 import { mergeExports, validateManifest } from '../merge.mjs';
 import { publish, typesenseClient } from '../publish.mjs';
 import { createGateway } from '../gateway.mjs';
@@ -88,6 +88,16 @@ test('derives searchable repository terms only from pinned public provenance', (
   }
   assert.throws(() => repositoryTerms({ source_repository: `owner/${'x'.repeat(160)}` }), /invalid source repository/);
 });
+test('routes only a complete repository path to its indexed field', () => {
+  assert.deepEqual(searchFieldsForQuery('demo-db/chinook'), { query_by: 'repository_full_name', query_by_weights: '5' });
+  for (const query of ['demo-db', 'chinook', 'northwind.customer', 'demo-db/chinook/extra', 'demo-db chinook']) {
+    assert.deepEqual(searchFieldsForQuery(query), searchFields);
+  }
+  assert.equal(collectionSchema('candidate').fields.find(field => field.name === 'repository_full_name').symbols_to_index.includes('/'), true);
+  assert.equal(collectionSchema('candidate').fields.find(field => field.name === 'kind_priority').type, 'int32');
+  assert.ok(kindPriority({ kind: 'model' }) > kindPriority({ kind: 'model_entity' }));
+  assert.ok(kindPriority({ kind: 'model_entity' }) > kindPriority({ kind: 'model_field' }));
+});
 test('derives core priority and entity field context only from pinned source records', () => {
   const { manifest, exports } = fixture();
   const core = exports[0].documents[0];
@@ -110,12 +120,17 @@ test('derives core priority and entity field context only from pinned source rec
   const merged = mergeExports(manifest, exports);
   const indexedCore = merged.documents.find(doc => doc.id === core.id);
   assert.equal(indexedCore.core_priority, 1);
+  assert.equal(indexedCore.kind_priority, 2);
   assert.deepEqual(indexedCore.field_preview, ['Country']);
   assert.equal(indexedCore.field_count, 1);
   assert.equal(merged.documents.find(doc => doc.id === field.id).core_priority, 1);
+  assert.equal(merged.documents.find(doc => doc.id === field.id).kind_priority, 0);
   assert.equal(merged.documents.find(doc => doc.id === publicField.id).core_priority, 0);
   assert.notEqual(merged.generation, mergeExports(fixture().manifest, fixture().exports).generation);
   exports[0].documents[0].core_priority = 1;
+  assert.throws(() => mergeExports(manifest, exports), /unknown document field/);
+  delete exports[0].documents[0].core_priority;
+  exports[0].documents[0].kind_priority = 3;
   assert.throws(() => mergeExports(manifest, exports), /unknown document field/);
 });
 test('a core-like name, parent or unrelated domain cannot claim the core origin', () => {
@@ -152,6 +167,9 @@ test('merges a ModelSpec component-use effective field with its declaring anchor
   const merged = mergeExports(manifest, exports);
   assert.equal(merged.documents.length, 5);
   assert.equal(merged.documents.find(doc => doc.id === field.id).declaring_component, 'Auditable');
+  assert.equal(merged.documents.find(doc => doc.id === model.id).kind_priority, 3);
+  assert.equal(merged.documents.find(doc => doc.id === entity.id).kind_priority, 2);
+  assert.equal(merged.documents.find(doc => doc.id === field.id).kind_priority, 0);
   assert.deepEqual(merged.documents.find(doc => doc.id === entity.id).field_preview, ['createdAt']);
   assert.equal(merged.documents.find(doc => doc.id === entity.id).field_count, 1);
   assert.equal(collectionSchema('candidate').fields.find(item => item.name === 'declaring_component').index, false);
@@ -179,12 +197,12 @@ function fakeEngine(failImport = false) {
       if (method === 'GET' && path.endsWith('/documents/search?'+path.split('/documents/search?')[1])) {
         const params = new URLSearchParams(path.split('?')[1]);
         const q = params.get('q');
-        assert.equal(params.get('query_by'), searchFields.query_by);
-        assert.equal(params.get('query_by_weights'), searchFields.query_by_weights);
-        assert.equal(params.get('sort_by'), '_text_match:desc,core_priority:desc');
+        assert.equal(params.get('query_by'), searchFieldsForQuery(q).query_by);
+        assert.equal(params.get('query_by_weights'), searchFieldsForQuery(q).query_by_weights);
+        assert.equal(params.get('sort_by'), '_text_match:desc,core_priority:desc,kind_priority:desc');
         assert.equal(params.get('prioritize_num_matching_fields'), params.get('filter_by').includes('domain:=meaninggraph') ? 'false' : null);
         const docs = collections.get(collection) || [];
-        return { status: 200, body: JSON.stringify({ hits: docs.filter(doc => doc.identifier === q).map(document => ({ document })) }) };
+        return { status: 200, body: JSON.stringify({ hits: docs.filter(doc => params.get('query_by') === 'repository_full_name' ? doc.repository_full_name === q : doc.identifier === q).map(document => ({ document })) }) };
       }
       if (method === 'POST' && path.includes('/documents/import?')) {
         const rows = body.trim().split('\n').map(JSON.parse);
@@ -228,6 +246,23 @@ test('failed per-row import preserves alias; valid generation is idempotent and 
   await assert.rejects(publish(manifest, exports, { api: good.api, stateDir: dir, smokeQueries }), /stale/);
   assert.equal(JSON.parse(await readFile(join(dir, 'publication.json'))).sequence, 6);
 });
+test('publisher verifies a full repository path with the same query policy as the gateway', async () => {
+  const { manifest, exports } = fixture();
+  manifest.approved_revisions['demo-db/chinook'] = sha('d');
+  exports[1].source_revisions['demo-db/chinook'] = sha('d');
+  exports[1].documents[0].source_repository = 'demo-db/chinook';
+  exports[1].documents[0].source_commit = sha('d');
+  for (const source of manifest.sources) { delete source.file; source.url = `https://${source.domain === 'meaninggraph' ? 'meaninggraph.io' : source.domain === 'modelspec' ? 'modelspec.org' : 'directory.openvaultdb.com'}/registry-search.json`; }
+  for (const envelope of exports) envelope.fixture = false;
+  const smokeQueries = exports.map(envelope => ({
+    domain: envelope.domain, id: envelope.documents[0].id,
+    q: envelope.domain === 'modelspec' ? 'demo-db/chinook' : 'Customer'
+  }));
+  const engine = fakeEngine();
+  const dir = await mkdtemp(join(tmpdir(), 'registry-repository-query-'));
+  const result = await publish(manifest, exports, { api: engine.api, stateDir: dir, smokeQueries });
+  assert.equal(engine.alias, `registry_metadata_${result.generation}`);
+});
 test('publication recovers a switching journal before and after alias update', async () => {
   const { manifest, exports } = fixture();
   for (const source of manifest.sources) { delete source.file; source.url = `https://${source.domain === 'meaninggraph' ? 'meaninggraph.io' : source.domain === 'modelspec' ? 'modelspec.org' : 'directory.openvaultdb.com'}/registry-search.json`; }
@@ -258,11 +293,11 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
     assert.equal(options.headers['x-typesense-api-key'], 'secret');
     const search = JSON.parse(options.body).searches[0];
     assert.deepEqual({ query_by: search.query_by, query_by_weights: search.query_by_weights }, searchFields);
-    assert.equal(search.sort_by, '_text_match:desc,core_priority:desc');
+    assert.equal(search.sort_by, '_text_match:desc,core_priority:desc,kind_priority:desc');
     assert.equal(search.prioritize_num_matching_fields, false);
     assert.match(search.filter_by, /visibility:=public/);
     assert.match(search.include_fields, /domain,visibility/);
-    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_repository: 'meaninggraph/core', repository_owner: 'meaninggraph', repository_name: 'core', repository_full_name: 'meaninggraph/core', core_priority: 1, description: 'A customer.', field_preview: ['Country', 'City'], field_count: 2, source_path: 'private' } }] }] });
+    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_repository: 'meaninggraph/core', repository_owner: 'meaninggraph', repository_name: 'core', repository_full_name: 'meaninggraph/core', core_priority: 1, kind_priority: 2, description: 'A customer.', field_preview: ['Country', 'City'], field_count: 2, source_path: 'private' } }] }] });
   });
   const response = await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), env);
   assert.equal(response.status, 200);
@@ -270,6 +305,7 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
   assert.equal(hit.source_path, undefined);
   assert.equal(hit.source_repository, undefined);
   assert.equal(hit.core_priority, undefined);
+  assert.equal(hit.kind_priority, undefined);
   assert.equal(hit.repository, 'meaninggraph/core');
   assert.equal(hit.repository_owner, undefined);
   assert.equal(hit.origin, 'core');
@@ -290,7 +326,7 @@ test('gateway searches a ModelSpec repository owner, name and full path with pub
     return Response.json({ results: [{ found: 1, hits: [{ document: {
       id: 'model', domain: 'modelspec', visibility: 'public', kind: 'model', title: 'Chinook',
       source_repository: 'demo-db/chinook', repository_owner: 'demo-db', repository_name: 'chinook', repository_full_name: 'demo-db/chinook',
-      core_priority: 0, source_path: 'private', source_commit: sha('d')
+      core_priority: 0, kind_priority: 3, source_path: 'private', source_commit: sha('d')
     } }] }] });
   });
   const response = await worker.fetch(request({ q: 'demo-db', domain: 'modelspec' }), env);
@@ -301,6 +337,23 @@ test('gateway searches a ModelSpec repository owner, name and full path with pub
   assert.equal(hit.source_path, undefined);
   assert.equal(hit.source_commit, undefined);
   assert.equal(hit.origin, 'public_registry');
+});
+test('gateway routes a complete repository path to the full-name field only', async () => {
+  const worker = createGateway(async (_url, options) => {
+    const search = JSON.parse(options.body).searches[0];
+    assert.equal(search.q, 'demo-db/chinook');
+    assert.deepEqual({ query_by: search.query_by, query_by_weights: search.query_by_weights }, searchFieldsForQuery(search.q));
+    assert.equal(search.sort_by, '_text_match:desc,core_priority:desc,kind_priority:desc');
+    assert.equal(search.filter_by, 'domain:=modelspec && visibility:=public && kind:=[model]');
+    return Response.json({ results: [{ found: 1, hits: [{ document: {
+      id: 'model', domain: 'modelspec', visibility: 'public', kind: 'model', title: 'Chinook',
+      source_repository: 'demo-db/chinook', repository_owner: 'demo-db', repository_name: 'chinook', repository_full_name: 'demo-db/chinook',
+      core_priority: 0, kind_priority: 3
+    } }] }] });
+  });
+  const response = await worker.fetch(request({ q: 'demo-db/chinook', domain: 'modelspec', kind: 'model' }), env);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).hits[0].repository, 'demo-db/chinook');
 });
 test('gateway returns unavailable on engine failure and fails closed without rate binding', async () => {
   const worker = createGateway(async () => { throw new Error('secret engine error'); });

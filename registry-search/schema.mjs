@@ -47,6 +47,7 @@ export const collectionSchema = name => ({
     { name: 'repository_name', type: 'string', symbols_to_index: ['-'] },
     { name: 'repository_full_name', type: 'string', symbols_to_index: ['/', '-'] },
     { name: 'core_priority', type: 'int32' },
+    { name: 'kind_priority', type: 'int32' },
     { name: 'field_preview', type: 'string[]', optional: true, index: false },
     { name: 'field_count', type: 'int32', optional: true, index: false },
     { name: 'generation_id', type: 'string', optional: true, index: false },
