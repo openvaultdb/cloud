@@ -2,6 +2,24 @@
 
 This package is independent of the existing Cloud Worker. Its dedicated gateway is disabled by default. Production requires a reviewed Typesense Cloud hostname and deployment configuration. The Git registries and their trusted site exporters remain authoritative.
 
+## Private VM development pilot
+
+On the designated Linux VM, Node.js 20+ and Docker are required. From an `openvaultdb/cloud` checkout, run `node registry-search/vm-pilot.mjs install` as root. The installer pulls the pinned Typesense 30.2 image, creates `/opt/datatug/registry-search` with root-only ownership and a durable `owner.json` receipt, and copies itself there before starting the container. The receipt names operator `alex`, this task, and the exact stop and teardown commands. An admin key is generated into a root-only `typesense.env` file; it is never passed as a command argument. The data mount persists under `data/`.
+
+The container uses Docker bridge networking and binds `127.0.0.1:8108`, has a 2 CPU and 3 GiB memory limit with swap disabled, and uses bounded Docker logs. Run `node /opt/datatug/registry-search/vm-pilot.mjs status` to check its Docker configuration and readiness. Run `node /opt/datatug/registry-search/vm-pilot.mjs stop` to stop it, or `node /opt/datatug/registry-search/vm-pilot.mjs teardown` to remove the container. Teardown retains data and credentials for deliberate recovery or disposal. Re-running install accepts only an exact matching container and owner receipt; configuration drift requires investigation instead of silent adoption.
+
+The install, status, stop, teardown and reinstall sequence was executed on the Hetzner `vmai` host on 2026-10-07. The persistent index and search-only credential survived recreation. The current 1,274-document corpus passed exact queries and 60-second loads at 10 and 50 requests/second with zero errors and p95 below 5 ms. These measurements used an in-process gateway and test limiter on the VM; they do not qualify WAN latency, a deployed gateway, growth capacity or concurrent indexing.
+
+For the executed snapshot-and-restore proof, run as root:
+
+```sh
+node registry-search/vm-recovery.mjs prove /opt/datatug/registry-search/exports/manifest.json
+```
+
+The helper installs itself as `/opt/datatug/registry-search/recover.mjs`, records ownership before starting resources, requests a supported Typesense snapshot, encrypts the archive, and restores it into an isolated loopback container on port 8109. It checks the live alias, count and manifest smoke queries, then removes its owned temporary container and directories. Retained encrypted archives and private passfiles are under `backups/`; copy both off-host into private storage without logging their contents. The 2026-10-07 archive was copied into the operator's private `.wb/private/registry-search-vm-pilot/` directory and its digest verified. If interrupted, run `node /opt/datatug/registry-search/recover.mjs cleanup`; cleanup requires matching ownership receipts. The primary data and credentials are retained.
+
+This pilot does not configure DNS, TLS, a firewall rule, a public gateway route, automatic publication or scheduled backup. Publishing requires an explicit manifest and the single-publisher lock described below. Full staging qualification and Typesense Cloud cutover remain required before public search. Detailed inventory and measured receipts live in the backstage `registry-metadata-search` plan.
+
 `registry-search-export/v1` inputs are pinned in a manifest. Each `sources[]` entry has `domain`, `repository`, `revision` (40 lowercase hex), `sha256` (of the exact JSON bytes), and an HTTPS `url` ending in `/registry-search.json`. All three domains are required. `approved_revisions` pins every additional object repository allowed in provenance. `sequence` is a monotonically increasing publication number. `smoke_queries` contains at least one `{domain,q,id}` for each domain. Source exports contain `format`, `domain`, `source_revisions`, `fixture`, and `documents`. Shared source pins must agree across all exports and with the manifest. The three canonical site hosts and route prefixes are fixed in code.
 
 Prepare JSONL without an engine:
