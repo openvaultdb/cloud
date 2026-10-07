@@ -150,10 +150,6 @@ func readECBFile(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func checkedECBConfig(path string, expectedDigest ...string) (ecbHostConfig, error) {
-	return checkedECBConfigVersion(path, false, expectedDigest...)
-}
-
 func checkedECBConfigVersion(path string, public bool, expectedDigest ...string) (ecbHostConfig, error) {
 	data, err := readECBFile(path, 32<<10)
 	if err != nil || rejectDuplicateJSON(data) != nil {
