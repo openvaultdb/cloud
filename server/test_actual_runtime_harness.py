@@ -187,12 +187,20 @@ func TestActualResolvedManifestRead(t *testing.T) {
 func TestActualQueryConformance(t *testing.T) {
  docs := []string{actualSpoolQuery, actualOrdinaryQuery("Order Details", 0), actualOrdinaryQuery("table's name", 1), actualSelectedQuery("table's name"), actualCallerOrderQuery("table's name", "field's name")}
  docs = append(docs, actualDiagnosticQueries("table's name", "selected's name")...)
+ expectedWireQueries := map[string]struct { accept, incompleteBudget string }{
+  "Sales.SalesOrderHeaderSalesReason": {accept: "application/vnd.openvaultdb.query-stream+json"},
+  "Production.TransactionHistory": {accept: "application/vnd.openvaultdb.query-stream+json", incompleteBudget: "response_bytes"},
+ }
  for _, work := range actualLegacyWorks() {
   if strings.HasSuffix(work.path,"/query") {
    var wire core.Query
-   if err:=json.Unmarshal([]byte(work.body),&wire); err!=nil || wire.Collection!="Sales.SalesOrderHeaderSalesReason" { t.Fatalf("wire query changed: %v %s",err,work.body) }
+   if err:=json.Unmarshal([]byte(work.body),&wire); err!=nil { t.Fatalf("wire query is not valid JSON: %v %s",err,work.body) }
+   expected, ok := expectedWireQueries[wire.Collection]
+   if !ok || work.want != 200 || work.accept != expected.accept || work.incompleteBudget != expected.incompleteBudget { t.Fatalf("wire query changed: %s %+v",work.body,work) }
+   delete(expectedWireQueries,wire.Collection)
   } else { docs=append(docs,work.body) }
  }
+ if len(expectedWireQueries)!=0 { t.Fatalf("wire query inventory is incomplete: %+v",expectedWireQueries) }
  for _, doc := range docs {
   if _,err := dtql.Deserialize([]byte(doc)); err!=nil { t.Fatalf("actual workload fails pinned parser: %v\n%s",err,doc) }
  }
