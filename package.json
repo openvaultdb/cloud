@@ -12,6 +12,8 @@
     "test:registry-search": "node --test registry-search/test/*.node.mjs",
     "benchmark:registry-search": "node registry-search/benchmark.mjs",
     "deploy:registry-search:dry": "wrangler deploy --dry-run --config registry-search/wrangler.jsonc",
+    "deploy:registry-search:live:dry": "wrangler deploy --dry-run --config registry-search/wrangler.live.jsonc",
+    "deploy:registry-search:live": "wrangler deploy --config registry-search/wrangler.live.jsonc",
     "typecheck": "tsc --noEmit",
     "types": "wrangler types"
   },

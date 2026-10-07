@@ -1,0 +1,14 @@
+# Inside the existing vm1.sneat.dev route block, before its fallback respond.
+# Typesense checks the search-only API key supplied by the Worker.
+@registrySearch {
+    path /multi_search
+    method POST
+    query ""
+}
+log_skip /multi_search
+handle @registrySearch {
+    request_body {
+        max_size 64KB
+    }
+    reverse_proxy 127.0.0.1:8108
+}

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadExports, publish, typesenseClient } from './publish.mjs';
 import { mergeExports } from './merge.mjs';
 import { runUnderPublicationLock, assertPublicationLock } from './lock.mjs';
+import { productionEngineOrigin } from './engine-policy.mjs';
 
 async function main() {
   const [command, manifestPath, output] = process.argv.slice(2);
@@ -33,12 +34,12 @@ async function main() {
   }
   if ((manifest.sources.some(source => source.file) || exports.some(source => source.fixture)) && !(mode === 'local' && allowFixtures)) throw new Error('fixtures require explicit local proof');
   if (!['local', 'staging', 'production'].includes(mode)) throw new Error('publish requires local, staging or production mode');
-  if (mode === 'production' && (process.env.REGISTRY_TYPESENSE_DEPLOYMENT !== 'cloud' || !process.env.REGISTRY_TYPESENSE_CLOUD_HOST || new URL(process.env.REGISTRY_TYPESENSE_ORIGIN).hostname !== process.env.REGISTRY_TYPESENSE_CLOUD_HOST)) throw new Error('production requires verified Typesense Cloud host');
+  if (mode === 'production') productionEngineOrigin(process.env);
   const stateDir = process.env.REGISTRY_SEARCH_STATE_DIR;
   if (!stateDir) throw new Error('state directory required');
   await mkdir(stateDir, { recursive: true });
   const result = await publish(manifest, exports, {
-    api: typesenseClient(process.env.REGISTRY_TYPESENSE_ORIGIN, process.env.REGISTRY_TYPESENSE_ADMIN_KEY, fetch, { allowLocalHTTP: mode === 'local' }),
+    api: typesenseClient(mode === 'production' && process.env.REGISTRY_TYPESENSE_DEPLOYMENT === 'vm-pilot' ? 'http://127.0.0.1:8108/' : process.env.REGISTRY_TYPESENSE_ORIGIN, process.env.REGISTRY_TYPESENSE_ADMIN_KEY, fetch, { allowLocalHTTP: mode === 'local' || mode === 'production' && process.env.REGISTRY_TYPESENSE_DEPLOYMENT === 'vm-pilot' }),
     stateDir,
     smokeQueries: manifest.smoke_queries,
     allowFixtures: mode === 'local' && allowFixtures

@@ -10,6 +10,10 @@ import { stableId, collectionSchema } from '../schema.mjs';
 import { mergeExports, validateManifest } from '../merge.mjs';
 import { publish, typesenseClient } from '../publish.mjs';
 import { createGateway } from '../gateway.mjs';
+import { productionEngineOrigin } from '../engine-policy.mjs';
+import { fetchCurrentCorpus, refresh } from '../refresh.mjs';
+import { serviceUnit } from '../vm-refresh-service.mjs';
+import { insertRoute, removeRoute } from '../vm-caddy-route.mjs';
 import { runUnderPublicationLock, assertPublicationLock } from '../lock.mjs';
 
 const sha = char => char.repeat(40);
@@ -88,16 +92,23 @@ test('merges a ModelSpec component-use effective field with its declaring anchor
 function fakeEngine(failImport = false) {
   const collections = new Map();
   let alias = null;
+  let failDelete = false;
+  let otherAlias = null;
   const engine = {
     get failImport() { return failImport; },
     set failImport(value) { failImport = value; },
+    set failDelete(value) { failDelete = value; },
+    set otherAlias(value) { otherAlias = value; },
     get alias() { return alias; },
+    get collections() { return [...collections.keys()]; },
     async api(method, path, body) {
+      if (method === 'GET' && path === '/collections') return { status: 200, body: JSON.stringify([...collections.keys()].map(name => ({ name }))) };
+      if (method === 'GET' && path === '/aliases') return { status: 200, body: JSON.stringify({ aliases: [...(alias ? [{ name: 'registry_metadata', collection_name: alias }] : []), ...(otherAlias ? [{ name: 'other', collection_name: otherAlias }] : [])] }) };
       if (method === 'GET' && path === '/aliases/registry_metadata') return alias ? { status: 200, body: JSON.stringify({ collection_name: alias }) } : { status: 404, body: '' };
       if (method === 'PUT' && path === '/aliases/registry_metadata') { alias = body.collection_name; return { status: 200, body: '{}' }; }
       if (method === 'POST' && path === '/collections') { collections.set(body.name, []); return { status: 201, body: '{}' }; }
       const collection = path.match(/^\/collections\/([^/]+)/)?.[1];
-      if (method === 'DELETE' && collection) { collections.delete(collection); return { status: 200, body: '{}' }; }
+      if (method === 'DELETE' && collection) { if (failDelete) return { status: 500, body: '{}' }; collections.delete(collection); return { status: 200, body: '{}' }; }
       if (method === 'GET' && path.endsWith('/documents/search?'+path.split('/documents/search?')[1])) {
         const q = new URLSearchParams(path.split('?')[1]).get('q');
         const docs = collections.get(collection) || [];
@@ -136,6 +147,11 @@ test('failed per-row import preserves alias; valid generation is idempotent and 
   newer[0].documents[0].title = 'Customer New';
   manifest.sequence = 6;
   await publish(manifest, newer, { api: good.api, stateDir: dir, smokeQueries });
+  good.otherAlias = `registry_metadata_${first.generation}`;
+  manifest.sequence = 7;
+  await assert.rejects(publish(manifest, exports, { api: good.api, stateDir: dir, smokeQueries }), /candidate generation has another alias/);
+  assert.equal(good.collections.includes(`registry_metadata_${first.generation}`), true);
+  good.otherAlias = null;
   manifest.sequence = 4;
   await assert.rejects(publish(manifest, exports, { api: good.api, stateDir: dir, smokeQueries }), /stale/);
   assert.equal(JSON.parse(await readFile(join(dir, 'publication.json'))).sequence, 6);
@@ -187,6 +203,97 @@ test('gateway returns unavailable on engine failure and fails closed without rat
   assert.deepEqual(await response.json(), { error: 'unavailable' });
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_RATE_LIMITER: undefined })).status, 503);
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_SEARCH_MODE: 'production', REGISTRY_TYPESENSE_DEPLOYMENT: 'self-hosted' })).status, 503);
+});
+test('production VM gateway pins the exact HTTPS engine host and search path', async () => {
+  const live = { ...env, REGISTRY_SEARCH_MODE: 'production', REGISTRY_TYPESENSE_DEPLOYMENT: 'vm-pilot', REGISTRY_TYPESENSE_ORIGIN: 'https://vm1.sneat.dev/' };
+  let target;
+  const worker = createGateway(async url => {
+    target = url.href;
+    return Response.json({ results: [{ found: 0, hits: [] }] });
+  });
+  assert.equal((await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), live)).status, 200);
+  assert.equal(target, 'https://vm1.sneat.dev/multi_search');
+  for (const origin of ['https://vm1.sneat.dev.evil.example/', 'http://vm1.sneat.dev/', 'https://vm1.sneat.dev:8443/', 'https://vm1.sneat.dev/other']) {
+    assert.equal((await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), { ...live, REGISTRY_TYPESENSE_ORIGIN: origin })).status, 503);
+  }
+  assert.throws(() => productionEngineOrigin({ ...live, REGISTRY_TYPESENSE_DEPLOYMENT: 'cloud', REGISTRY_TYPESENSE_CLOUD_HOST: 'cloud.example' }), /cloud engine host/);
+  assert.equal((await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }, { origin: 'https://evil.example' }), live)).status, 403);
+  assert.equal((await worker.fetch(new Request('https://search.openvaultdb.com/v1/registry-search?x=1', { method: 'POST' }), live)).status, 404);
+});
+test('scheduled refresh builds pinned live manifest, keeps alias on failure, and increments the sequence', async () => {
+  const { exports } = fixture();
+  for (const envelope of exports) envelope.fixture = false;
+  const hosts = { meaninggraph: 'meaninggraph.io', modelspec: 'modelspec.org', ovdb: 'directory.openvaultdb.com' };
+  const fetcher = async url => {
+    const domain = Object.keys(hosts).find(key => url === `https://${hosts[key]}/registry-search.json`);
+    const response = Response.json(exports.find(item => item.domain === domain));
+    Object.defineProperty(response, 'url', { value: url });
+    return response;
+  };
+  const built = await fetchCurrentCorpus(fetcher);
+  assert.equal(built.manifest.sources.length, 3);
+  assert.equal(built.manifest.approved_revisions['shared/pin'], sha('f'));
+  const dir = await mkdtemp(join(tmpdir(), 'registry-refresh-'));
+  const engine = fakeEngine();
+  const first = await refresh({ stateDir: dir, api: engine.api, fetcher });
+  assert.equal(first.count, 3);
+  assert.equal(JSON.parse(await readFile(join(dir, 'publication.json'))).sequence, 1);
+  assert.equal((await refresh({ stateDir: dir, api: engine.api, fetcher })).unchanged, true);
+  assert.equal(JSON.parse(await readFile(join(dir, 'publication.json'))).sequence, 1);
+  const active = engine.alias;
+  exports[0].fixture = true;
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /invalid public export/);
+  assert.equal(engine.alias, active);
+  exports[0].fixture = false;
+  exports[0].documents[0].title = 'Updated Customer';
+  engine.failImport = true;
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /rejected import/);
+  assert.equal(engine.alias, active);
+  exports[0].documents[0].title = 'Another Failed Candidate';
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /rejected import/);
+  assert.equal(engine.alias, active);
+  assert.equal(engine.collections.length, 2);
+  engine.failImport = false;
+  await refresh({ stateDir: dir, api: engine.api, fetcher });
+  assert.notEqual(engine.alias, active);
+  assert.equal(JSON.parse(await readFile(join(dir, 'publication.json'))).sequence, 2);
+  exports[1].source_revisions['shared/pin'] = sha('e');
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /conflicting export source pins/);
+  exports[1].source_revisions['shared/pin'] = sha('f');
+  exports[0].documents[0].title = 'Updated Again';
+  engine.otherAlias = active;
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /another alias/);
+  assert.equal(engine.alias !== active, true);
+  engine.otherAlias = null;
+  await refresh({ stateDir: dir, api: engine.api, fetcher });
+  exports[0].documents[0].title = 'Fourth Generation';
+  engine.failDelete = true;
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /alias switched; inactive generation cleanup failed/);
+  const switched = engine.alias;
+  assert.notEqual(switched, active);
+  engine.failDelete = false;
+  await refresh({ stateDir: dir, api: engine.api, fetcher });
+  assert.equal(engine.alias, switched);
+  assert.equal(engine.collections.length, 2);
+  exports[0].documents = Array(10_001).fill(exports[0].documents[0]);
+  await assert.rejects(refresh({ stateDir: dir, api: engine.api, fetcher }), /pilot document capacity/);
+  assert.equal(engine.collections.length, 2);
+});
+test('one-shot timer has an effective start timeout and private state path', () => {
+  const unit = serviceUnit('/usr/bin/node');
+  assert.match(unit, /TimeoutStartSec=240s/);
+  assert.match(unit, /MemoryMax=768M/);
+  assert.match(unit, /ReadWritePaths=\/opt\/datatug\/registry-search\/state/);
+  assert.doesNotMatch(unit, /REGISTRY_TYPESENSE_ADMIN_KEY/);
+});
+test('Caddy route insertion preserves unrelated hosts and reverses exactly', async () => {
+  const snippet = await readFile(new URL('../vm1-search.caddy', import.meta.url), 'utf8');
+  const original = 'vm1.sneat.dev {\n    route {\n        handle {\n            respond 404\n        }\n    }\n}\nother.example {\n    basicauth secret-hash\n}\n';
+  const installed = insertRoute(original, snippet);
+  assert.equal(removeRoute(installed, snippet), original);
+  assert.match(installed, /other\.example \{\n    basicauth secret-hash/);
+  assert.throws(() => insertRoute(installed, snippet), /anchor missing|already owned/);
+  assert.throws(() => removeRoute(installed.replace('reverse_proxy 127.0.0.1:8108', 'reverse_proxy 127.0.0.1:9999'), snippet), /owned Caddy route changed/);
 });
 test('gateway rejects populated engine cutoff results', async () => {
   const worker = createGateway(async () => Response.json({ results: [{ found: 1, search_cutoff: true, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity' } }] }] }));
