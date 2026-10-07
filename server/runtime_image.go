@@ -103,7 +103,7 @@ func configuredHandler() ([]runtimeDatabase, http.Handler, func() error, error) 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return configuredHandlerWithRuntime(startup)
+	return configuredHandlerWithECBPublic(startup)
 }
 
 func checkProtectedEntry(path string, entry imageEntry, directory bool) error {

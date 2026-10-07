@@ -151,6 +151,10 @@ func readECBFile(path string, limit int64) ([]byte, error) {
 }
 
 func checkedECBConfig(path string, expectedDigest ...string) (ecbHostConfig, error) {
+	return checkedECBConfigVersion(path, false, expectedDigest...)
+}
+
+func checkedECBConfigVersion(path string, public bool, expectedDigest ...string) (ecbHostConfig, error) {
 	data, err := readECBFile(path, 32<<10)
 	if err != nil || rejectDuplicateJSON(data) != nil {
 		return ecbHostConfig{}, errECBCandidate
@@ -172,7 +176,7 @@ func checkedECBConfig(path string, expectedDigest ...string) (ecbHostConfig, err
 	if decoder.Decode(&config) != nil || decoder.Decode(new(any)) != io.EOF ||
 		config.Format != ecbHostFormat || config.PublisherCommit != ecbPublisherCommit ||
 		config.PublisherBlob != ecbPublisherBlob || config.DecoderVersion != "ecb-eurofxref/1" ||
-		config.DecoderModule != "v0.3.0" {
+		config.DecoderModule != map[bool]string{false: "v0.3.0", true: "v0.4.0"}[public] {
 		return ecbHostConfig{}, errECBCandidate
 	}
 	publisher, err := readECBFile(config.PublisherManifest, 4504)
@@ -206,7 +210,11 @@ func checkedECBConfig(path string, expectedDigest ...string) (ecbHostConfig, err
 type ecbMount func(string) (*core.Database, error)
 
 func assembleECBHostCandidate(configPath string, open ecbMount, diagnostic io.Writer, expectedDigest ...string) (http.Handler, func() error, error) {
-	config, err := checkedECBConfig(configPath, expectedDigest...)
+	return assembleECBHostVersion(configPath, open, diagnostic, false, expectedDigest...)
+}
+
+func assembleECBHostVersion(configPath string, open ecbMount, diagnostic io.Writer, public bool, expectedDigest ...string) (http.Handler, func() error, error) {
+	config, err := checkedECBConfigVersion(configPath, public, expectedDigest...)
 	if err != nil {
 		return nil, nil, errECBCandidate
 	}
