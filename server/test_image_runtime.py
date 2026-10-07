@@ -36,9 +36,17 @@ def run(arguments, *, timeout=180, input_data=None, environment=None):
 def validate_export(data):
     """Inspect the final merged filesystem, not historical hidden layer entries."""
     entries = []
+    trusted_roots = 0
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         for member in archive:
             name = member.name.lstrip("./").rstrip("/")
+            if name == "etc/ssl/certs/ca-certificates.crt":
+                if member.uid != 0 or member.gid != 0 or not member.isfile() or member.mode != 0o444 or member.size < 1000:
+                    raise RuntimeError("final image CA bundle is not a usable root-owned 0444 file")
+                trusted_roots += 1
+                entries.append({"path": "/" + name, "mode": oct(member.mode),
+                                "uid": member.uid, "gid": member.gid,
+                                "type": "file", "bytes": member.size})
             if name in ("srv", "srv/fixture") or name.startswith("srv/fixture/"):
                 if member.uid != 0 or member.gid != 0:
                     raise RuntimeError("non-root final image entry: " + name)
@@ -56,6 +64,8 @@ def validate_export(data):
                     raise RuntimeError("scratch /tmp must be a sticky writable directory")
     if not any(e["path"] == "/srv/fixture/inventory.json" for e in entries):
         raise RuntimeError("final image has no fixed inventory")
+    if trusted_roots != 1:
+        raise RuntimeError("final image must contain exactly one system CA bundle")
     return entries
 
 

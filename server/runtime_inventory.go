@@ -35,26 +35,27 @@ type runtimePinnedFile struct {
 }
 
 type runtimeDatabase struct {
-	ManifestSHA256        string                   `json:"manifestSha256,omitempty"`
-	ServingAdapter        string                   `json:"servingAdapter,omitempty"`
-	ReadProfile           string                   `json:"readProfile,omitempty"`
-	PublisherManifest     *runtimePinnedFile       `json:"publisherManifest,omitempty"`
-	PublicDescriptor      *runtimePinnedFile       `json:"publicDescriptor,omitempty"`
-	RequirePublishedQuery *bool                    `json:"requirePublishedQuery,omitempty"`
-	ID                    string                   `json:"id"`
-	Manifest              string                   `json:"manifest"`
-	CORSOrigins           []string                 `json:"corsOrigins"`
-	ProviderRepository    string                   `json:"providerRepository"`
-	ProviderRevision      string                   `json:"providerRevision"`
-	SourceSHA256          string                   `json:"sourceSha256"`
-	ServingSHA256         string                   `json:"servingSha256"`
-	License               string                   `json:"license"`
-	LicenseSHA256         string                   `json:"licenseSha256"`
-	SmokeRecordset        string                   `json:"smokeRecordset"`
-	SmokeRecordsets       []string                 `json:"smokeRecordsets"`
-	EmptyRecordsets       []string                 `json:"emptyRecordsets"`
-	BlobSmokeFields       map[string][]string      `json:"blobSmokeFields"`
-	ForeignKeySmoke       []runtimeForeignKeySmoke `json:"foreignKeySmoke"`
+	ManifestSHA256        string                     `json:"manifestSha256,omitempty"`
+	ServingAdapter        string                     `json:"servingAdapter,omitempty"`
+	ReadProfile           string                     `json:"readProfile,omitempty"`
+	PublisherManifest     *runtimePinnedFile         `json:"publisherManifest,omitempty"`
+	PublicDescriptor      *runtimePinnedFile         `json:"publicDescriptor,omitempty"`
+	RequirePublishedQuery *bool                      `json:"requirePublishedQuery,omitempty"`
+	ID                    string                     `json:"id"`
+	Manifest              string                     `json:"manifest"`
+	CORSOrigins           []string                   `json:"corsOrigins"`
+	ProviderRepository    string                     `json:"providerRepository"`
+	ProviderRevision      string                     `json:"providerRevision"`
+	SourceSHA256          string                     `json:"sourceSha256"`
+	ServingSHA256         string                     `json:"servingSha256"`
+	License               string                     `json:"license"`
+	LicenseSHA256         string                     `json:"licenseSha256"`
+	SmokeRecordset        string                     `json:"smokeRecordset"`
+	SmokeRecordsets       []string                   `json:"smokeRecordsets"`
+	EmptyRecordsets       []string                   `json:"emptyRecordsets"`
+	BlobSmokeFields       map[string][]string        `json:"blobSmokeFields"`
+	ForeignKeySmoke       []runtimeForeignKeySmoke   `json:"foreignKeySmoke"`
+	nativePostgres        *nativePostgresMountConfig `json:"-"`
 }
 
 type runtimeForeignKeySmoke struct {
