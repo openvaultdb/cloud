@@ -21,7 +21,8 @@ func validECBProxySecret(value string) bool {
 	}
 	for i := 0; i < len(value); i++ {
 		b := value[i]
-		if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-') {
+		allowed := (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
+		if !allowed {
 			return false
 		}
 	}
