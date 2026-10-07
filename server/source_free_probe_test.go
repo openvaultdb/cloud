@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -90,7 +91,7 @@ func TestSyntheticBlockedBodyBackendCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeHandler()
+	defer func() { _ = closeHandler() }()
 	backend := httptest.NewServer(h)
 	defer backend.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,7 +103,7 @@ func TestSyntheticBlockedBodyBackendCancellation(t *testing.T) {
 	go func() {
 		response, err := http.DefaultClient.Do(request)
 		if response != nil {
-			response.Body.Close()
+			_ = response.Body.Close()
 			if response.StatusCode == 200 {
 				err = errors.New("late success")
 			}
@@ -146,10 +147,57 @@ func TestHTTPSProbeValidationWithSyntheticRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootFile := filepath.Join(t.TempDir(), "test-roots.pem")
-	if err := os.WriteFile(rootFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0600); err != nil {
+	rootPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	if err := os.WriteFile(rootFile, rootPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", rootFile)
+	t.Run("roots-receipt", func(t *testing.T) {
+		second := *ca
+		second.SerialNumber = big.NewInt(3)
+		secondDER, err := x509.CreateCertificate(rand.Reader, &second, &second, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mixed := append([]byte{}, rootPEM...)
+		for _, block := range []*pem.Block{
+			{Type: "CERTIFICATE", Bytes: caDER},
+			{Type: "PRIVATE KEY", Bytes: secondDER},
+			{Type: "CERTIFICATE", Headers: map[string]string{"Ignored": "header"}, Bytes: secondDER},
+			{Type: "CERTIFICATE", Bytes: []byte("invalid synthetic certificate")},
+		} {
+			mixed = append(mixed, pem.EncodeToMemory(block)...)
+		}
+		mixed = append(mixed, []byte("trailing non-PEM bytes")...)
+		multiple := append(append([]byte{}, rootPEM...), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: secondDER})...)
+		for _, tc := range []struct {
+			roots []byte
+			count int
+		}{{rootPEM, 1}, {mixed, 1}, {multiple, 2}} {
+			if err := os.WriteFile(rootFile, tc.roots, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := runSourceFreeProbe([]string{"--roots-probe"}, &out); err != nil {
+				t.Fatal(err)
+			}
+			var receipt struct {
+				Probe        string `json:"probe"`
+				Outcome      string `json:"outcome"`
+				RootsSHA256  string `json:"rootsSha256"`
+				Certificates int    `json:"certificates"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &receipt); err != nil {
+				t.Fatal(err)
+			}
+			if receipt.Probe != "roots/1" || receipt.Outcome != "pass" || receipt.RootsSHA256 != digest(tc.roots) || receipt.Certificates != tc.count {
+				t.Fatal("roots receipt contract changed")
+			}
+		}
+	})
+	if err := os.WriteFile(rootFile, rootPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, mode := range []string{"valid", "wrong-host", "expired", "untrusted", "redirect", "oversize"} {
 		t.Run(mode, func(t *testing.T) {
 			leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
@@ -170,7 +218,7 @@ func TestHTTPSProbeValidationWithSyntheticRoots(t *testing.T) {
 			}
 			peer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if mode == "redirect" {
-					http.Redirect(w, r, "/other", 302)
+					http.Redirect(w, r, "/other", http.StatusFound)
 					return
 				}
 				if mode == "oversize" {

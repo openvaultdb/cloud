@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -39,11 +40,11 @@ func runSourceFreeProbe(args []string, out io.Writer) error {
 	case len(args) == 1 && args[0] == "--synthetic-dynamic-probe":
 		return syntheticDynamicProbe(out)
 	case len(args) == 1 && args[0] == "--roots-probe":
-		roots, pool, err := probeRoots()
+		roots, _, err := probeRoots()
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"probe": "roots/1", "outcome": "pass", "rootsSha256": digest(roots), "certificates": len(pool.Subjects())})
+		return json.NewEncoder(out).Encode(map[string]any{"probe": "roots/1", "outcome": "pass", "rootsSha256": digest(roots), "certificates": probeRootCertificateCount(roots)})
 	case len(args) == 3 && args[0] == "--https-trust-probe":
 		return httpsTrustProbe(args[1], args[2], out)
 	default:
@@ -112,7 +113,7 @@ func syntheticDynamicProbe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer closeHandler()
+	defer func() { _ = closeHandler() }()
 	id := strings.Repeat("d", 32)
 	r := httptest.NewRequest("POST", "/v1/databases/synthetic-dynamic/query", strings.NewReader(`{"collection":"daily"}`))
 	r.Header.Set("Content-Type", "application/json")
@@ -170,7 +171,7 @@ func httpsTrustProbe(rawURL, expected string, out io.Writer) error {
 		}
 		return errors.New("synthetic TLS request failed")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	hasher := sha256.New()
 	n, err := io.Copy(hasher, io.LimitReader(response.Body, 4097))
 	if err != nil || response.StatusCode != 200 || n > 4096 || hex.EncodeToString(hasher.Sum(nil)) != expected {
@@ -194,4 +195,26 @@ func probeRoots() ([]byte, *x509.CertPool, error) {
 		return nil, nil, errors.New("trusted roots invalid")
 	}
 	return roots, pool, nil
+}
+
+// Match AppendCertsFromPEM's acceptance and AddCert's deduplication rules so the
+// receipt counts certificates in the explicit root file without Subjects.
+func probeRootCertificateCount(roots []byte) int {
+	seen := make(map[[28]byte]struct{})
+	for len(roots) > 0 {
+		var block *pem.Block
+		block, roots = pem.Decode(roots)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		seen[sha256.Sum224(cert.Raw)] = struct{}{}
+	}
+	return len(seen)
 }
