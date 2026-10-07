@@ -1,5 +1,5 @@
 import { productionEngineOrigin } from './engine-policy.mjs';
-import { originForDocument, rankingForDomain, repositoryTerms, searchFields } from './provenance.mjs';
+import { kindPriority, originForDocument, rankingForDomain, repositoryTerms, searchFieldsForQuery } from './provenance.mjs';
 
 const domains = new Set(['meaninggraph', 'modelspec', 'ovdb']);
 const kinds = new Set(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
@@ -100,10 +100,10 @@ export function createGateway(fetcher = fetch) {
         if (query.kinds.length) filters.push(`kind:=[${query.kinds.join(',')}]`);
         if (query.parent) filters.push(`parent_id:=${query.parent}`);
         const search = {
-          collection: 'registry_metadata', q: query.q, ...searchFields,
+          collection: 'registry_metadata', q: query.q, ...searchFieldsForQuery(query.q),
           filter_by: filters.join(' && '), page: String(query.page), per_page: '20',
           ...rankingForDomain(query.domain),
-          include_fields: display.join(',') + ',description,field_preview,field_count,source_repository,repository_owner,repository_name,repository_full_name,core_priority,generation_id,domain,visibility', highlight_fields: 'none', search_cutoff_ms: '1500'
+          include_fields: display.join(',') + ',description,field_preview,field_count,source_repository,repository_owner,repository_name,repository_full_name,core_priority,kind_priority,generation_id,domain,visibility', highlight_fields: 'none', search_cutoff_ms: '1500'
         };
         const target = new URL('/multi_search', origin);
         stage = 'engine_fetch';
@@ -118,7 +118,7 @@ export function createGateway(fetcher = fetch) {
         if (!Number.isSafeInteger(result.found) || !Array.isArray(result.hits) || result.search_cutoff === true) throw new Error('incomplete search response');
         const hits = result.hits.slice(0, 20).map(hit => {
           const doc = hit.document;
-          if (!doc || doc.domain !== query.domain || doc.visibility !== 'public' || !kinds.has(doc.kind) || doc.core_priority !== (originForDocument(doc) === 'core' ? 1 : 0)) throw new Error('search scope violation');
+          if (!doc || doc.domain !== query.domain || doc.visibility !== 'public' || !kinds.has(doc.kind) || doc.core_priority !== (originForDocument(doc) === 'core' ? 1 : 0) || doc.kind_priority !== kindPriority(doc)) throw new Error('search scope violation');
           const repository = repositoryTerms(doc);
           if (doc.repository_owner !== repository.repository_owner || doc.repository_name !== repository.repository_name || doc.repository_full_name !== repository.repository_full_name) throw new Error('search provenance mismatch');
           const item = Object.fromEntries(display.filter(field => doc[field] !== undefined).map(field => [field, doc[field]]));

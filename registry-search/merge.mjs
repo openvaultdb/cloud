@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { domains, validateDocument } from './schema.mjs';
-import { corePriority, repositoryTerms } from './provenance.mjs';
+import { corePriority, kindPriority, repositoryTerms } from './provenance.mjs';
 
 export const canonicalRoutes = Object.freeze({
   meaninggraph: { hosts: ['meaninggraph.io'], paths: ['/graphs/'] },
@@ -75,7 +75,7 @@ export function mergeExports(manifest, exports) {
     fieldsByParent.set(doc.parent_id, fields);
   }
   const enriched = docs.map(doc => {
-    const result = { ...doc, ...repositoryTerms(doc), core_priority: corePriority(doc) };
+    const result = { ...doc, ...repositoryTerms(doc), core_priority: corePriority(doc), kind_priority: kindPriority(doc) };
     if (entityKinds.has(doc.kind)) {
       const fields = (fieldsByParent.get(doc.id) || [])
         .filter(field => field.domain === doc.domain && field.source_repository === doc.source_repository)
