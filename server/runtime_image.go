@@ -73,9 +73,17 @@ func configuredRuntime() (runtimeStartup, error) {
 		if err != nil {
 			return runtimeStartup{}, err
 		}
+		providers, err = appendConfiguredDemoPostgres(providers)
+		if err != nil {
+			return runtimeStartup{}, err
+		}
 		return runtimeStartup{providers: providers, strategy: choice, image: image}, nil
 	}
 	providers, err := configuredDatabases()
+	if err != nil {
+		return runtimeStartup{}, err
+	}
+	providers, err = appendConfiguredDemoPostgres(providers)
 	if err != nil {
 		return runtimeStartup{}, err
 	}

@@ -17,7 +17,8 @@ def exported_fixture():
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, mode, content in [("srv", 0o755, None), ("srv/fixture", 0o555, None),
                                     ("tmp", 0o1777, None), ("srv/fixture/inventory.json", 0o444, b"{}"),
-                                    ("srv/fixture/candidate.sqlite", 0o444, b"SQLite format 3\0" + b"\0\0\1\1")]:
+                                    ("srv/fixture/candidate.sqlite", 0o444, b"SQLite format 3\0" + b"\0\0\1\1"),
+                                    ("etc/ssl/certs/ca-certificates.crt", 0o444, b"test-certificate" * 100)]:
             entry = tarfile.TarInfo(name)
             entry.mode = mode
             entry.type = tarfile.DIRTYPE if content is None else tarfile.REGTYPE
@@ -29,7 +30,7 @@ def exported_fixture():
 class ImageEvidenceHarnessTest(unittest.TestCase):
     def test_final_filesystem_policy_and_hostile_entries(self):
         data = exported_fixture()
-        self.assertEqual(4, len(test_image_runtime.validate_export(data)))
+        self.assertEqual(5, len(test_image_runtime.validate_export(data)))
         for mutation in ("ancestor", "writable", "owner", "symlink", "hardlink", "fifo"):
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                 test_image_runtime.validate_export(test_image_runtime.hostile_export(data, mutation))

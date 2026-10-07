@@ -66,13 +66,22 @@ import (
 //     grouping cannot hold more groups than the rows it reads.
 //   - MaxSourceBytes, Timeout and QueueWait are the library defaults, written out so
 //     that the discovery document and this comment state what is enforced.
-//   - JoinEngines sqlite: the only engine this service mounts.
+//   - JoinEngines starts with sqlite. Native PostgreSQL is advertised only when
+//     all six opt-in DemoDB sources have been configured and mounted.
 //   - Snapshot slots 2, bytes 64 MiB: the largest pinned collection spools 57.8 MiB.
 //     A larger one is refused with 413 snapshot_too_large.
 //
-// Adding or re-pinning a provider changes the measurements: re-measure, then update
-// this comment and limits_test.go.
-func cloudQueryLimits() server.QueryLimits {
+// The measurements above cover the six SQLite providers only. Native PostgreSQL
+// mounts add six live driver pools and discovered schemas; this envelope keeps the
+// existing request concurrency, row, byte, and timeout limits but does not claim
+// an at-rest measurement for those pools. Keep the production opt-in disabled
+// until the Linux image and all-six runtime proof records added resident memory
+// and confirms the same 512 MiB instance still has headroom.
+func cloudQueryLimits(nativePostgres ...bool) server.QueryLimits {
+	joinEngines := []string{"sqlite"}
+	if len(nativePostgres) > 0 && nativePostgres[0] {
+		joinEngines = append(joinEngines, "postgres")
+	}
 	return server.QueryLimits{
 		Timeout:        10 * time.Second,
 		InMemory:       1,
@@ -80,7 +89,7 @@ func cloudQueryLimits() server.QueryLimits {
 		QueueWait:      time.Second,
 		MaxSourceRows:  40_000,
 		MaxSourceBytes: 64 << 20,
-		JoinEngines:    []string{"sqlite"},
+		JoinEngines:    joinEngines,
 	}
 }
 
@@ -89,9 +98,9 @@ func cloudSnapshotLimits() server.SnapshotLimits {
 	return server.SnapshotLimits{Slots: 2, Bytes: 64 << 20, Rows: 1_000_000}
 }
 
-func cloudServerOptions() []server.Option {
+func cloudServerOptions(nativePostgres ...bool) []server.Option {
 	return []server.Option{
-		server.WithQueryLimits(cloudQueryLimits()),
+		server.WithQueryLimits(cloudQueryLimits(nativePostgres...)),
 		server.WithSnapshotLimits(cloudSnapshotLimits()),
 	}
 }

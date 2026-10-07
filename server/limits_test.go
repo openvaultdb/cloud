@@ -246,13 +246,13 @@ func getJSON(t *testing.T, handler http.Handler, path string) map[string]any {
 
 // assertCloudQueryDiscovery checks that the discovery document states the limits
 // this service enforces and the join engines it allows, no others.
-func assertCloudQueryDiscovery(t *testing.T, handler http.Handler) {
+func assertCloudQueryDiscovery(t *testing.T, handler http.Handler, nativePostgres ...bool) {
 	t.Helper()
 	query, ok := getJSON(t, handler, "/.well-known/openvaultdb")["query"].(map[string]any)
 	if !ok {
 		t.Fatal("the discovery document has no query block")
 	}
-	queries := cloudQueryLimits()
+	queries := cloudQueryLimits(nativePostgres...)
 	wantLimits := map[string]float64{
 		"timeoutMs":            float64(queries.Timeout / time.Millisecond),
 		"maxSourceRows":        float64(queries.MaxSourceRows),
@@ -272,13 +272,32 @@ func assertCloudQueryDiscovery(t *testing.T, handler http.Handler) {
 			t.Errorf("discovery limit %s = %v, want %v", name, limits[name], want)
 		}
 	}
+	wantJoinEngines := []string{"sqlite"}
+	if len(nativePostgres) > 0 && nativePostgres[0] {
+		wantJoinEngines = append(wantJoinEngines, "postgres")
+	}
 	engines, ok := query["joinEngines"].([]any)
-	if !ok || len(engines) != 1 || engines[0] != "sqlite" {
-		t.Errorf("discovery joinEngines = %v, want [sqlite]", query["joinEngines"])
+	if !ok || len(engines) != len(wantJoinEngines) {
+		t.Errorf("discovery joinEngines = %v, want %v", query["joinEngines"], wantJoinEngines)
+	} else {
+		for i, want := range wantJoinEngines {
+			if engines[i] != want {
+				t.Errorf("discovery joinEngines = %v, want %v", query["joinEngines"], wantJoinEngines)
+				break
+			}
+		}
 	}
+	if !slices.Equal(queries.JoinEngines, wantJoinEngines) {
+		t.Errorf("the configured join engines are %v, want %v", queries.JoinEngines, wantJoinEngines)
+	}
+}
+
+func TestCloudQueryLimitsDoNotAdvertiseUnavailablePostgres(t *testing.T) {
+	queries := cloudQueryLimits()
 	if !slices.Equal(queries.JoinEngines, []string{"sqlite"}) {
-		t.Errorf("the configured join engines are %v, want [sqlite]: this service mounts SQLite files only", queries.JoinEngines)
+		t.Fatalf("default join engines = %v, want only sqlite", queries.JoinEngines)
 	}
+	assertCloudQueryDiscovery(t, server.New("test", nil, cloudServerOptions()...).Handler())
 }
 
 // cloudTestHandler mounts the named providers from the prepared fixtures, as the

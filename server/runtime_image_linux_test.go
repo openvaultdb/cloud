@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -36,6 +37,10 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	trust, err := x509.SystemCertPool()
+	if err != nil || trust == nil || len(trust.Subjects()) == 0 {
+		t.Fatalf("shipping image has no usable system CA trust store: pool=%v err=%v", trust != nil, err)
 	}
 	before, err := os.ReadDir("/tmp")
 	if err != nil {

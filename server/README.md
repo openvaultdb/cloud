@@ -36,6 +36,28 @@ Chinook keeps its historical comma-separated composite identifiers. The live
 OVDB mount exposes physical tables; provider views remain represented in the
 published schema metadata and exports.
 
+## Optional DemoDB PostgreSQL editions
+
+The runtime can additionally mount the six native DemoDB editions as
+`chinook-postgresql`, `northwind-postgresql`, `pubs-postgresql`,
+`sakila-postgresql`, `adventureworks-postgresql`, and `employees-postgresql`.
+Set `OVDB_DEMODB_POSTGRES_ENABLED=true` and bind each corresponding
+`OVDB_PG_CHINOOK_DSN`, `OVDB_PG_NORTHWIND_DSN`, `OVDB_PG_PUBS_DSN`,
+`OVDB_PG_SAKILA_DSN`, `OVDB_PG_ADVENTUREWORKS_DSN`, and
+`OVDB_PG_EMPLOYEES_DSN` from Secret Manager. Enabling the feature without all six
+DSNs fails startup; an unset or false feature flag leaves the SQLite-only
+inventory unchanged. DSNs are only read by the server and are not written into
+the image, inventory, discovery responses, or temporary manifests.
+
+The runtime manifest for each mount is created temporarily and uses the
+library's native PostgreSQL collection IDs. The consumer excludes only the
+selected schema's `_import_manifest` relation. Each source role must retain its
+reviewed TLS-verified, read-only, selected-schema grants. Native PostgreSQL
+supports bounded relational DTQL reads and joins; the legacy `/query` route is
+not advertised for these mounts. The SQLite-only memory measurements below do
+not cover the six additional pools and schemas. Keep this opt-in disabled in
+production until the shipping-image and all-six live memory/query proof pass.
+
 The default legacy adapter reserves a native column named `id` (case-insensitively), because the
 read-only record adapter uses that name for serving identity. A source table
 with that column fails legacy preparation explicitly. The offline opt-in adapter
@@ -89,7 +111,7 @@ library only counts the JSON size of what it holds, so the limits are set in
 | Database-route query slots | 1 | 4 |
 | Rows one request may read from sources | 40,000 | 100,000 |
 | Snapshot spool | 2 slots of 64 MiB | 2 slots of 512 MiB |
-| Join engines | `sqlite` | `sqlite`, `ingitdb` |
+| Join engines | `sqlite` (PostgreSQL is opt-in) | `sqlite`, `ingitdb` |
 
 Query timeout (10 s), queue wait (1 s) and source bytes (64 MiB) are the library
 defaults. `limits.go` carries the arithmetic: the server at rest, the snapshot spool
@@ -216,13 +238,14 @@ descriptor flags. The library mount verifies every selected serving ID. Legacy
 providers retain their read/snapshot behavior and existing limits, including the
 48 AdventureWorks decimal fields.
 
-This slice covers server preparation and startup. Production `providers.json`
-still has six providers. Four-pin HTTP guards, deadline/cache middleware, Worker
+The production `providers.json` and protected image continue to serve the six
+SQLite providers. Native PostgreSQL is a separate runtime opt-in and does not
+change that inventory. Four-pin HTTP guards, deadline/cache middleware, Worker
 propagation, public descriptor routes, attribution downloads, deploy verification
 and smoke, actual Geo/ROR preparation and all-key proof, six-plus-two capacity and
 live journeys, final wrapper repins, Directory and App admission remain downstream
-gates. Opt-in inventories are local test inputs until these gates pass. No public
-provider admission or deployment is authorized by these changes.
+gates. The six PostgreSQL sources must pass their all-source runtime proof before
+the production opt-in or public edition admission is enabled.
 
 All immutable network assets use the exact raw GitHub HTTPS origin and a full
 40-hex commit. Every relative path segment is validated before URL encoding;
