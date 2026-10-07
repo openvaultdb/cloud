@@ -457,21 +457,30 @@ func TestCloudSingleCollectionReadsStayInsideTheLibraryBuffer(t *testing.T) {
 	var largest, answered, refused int
 	for _, id := range databases {
 		for _, collection := range getJSON(t, handler, "/v1/databases/"+id)["collections"].([]any) {
-			code, body := wireRead(t, handler, id, collection.(string))
+			result := wireRead(t, handler, id, collection.(string))
+			if id == "adventureworks" && collection == "Sales.SalesOrderHeaderSalesReason" &&
+				(result.status != http.StatusOK || !result.complete) {
+				t.Errorf("the existing heaviest capacity read returned status %d complete=%t error=%q; want the pinned fixture to complete below the response buffer", result.status, result.complete, result.errorCode)
+			}
+			if len(result.body) > answerBound {
+				t.Errorf("%s %s: response stream was %d MiB, above the %d MiB bound the memory figure rests on", id, collection, len(result.body)/mebibyte, answerBound/mebibyte)
+			}
 			switch {
-			case code == http.StatusOK:
+			case result.status == http.StatusOK && result.complete:
 				answered++
-				largest = max(largest, len(body))
-				if len(body) > answerBound {
-					t.Errorf("%s %s: an unlimited read answered %d MiB, above the %d MiB bound the memory figure rests on", id, collection, len(body)/mebibyte, answerBound/mebibyte)
-				}
-			case code >= http.StatusBadRequest:
+				largest = max(largest, len(result.body))
+			case result.status == http.StatusOK && !result.complete && result.errorCode == "query_budget_exceeded" && result.budgetName == "response_bytes":
 				refused++
-				if len(body) > 4096 {
-					t.Errorf("%s %s: the refusal %d is %d bytes long", id, collection, code, len(body))
+				if result.records == 0 {
+					t.Errorf("%s %s: incomplete budget response has no partial rows", id, collection)
+				}
+			case result.status >= http.StatusBadRequest:
+				refused++
+				if len(result.body) > 4096 {
+					t.Errorf("%s %s: the refusal %d is %d bytes long", id, collection, result.status, len(result.body))
 				}
 			default:
-				t.Errorf("%s %s: unexpected status %d", id, collection, code)
+				t.Errorf("%s %s: unexpected status %d, complete=%t error=%q budget=%q", id, collection, result.status, result.complete, result.errorCode, result.budgetName)
 			}
 		}
 	}
@@ -491,17 +500,70 @@ func TestCloudSingleCollectionReadsStayInsideTheLibraryBuffer(t *testing.T) {
 		}
 	})
 	t.Run("the buffer refuses what it cannot hold", func(t *testing.T) {
-		if code, _ := wireRead(t, handler, "adventureworks", "Production.TransactionHistory"); code < http.StatusBadRequest {
-			t.Errorf("a collection of more than 100,000 rows answered %d: the library no longer stops a read at its buffer, so the memory figure no longer bounds it", code)
+		result := wireRead(t, handler, "adventureworks", "Production.TransactionHistory")
+		if result.status != http.StatusOK || result.complete || result.errorCode != "query_budget_exceeded" || result.budgetName != "response_bytes" || result.records == 0 || len(result.body) > answerBound {
+			t.Errorf("oversized collection response = status %d complete=%t error=%q budget=%q records=%d bytes=%d; want a bounded partial stream ending in a response_bytes budget refusal", result.status, result.complete, result.errorCode, result.budgetName, result.records, len(result.body))
 		}
 	})
 }
 
-func wireRead(t *testing.T, handler http.Handler, database, collection string) (int, []byte) {
+type wireReadResult struct {
+	status                int
+	body                  []byte
+	complete              bool
+	hasComplete           bool
+	contentType           string
+	varyAccept            bool
+	errorCode, budgetName string
+	records               int
+}
+
+func wireRead(t *testing.T, handler http.Handler, database, collection string) wireReadResult {
 	t.Helper()
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, wireRequest(t, database, core.Query{Collection: collection}))
-	return response.Code, response.Body.Bytes()
+	result := wireReadResult{status: response.Code, body: response.Body.Bytes()}
+	result.contentType = response.Header().Get("Content-Type")
+	for _, value := range response.Header().Values("Vary") {
+		for _, item := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), "Accept") {
+				result.varyAccept = true
+			}
+		}
+	}
+	var envelope struct {
+		Records  []json.RawMessage `json:"records"`
+		Complete *bool             `json:"complete"`
+		Error    struct {
+			Code   string `json:"code"`
+			Budget struct {
+				Name string `json:"name"`
+			} `json:"budget"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(result.body, &envelope); err != nil {
+		t.Fatalf("%s %s: response is not JSON: %v", database, collection, err)
+	}
+	result.records = len(envelope.Records)
+	result.hasComplete = envelope.Complete != nil
+	result.complete = result.hasComplete && *envelope.Complete
+	result.errorCode = envelope.Error.Code
+	result.budgetName = envelope.Error.Budget.Name
+	if result.status == http.StatusOK && (result.contentType != "application/vnd.openvaultdb.query-stream+json" || !result.varyAccept || !result.hasComplete) {
+		t.Fatalf("%s %s: successful streamed response missing negotiated MIME/Vary/complete footer", database, collection)
+	}
+	if result.status == http.StatusOK && !result.complete {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(result.body, &payload); err != nil {
+			t.Fatalf("%s %s: incomplete stream is invalid JSON: %v", database, collection, err)
+		}
+		for _, successOnly := range []string{"columns", "execution", "providerReads", "sourceRights", "usedSourceIds"} {
+			if _, exists := payload[successOnly]; exists {
+				t.Fatalf("%s %s: incomplete stream includes success-only field %q", database, collection, successOnly)
+			}
+		}
+	}
+	return result
 }
 
 func TestPostgresPreviewStaysOff(t *testing.T) {

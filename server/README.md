@@ -237,8 +237,12 @@ buffer the figure is measured on; `TestCloudMeasureSingleCollectionReads` (set
 limit gets the library's answer: `422 query_budget_exceeded` with the budget it
 reached, `503 query_capacity` when no slot frees within the queue wait, `413
 snapshot_too_large` for a larger snapshot. A whole-collection read that outgrows the
-8 MiB buffer is answered `500` by the library, as before the bump; adding a limit on
-that endpoint belongs to the library. `/.well-known/openvaultdb` states the limits
+8 MiB response buffer is not a successful result: the default `application/json`
+stream is aborted after rows have been written, while a caller that negotiates
+`application/vnd.openvaultdb.query-stream+json` receives a bounded terminal
+`complete:false` with a `query_budget_exceeded` / `response_bytes` error. The
+fixture-backed capacity test checks the negotiated terminal and counts it as a
+refusal, never as an answered read. `/.well-known/openvaultdb` states the limits
 and the join engines this server enforces. It also states the library's fixed
 ceiling of 100,000 groups; with a budget of 40,000 source rows a grouping cannot
 reach more groups than the rows it reads, so 40,000 is the effective ceiling.

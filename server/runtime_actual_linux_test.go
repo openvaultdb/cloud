@@ -53,42 +53,15 @@ func actualCgroup() (map[string]any, error) {
 		return nil, err
 	}
 	result["process_cgroup_identity"] = strings.TrimSpace(string(cgroupIdentity))
-	for _, name := range []string{"memory.current", "memory.peak", "memory.max", "cpu.max", "memory.stat", "memory.events"} {
-		data, err := os.ReadFile("/sys/fs/cgroup/" + name)
-		if err != nil {
-			return nil, fmt.Errorf("required cgroup v2 %s: %w", name, err)
-		}
-		switch name {
-		case "memory.current", "memory.peak", "memory.max":
-			n, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			result[name] = n
-		case "cpu.max":
-			result[name] = strings.TrimSpace(string(data))
-		default:
-			values := map[string]uint64{}
-			fields := strings.Fields(string(data))
-			if len(fields)%2 != 0 {
-				return nil, fmt.Errorf("invalid cgroup %s", name)
-			}
-			for i := 0; i < len(fields); i += 2 {
-				n, err := strconv.ParseUint(fields[i+1], 10, 64)
-				if err != nil {
-					return nil, err
-				}
-				values[fields[i]] = n
-			}
-			result[name] = values
-		}
+	metrics, err := readCgroupMetrics("/sys/fs/cgroup")
+	if err != nil {
+		return nil, err
 	}
-	if result["memory.max"].(uint64) != 512<<20 {
-		return nil, fmt.Errorf("memory limit is not 512MiB")
+	if err := validateCgroupCapacity(metrics); err != nil {
+		return nil, err
 	}
-	fields := strings.Fields(result["cpu.max"].(string))
-	if len(fields) != 2 || fields[0] != fields[1] {
-		return nil, fmt.Errorf("CPU quota is not exactly one CPU")
+	for name, value := range metrics {
+		result[name] = value
 	}
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
@@ -321,7 +294,9 @@ type actualWork struct {
 	want             int
 	expectedRows     int
 	noSourceRights   bool
+	accept           string
 	errorCode, route string
+	incompleteBudget string
 }
 
 type actualMeasuredWork struct {
@@ -361,15 +336,23 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result := actualRequest(handler, http.MethodPost, work.path, work.body, nil, ctx)
+	headers := map[string]string{}
+	if work.accept != "" {
+		headers["Accept"] = work.accept
+	}
+	result := actualRequest(handler, http.MethodPost, work.path, work.body, headers, ctx)
 	entry := map[string]any{"name": work.name, "status": result.Code, "response_bytes": result.Body.Len(), "seconds": time.Since(started).Seconds()}
 	if result.Code != work.want {
 		return entry, fmt.Errorf("%s status %d want %d: %.1000s", work.name, result.Code, work.want, result.Body.String())
 	}
 	var document struct {
-		Records []json.RawMessage `json:"records"`
-		Error   struct {
-			Code string `json:"code"`
+		Records  []json.RawMessage `json:"records"`
+		Complete *bool             `json:"complete"`
+		Error    struct {
+			Code   string `json:"code"`
+			Budget struct {
+				Name string `json:"name"`
+			} `json:"budget"`
 		} `json:"error"`
 		Execution struct {
 			Route string `json:"route"`
@@ -377,6 +360,31 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	}
 	if err := json.Unmarshal(result.Body.Bytes(), &document); err != nil {
 		return entry, err
+	}
+	if work.accept != "" {
+		if result.Header().Get("Content-Type") != work.accept || !strings.Contains(strings.Join(result.Header().Values("Vary"), ", "), "Accept") {
+			return entry, fmt.Errorf("%s response did not honor negotiated streaming headers", work.name)
+		}
+	}
+	if work.incompleteBudget != "" {
+		if result.Code != http.StatusOK || document.Complete == nil || *document.Complete || document.Error.Code != "query_budget_exceeded" || document.Error.Budget.Name != work.incompleteBudget || len(document.Records) == 0 {
+			complete := document.Complete != nil && *document.Complete
+			return entry, fmt.Errorf("%s incomplete stream status=%d complete=%t error=%q budget=%q rows=%d; want partial rows and a %s budget refusal", work.name, result.Code, complete, document.Error.Code, document.Error.Budget.Name, len(document.Records), work.incompleteBudget)
+		}
+		if result.Body.Len() > 9*mebibyte {
+			return entry, fmt.Errorf("%s incomplete response is %d bytes, above the 9MiB bound", work.name, result.Body.Len())
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(result.Body.Bytes(), &payload); err != nil {
+			return entry, err
+		}
+		for _, successOnly := range []string{"columns", "execution", "providerReads", "sourceRights", "usedSourceIds"} {
+			if _, exists := payload[successOnly]; exists {
+				return entry, fmt.Errorf("%s incomplete stream included success-only field %q", work.name, successOnly)
+			}
+		}
+	} else if work.want == http.StatusOK && (document.Complete == nil || !*document.Complete) {
+		return entry, fmt.Errorf("%s returned without a complete:true streaming footer", work.name)
 	}
 	if work.expectedRows > 0 && len(document.Records) != work.expectedRows {
 		return entry, fmt.Errorf("%s returned %d rows, want %d", work.name, len(document.Records), work.expectedRows)
@@ -393,7 +401,8 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 			return entry, fmt.Errorf("%s exposed undeclared source identifiers", work.name)
 		}
 	}
-	entry["rows"], entry["route"], entry["error_code"] = len(document.Records), document.Execution.Route, document.Error.Code
+	complete := document.Complete != nil && *document.Complete
+	entry["rows"], entry["route"], entry["error_code"], entry["complete"] = len(document.Records), document.Execution.Route, document.Error.Code, complete
 	if work.want == 200 && len(document.Records) == 0 {
 		return entry, fmt.Errorf("%s read no rows", work.name)
 	}
@@ -404,6 +413,66 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 		return entry, fmt.Errorf("%s wrong route %s", work.name, document.Execution.Route)
 	}
 	return entry, nil
+}
+
+func TestCloudActualExecuteRequiresAnExplicitIncompleteBudgetFooter(t *testing.T) {
+	valid := map[string]any{
+		"records":  []any{map[string]any{"key": "partial"}},
+		"error":    map[string]any{"code": "query_budget_exceeded", "budget": map[string]any{"name": "response_bytes"}},
+		"complete": false,
+	}
+	for _, test := range []struct {
+		name    string
+		mutate  func(map[string]any)
+		wantErr bool
+	}{
+		{name: "valid partial refusal"},
+		{name: "missing complete footer", mutate: func(body map[string]any) { delete(body, "complete") }, wantErr: true},
+		{name: "success footer on refusal", mutate: func(body map[string]any) { body["complete"] = true }, wantErr: true},
+		{name: "wrong budget", mutate: func(body map[string]any) {
+			body["error"].(map[string]any)["budget"].(map[string]any)["name"] = "source_rows"
+		}, wantErr: true},
+		{name: "no partial rows", mutate: func(body map[string]any) { body["records"] = []any{} }, wantErr: true},
+		{name: "success-only metadata", mutate: func(body map[string]any) { body["execution"] = map[string]any{"route": "database"} }, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := map[string]any{}
+			for key, value := range valid {
+				body[key] = value
+			}
+			// Copy the nested structures which each mutation may change.
+			body["records"] = []any{map[string]any{"key": "partial"}}
+			body["error"] = map[string]any{"code": "query_budget_exceeded", "budget": map[string]any{"name": "response_bytes"}}
+			if test.mutate != nil {
+				test.mutate(body)
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Accept"); got != "application/vnd.openvaultdb.query-stream+json" {
+					t.Errorf("Accept = %q", got)
+				}
+				w.Header().Set("Content-Type", "application/vnd.openvaultdb.query-stream+json")
+				w.Header().Set("Vary", "Accept")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(encoded)
+			})
+			work := actualWork{
+				name: "synthetic-late-budget", path: "/v1/databases/adventureworks/query",
+				body: `{"collection":"Production.TransactionHistory"}`, want: http.StatusOK,
+				accept: "application/vnd.openvaultdb.query-stream+json", incompleteBudget: "response_bytes",
+			}
+			entry, err := actualExecute(handler, work)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("actualExecute error = %v, wantErr %t", err, test.wantErr)
+			}
+			if err == nil && (entry["complete"] != false || entry["rows"] != 1) {
+				t.Fatalf("accepted partial stream receipt = %#v", entry)
+			}
+		})
+	}
 }
 
 // actualQueriesStart: parser regression compiles the exact generated workload builders.
@@ -448,7 +517,8 @@ func actualLegacyWorks() []actualWork {
 	grouped := "from:\n  database: adventureworks\n  name: Person.Person\n  alias: d\n  joins:\n    - type: left\n      from: {database: chinook, name: Genre, alias: g}\n      on:\n        - {left: {field: BusinessEntityID, source: d}, op: '==', right: {field: GenreId, source: g}}\ngroupBy: [{field: PersonType, source: d}]\ncolumns:\n  - {field: PersonType, source: d}\n  - {aggregate: {function: count, args: [{star: true}]}, as: n}\nlimit: 5\n"
 	photo := "from:\n  name: Production.ProductProductPhoto\n  alias: p\n  joins:\n    - type: inner\n      from: {name: Production.ProductPhoto, alias: f}\n      on:\n        - {left: {field: ProductPhotoID, source: p}, op: '==', right: {field: ProductPhotoID, source: f}}\ncolumns:\n  - {field: ProductID, source: p}\n  - {field: LargePhoto, source: f}\n  - {field: ThumbNailPhoto, source: f}\nlimit: 1000\n"
 	return []actualWork{
-		{name: "heaviest-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Sales.SalesOrderHeaderSalesReason"}`, want: 200},
+		{name: "heaviest-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Sales.SalesOrderHeaderSalesReason"}`, want: 200, accept: "application/vnd.openvaultdb.query-stream+json"},
+		{name: "oversized-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Production.TransactionHistory"}`, want: 200, accept: "application/vnd.openvaultdb.query-stream+json", incompleteBudget: "response_bytes"},
 		{name: "database-photo-join", path: "/v1/databases/adventureworks/dtql", body: photo, want: 200, route: "database"},
 		{name: "database-ordinary", path: "/v1/databases/adventureworks/dtql", body: "from: {name: Person.Person}\nlimit: 1000\n", want: 200},
 		{name: "in-memory-grouping", path: "/v1/dtql", body: grouped, want: 200, route: "in-memory"},
@@ -526,6 +596,8 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		"source_sha":                 sha,
 		"memory_limit_bytes":         uint64(512 << 20),
 		"peak_limit_bytes":           actualPeakLimit,
+		"configured_cpu_vcpu":        1,
+		"cpu_quota_note":             "effective cgroup quota may be below the configured one vCPU due to platform overhead",
 		"credential_values_recorded": false,
 		"provider_errors_recorded":   false,
 	}
@@ -621,6 +693,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		}
 		if json.Unmarshal(descriptorResponse.Body.Bytes(), &descriptor) != nil ||
 			descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] ||
+			!descriptor.Capabilities["dtqlStreaming"] || !descriptor.Capabilities["dtqlStreamingErrors"] ||
 			len(descriptor.Collections) == 0 || strings.Contains(descriptorResponse.Body.String(), "_import_manifest") {
 			t.Fatalf("native PostgreSQL descriptor was incomplete or advertised unsupported behavior for %s", source.databaseID)
 		}
@@ -950,7 +1023,13 @@ func TestActualCapacity(t *testing.T) {
 	if os.Getenv("OVDB_ACTUAL_CAPACITY") != "1" {
 		t.Skip("requires full-corpus manual Linux experiment; host tests are not capacity proof")
 	}
-	receipt := map[string]any{"cold_cloud_capacity_accepted": false, "pool_metrics": "library exposes no pool counters; actual FD counts, cancellation and slot reuse recorded", "memory_gate_bytes": actualPeakLimit}
+	receipt := map[string]any{
+		"cold_cloud_capacity_accepted": false,
+		"pool_metrics":                 "library exposes no pool counters; actual FD counts, cancellation and slot reuse recorded",
+		"memory_gate_bytes":            actualPeakLimit,
+		"configured_cpu_vcpu":          1,
+		"cpu_quota_note":               "effective cgroup quota may be below the configured one vCPU due to platform overhead",
+	}
 	defer actualEmit(t, "ACTUAL_CAPACITY_JSON=", receipt)
 	baseline, err := actualCgroup()
 	if err != nil {
