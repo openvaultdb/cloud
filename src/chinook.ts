@@ -63,7 +63,8 @@ async function proxyWithPolicy(
   try { origin = new URL(originValue); }
   catch { return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503); }
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash ||
-    (service === "ECB" && (origin.port !== "" || !origin.hostname.endsWith(".run.app")))) {
+    (service === "ECB" && (origin.port !== "" || !origin.hostname.endsWith(".run.app") ||
+      (originValue !== origin.origin && originValue !== `${origin.origin}/`)))) {
     return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503);
   }
   const publicURL = new URL(request.url);

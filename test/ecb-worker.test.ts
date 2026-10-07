@@ -41,10 +41,11 @@ describe("selected ECB Worker route", () => {
       return Response.json({ records: [] });
     });
     for (const origin of ["http://synthetic-ecb.a.run.app", "https://attacker.example", "https://synthetic-ecb.a.run.app/path",
-      "https://user:pass@synthetic-ecb.a.run.app", "https://synthetic-ecb.a.run.app:444"]) {
+      "https://user:pass@synthetic-ecb.a.run.app", "https://synthetic-ecb.a.run.app:444",
+      "https://synthetic-ecb.a.run.app:443", "https://synthetic-ecb.a.run.app/%2e%2e/"]) {
       const response = await invoke(worker, { ...ecbEnv, ECB_RUN_ORIGIN: origin, CHINOOK_RUN_ORIGIN: origin } as Env,
         new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n" }));
-      expect(response.status).toBe(503);
+      expect(response.status, origin).toBe(503);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
     }
     const mismatched = await invoke(worker, { ...ecbEnv, ECB_RUN_ORIGIN: "https://other-ecb.a.run.app" } as Env,
