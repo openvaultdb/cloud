@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,8 +40,29 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 		t.Fatal(err)
 	}
 	trust, err := x509.SystemCertPool()
-	if err != nil || trust == nil || len(trust.Subjects()) == 0 {
+	if err != nil || trust == nil {
 		t.Fatalf("shipping image has no usable system CA trust store: pool=%v err=%v", trust != nil, err)
+	}
+	caBundle, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
+	if err != nil {
+		t.Fatalf("shipping image has no readable system CA bundle: %v", err)
+	}
+	var validCertificates int
+	for len(caBundle) > 0 {
+		block, rest := pem.Decode(caBundle)
+		if block == nil {
+			break
+		}
+		caBundle = rest
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if _, err := x509.ParseCertificate(block.Bytes); err == nil {
+			validCertificates++
+		}
+	}
+	if validCertificates == 0 {
+		t.Fatal("shipping image system CA bundle contains no valid certificates")
 	}
 	before, err := os.ReadDir("/tmp")
 	if err != nil {

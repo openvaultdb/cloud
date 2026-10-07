@@ -34,7 +34,7 @@ func TestAppendConfiguredDemoPostgresIsOptInAndAllOrNothing(t *testing.T) {
 		t.Setenv(source.dsnEnv, "")
 	}
 	t.Setenv(demoPostgresSources[0].dsnEnv, "postgres://reader:private-marker@example.invalid/chinook")
-	got, err = appendConfiguredDemoPostgres(base)
+	_, err = appendConfiguredDemoPostgres(base)
 	if err == nil || !strings.Contains(err.Error(), demoPostgresSources[1].dsnEnv) || strings.Contains(err.Error(), "private-marker") {
 		t.Fatalf("partial secret configuration error = %v", err)
 	}
