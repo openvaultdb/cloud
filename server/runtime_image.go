@@ -103,8 +103,7 @@ func configuredHandler() ([]runtimeDatabase, http.Handler, func() error, error) 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	handler, closeDatabases, err := newHandlerWithStorage(startup.providers, startup.strategy, startup.image)
-	return startup.providers, handler, closeDatabases, err
+	return configuredHandlerWithRuntime(startup)
 }
 
 func checkProtectedEntry(path string, entry imageEntry, directory bool) error {
