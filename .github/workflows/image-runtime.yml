@@ -8,6 +8,25 @@ on:
 permissions:
   contents: read
 jobs:
+  source-free-shipping-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: server/go.sum
+      - name: Shipping-image roots and isolated synthetic dynamic composition
+        working-directory: server
+        run: python3 test_source_free_image.py
+      - name: Preserve metadata-only subset receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-free-shipping-image
+          path: server/source-free-image-report.json
+          if-no-files-found: error
   synthetic-linux-image:
     runs-on: ubuntu-latest
     timeout-minutes: 15
