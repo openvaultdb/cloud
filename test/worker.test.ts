@@ -304,18 +304,74 @@ describe("public Chinook OVDB proxy", () => {
   it.each([proxyChinook, futureProxy])("cancels a blocked upstream body on downstream reader cancellation", async (proxy) => {
     let upstreamCancelled = false;
     let signal: AbortSignal | null | undefined;
-    const response = await proxy(new Request(`${baseURL}/v1/databases/synthetic/query`), proxyEnv, async (_input, init) => {
+    const accept = "application/vnd.openvaultdb.query-stream+json";
+    let forwardedAccept: string | null = null;
+    const response = await proxy(new Request(`${baseURL}/v1/databases/synthetic/dtql`, { headers: { Accept: accept } }), proxyEnv, async (_input, init) => {
       signal = init?.signal;
+      forwardedAccept = new Headers(init?.headers).get("Accept");
       return new Response(new ReadableStream({
-        start(controller) { controller.enqueue(new Uint8Array([1])); },
+        start(controller) { controller.enqueue(new TextEncoder().encode('{"records":[')); },
         cancel() { upstreamCancelled = true; },
-      }));
+      }), { headers: { "Content-Type": accept, Vary: "Accept" } });
     });
+    expect(forwardedAccept).toBe(accept);
+    expect(response.headers.get("Content-Type")).toBe(accept);
+    expect(response.headers.get("Vary")).toBe("Accept");
     const reader = response.body!.getReader();
-    expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('{"records":[');
     await reader.cancel();
     expect(signal?.aborted).toBe(true);
     expect(upstreamCancelled).toBe(true);
+  });
+
+  it("forwards negotiated query-stream chunks and an incomplete terminal verbatim before upstream EOF", async () => {
+    const prefix = '{"records":[{"data":{"id":"first"}}],';
+    const terminal = '"error":{"code":"query_failed","message":"source read failed"},"complete":false}\n';
+    const encoder = new TextEncoder();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let upstreamFinished = false;
+    let forwardedAccept: string | null = null;
+    const request = new Request(`${baseURL}/v1/databases/chinook/dtql`, {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.openvaultdb.query-stream+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "from: {name: Album}\nlimit: 2\n" }),
+    });
+    const response = await proxyChinook(request, proxyEnv, async (_input, init) => {
+      forwardedAccept = new Headers(init?.headers).get("Accept");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          source = controller;
+          controller.enqueue(encoder.encode(prefix));
+        },
+        cancel() { upstreamFinished = true; },
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/vnd.openvaultdb.query-stream+json",
+          Vary: "Accept",
+        },
+      });
+    });
+    expect(forwardedAccept).toBe("application/vnd.openvaultdb.query-stream+json");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/vnd.openvaultdb.query-stream+json");
+    expect(response.headers.get("Vary")).toBe("Accept");
+
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe(prefix);
+    expect(upstreamFinished).toBe(false);
+
+    source.enqueue(encoder.encode(terminal));
+    source.close();
+    upstreamFinished = true;
+    const last = await reader.read();
+    expect(new TextDecoder().decode(last.value)).toBe(terminal);
+    expect((await reader.read()).done).toBe(true);
+    expect(prefix + terminal).toBe('{"records":[{"data":{"id":"first"}}],"error":{"code":"query_failed","message":"source read failed"},"complete":false}\n');
   });
 
   it.each([proxyChinook, futureProxy])("propagates request abort after upstream headers and clears pending read", async (proxy) => {

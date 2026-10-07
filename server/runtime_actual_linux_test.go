@@ -53,42 +53,15 @@ func actualCgroup() (map[string]any, error) {
 		return nil, err
 	}
 	result["process_cgroup_identity"] = strings.TrimSpace(string(cgroupIdentity))
-	for _, name := range []string{"memory.current", "memory.peak", "memory.max", "cpu.max", "memory.stat", "memory.events"} {
-		data, err := os.ReadFile("/sys/fs/cgroup/" + name)
-		if err != nil {
-			return nil, fmt.Errorf("required cgroup v2 %s: %w", name, err)
-		}
-		switch name {
-		case "memory.current", "memory.peak", "memory.max":
-			n, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			result[name] = n
-		case "cpu.max":
-			result[name] = strings.TrimSpace(string(data))
-		default:
-			values := map[string]uint64{}
-			fields := strings.Fields(string(data))
-			if len(fields)%2 != 0 {
-				return nil, fmt.Errorf("invalid cgroup %s", name)
-			}
-			for i := 0; i < len(fields); i += 2 {
-				n, err := strconv.ParseUint(fields[i+1], 10, 64)
-				if err != nil {
-					return nil, err
-				}
-				values[fields[i]] = n
-			}
-			result[name] = values
-		}
+	metrics, err := readCgroupMetrics("/sys/fs/cgroup")
+	if err != nil {
+		return nil, err
 	}
-	if result["memory.max"].(uint64) != 512<<20 {
-		return nil, fmt.Errorf("memory limit is not 512MiB")
+	if err := validateCgroupCapacity(metrics); err != nil {
+		return nil, err
 	}
-	fields := strings.Fields(result["cpu.max"].(string))
-	if len(fields) != 2 || fields[0] != fields[1] {
-		return nil, fmt.Errorf("CPU quota is not exactly one CPU")
+	for name, value := range metrics {
+		result[name] = value
 	}
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
@@ -367,8 +340,9 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 		return entry, fmt.Errorf("%s status %d want %d: %.1000s", work.name, result.Code, work.want, result.Body.String())
 	}
 	var document struct {
-		Records []json.RawMessage `json:"records"`
-		Error   struct {
+		Records  []json.RawMessage `json:"records"`
+		Complete bool              `json:"complete"`
+		Error    struct {
 			Code string `json:"code"`
 		} `json:"error"`
 		Execution struct {
@@ -377,6 +351,9 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	}
 	if err := json.Unmarshal(result.Body.Bytes(), &document); err != nil {
 		return entry, err
+	}
+	if work.want == http.StatusOK && !document.Complete {
+		return entry, fmt.Errorf("%s returned without a complete streaming footer", work.name)
 	}
 	if work.expectedRows > 0 && len(document.Records) != work.expectedRows {
 		return entry, fmt.Errorf("%s returned %d rows, want %d", work.name, len(document.Records), work.expectedRows)
@@ -526,6 +503,8 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		"source_sha":                 sha,
 		"memory_limit_bytes":         uint64(512 << 20),
 		"peak_limit_bytes":           actualPeakLimit,
+		"configured_cpu_vcpu":        1,
+		"cpu_quota_note":             "effective cgroup quota may be below the configured one vCPU due to platform overhead",
 		"credential_values_recorded": false,
 		"provider_errors_recorded":   false,
 	}
@@ -621,6 +600,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		}
 		if json.Unmarshal(descriptorResponse.Body.Bytes(), &descriptor) != nil ||
 			descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] ||
+			!descriptor.Capabilities["dtqlStreaming"] || !descriptor.Capabilities["dtqlStreamingErrors"] ||
 			len(descriptor.Collections) == 0 || strings.Contains(descriptorResponse.Body.String(), "_import_manifest") {
 			t.Fatalf("native PostgreSQL descriptor was incomplete or advertised unsupported behavior for %s", source.databaseID)
 		}
@@ -950,7 +930,13 @@ func TestActualCapacity(t *testing.T) {
 	if os.Getenv("OVDB_ACTUAL_CAPACITY") != "1" {
 		t.Skip("requires full-corpus manual Linux experiment; host tests are not capacity proof")
 	}
-	receipt := map[string]any{"cold_cloud_capacity_accepted": false, "pool_metrics": "library exposes no pool counters; actual FD counts, cancellation and slot reuse recorded", "memory_gate_bytes": actualPeakLimit}
+	receipt := map[string]any{
+		"cold_cloud_capacity_accepted": false,
+		"pool_metrics":                 "library exposes no pool counters; actual FD counts, cancellation and slot reuse recorded",
+		"memory_gate_bytes":            actualPeakLimit,
+		"configured_cpu_vcpu":          1,
+		"cpu_quota_note":               "effective cgroup quota may be below the configured one vCPU due to platform overhead",
+	}
 	defer actualEmit(t, "ACTUAL_CAPACITY_JSON=", receipt)
 	baseline, err := actualCgroup()
 	if err != nil {

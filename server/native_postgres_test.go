@@ -196,6 +196,9 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		if descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] {
 			t.Fatalf("%s advertised unsupported native capabilities: %+v", id, descriptor.Capabilities)
 		}
+		if !descriptor.Capabilities["dtqlStreaming"] || !descriptor.Capabilities["dtqlStreamingErrors"] {
+			t.Fatalf("%s did not advertise its negotiated streaming DTQL capabilities", id)
+		}
 		if len(descriptor.Collections) == 0 {
 			t.Fatalf("%s has no discovered native relations", id)
 		}
@@ -225,12 +228,24 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 			sort.Strings(fieldNames)
 			if !readDone && len(fieldNames) > 0 {
 				query := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: %s}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(fieldNames[0]))
-				response := postgreSQLRequest(t, handler, http.MethodPost, dtqlPath, query, "https://datatug.app")
+				response := postgreSQLStreamRequest(t, handler, dtqlPath, query, "https://datatug.app")
 				if response.Code != http.StatusOK {
 					t.Fatalf("%s read by returned collection ID %q: %d %s", id, collectionID, response.Code, response.Body.String())
 				}
+				if got := response.Header().Get("Content-Type"); got != "application/vnd.openvaultdb.query-stream+json" {
+					t.Fatalf("%s opted-in DTQL Content-Type = %q", id, got)
+				}
+				if got := strings.Join(response.Header().Values("Vary"), ", "); !strings.Contains(got, "Accept") {
+					t.Fatalf("%s opted-in DTQL Vary = %q, want Accept", id, got)
+				}
 				if response.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app" {
 					t.Fatalf("%s DTQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
+				}
+				var streamed struct {
+					Complete bool `json:"complete"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &streamed); err != nil || !streamed.Complete {
+					t.Fatalf("%s DTQL stream did not complete: %v body=%s", id, err, response.Body.String())
 				}
 				readDone = true
 			}
@@ -293,6 +308,25 @@ func postgreSQLRequest(t *testing.T, handler http.Handler, method, path, query s
 	}
 	if method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func postgreSQLStreamRequest(t *testing.T, handler http.Handler, path, query string, origins ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		Query string `json:"query"`
+	}{Query: query})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(encoded)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
+	if len(origins) > 0 {
+		request.Header.Set("Origin", origins[0])
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
