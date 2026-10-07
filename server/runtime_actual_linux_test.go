@@ -319,6 +319,8 @@ func actualCancel(t *testing.T, handler http.Handler) map[string]any {
 type actualWork struct {
 	name, path, body string
 	want             int
+	expectedRows     int
+	noSourceRights   bool
 	errorCode, route string
 }
 
@@ -375,6 +377,21 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	}
 	if err := json.Unmarshal(result.Body.Bytes(), &document); err != nil {
 		return entry, err
+	}
+	if work.expectedRows > 0 && len(document.Records) != work.expectedRows {
+		return entry, fmt.Errorf("%s returned %d rows, want %d", work.name, len(document.Records), work.expectedRows)
+	}
+	if work.noSourceRights {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(result.Body.Bytes(), &payload); err != nil {
+			return entry, err
+		}
+		if _, exists := payload["sourceRights"]; exists {
+			return entry, fmt.Errorf("%s exposed undeclared source rights", work.name)
+		}
+		if _, exists := payload["usedSourceIds"]; exists {
+			return entry, fmt.Errorf("%s exposed undeclared source identifiers", work.name)
+		}
 	}
 	entry["rows"], entry["route"], entry["error_code"] = len(document.Records), document.Execution.Route, document.Error.Code
 	if work.want == 200 && len(document.Records) == 0 {
@@ -650,7 +667,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 			name: source.databaseID + "-native-read",
 			path: "/v1/databases/" + id + "/dtql",
 			body: base + fmt.Sprintf("columns: [{field: %s}]\nlimit: 1\n", strconv.Quote(selectedField)),
-			want: http.StatusOK,
+			want: http.StatusOK, expectedRows: 1, noSourceRights: true,
 		}
 		entry, queryErr := actualExecute(handler, read)
 		if queryErr != nil {
@@ -664,13 +681,63 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
 				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
 				strconv.Quote(selectedKey), strconv.Quote(selectedKey), strconv.Quote(selectedKey)),
-			want: http.StatusOK,
+			want: http.StatusOK, expectedRows: 1, noSourceRights: true,
 		}
 		entry, queryErr = actualExecute(handler, join)
 		if queryErr != nil {
 			t.Fatalf("bounded native PostgreSQL self-join failed for %s", source.databaseID)
 		}
 		workloads = append(workloads, entry)
+	}
+	for _, table := range []struct {
+		name string
+		rows int
+	}{{"Artist", 275}, {"Album", 347}, {"Track", 3503}} {
+		work := actualWork{
+			name:           "chinook-postgresql-full-" + strings.ToLower(table.name),
+			path:           "/v1/databases/chinook-postgresql/dtql",
+			body:           fmt.Sprintf("from: {schema: %s, name: %s}\nlimit: 4000\n", strconv.Quote("chinook"), strconv.Quote(table.name)),
+			want:           http.StatusOK,
+			expectedRows:   table.rows,
+			noSourceRights: true,
+		}
+		entry, queryErr := actualExecute(handler, work)
+		if queryErr != nil {
+			t.Fatalf("bounded full-table PostgreSQL read failed for Chinook %s", table.name)
+		}
+		workloads = append(workloads, entry)
+	}
+	concurrentWorks := []actualWork{
+		{
+			name: "chinook-postgresql-concurrent-track-read", path: "/v1/databases/chinook-postgresql/dtql",
+			body: "from: {schema: chinook, name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000, noSourceRights: true,
+		},
+		{
+			name: "chinook-sqlite-concurrent-track-read", path: "/v1/databases/chinook/dtql",
+			body: "from: {name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000,
+		},
+	}
+	startConcurrent := make(chan struct{})
+	type concurrentResult struct {
+		entry map[string]any
+		err   error
+	}
+	concurrentDone := make(chan concurrentResult, len(concurrentWorks))
+	for _, work := range concurrentWorks {
+		go func(work actualWork) {
+			<-startConcurrent
+			entry, queryErr := actualExecute(handler, work)
+			concurrentDone <- concurrentResult{entry: entry, err: queryErr}
+		}(work)
+	}
+	close(startConcurrent)
+	for range concurrentWorks {
+		result := <-concurrentDone
+		if result.err != nil {
+			t.Fatal("concurrent SQLite and PostgreSQL reads failed")
+		}
+		result.entry["concurrency"] = len(concurrentWorks)
+		workloads = append(workloads, result.entry)
 	}
 	var afterQueries runtime.MemStats
 	runtime.GC()
