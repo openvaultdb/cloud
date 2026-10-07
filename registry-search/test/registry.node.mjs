@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stableId, collectionSchema } from '../schema.mjs';
-import { originForDocument, corePriority } from '../provenance.mjs';
+import { originForDocument, corePriority, repositoryTerms, searchFields } from '../provenance.mjs';
 import { mergeExports, validateManifest } from '../merge.mjs';
 import { publish, typesenseClient } from '../publish.mjs';
 import { createGateway } from '../gateway.mjs';
@@ -66,6 +66,27 @@ test('accepts approved object-repository provenance and rejects missing envelope
   assert.equal(mergeExports(manifest, exports).documents.length, 3);
   delete exports[2].source_revisions['datatug/chinookdb'];
   assert.throws(() => mergeExports(manifest, exports), /document missing source pin/);
+});
+test('derives searchable repository terms only from pinned public provenance', () => {
+  const { manifest, exports } = fixture();
+  const model = exports[1].documents[0];
+  manifest.approved_revisions['demo-db/chinook'] = sha('d');
+  exports[1].source_revisions['demo-db/chinook'] = sha('d');
+  model.source_repository = 'demo-db/chinook';
+  model.source_commit = sha('d');
+  const indexed = mergeExports(manifest, exports).documents.find(doc => doc.id === model.id);
+  assert.deepEqual(repositoryTerms(indexed), { repository_owner: 'demo-db', repository_name: 'chinook', repository_full_name: 'demo-db/chinook' });
+  assert.equal(indexed.repository_owner, 'demo-db');
+  assert.equal(indexed.repository_name, 'chinook');
+  assert.equal(indexed.repository_full_name, 'demo-db/chinook');
+  assert.notEqual(mergeExports(manifest, exports).generation, mergeExports(fixture().manifest, fixture().exports).generation);
+  for (const field of ['repository_owner', 'repository_name', 'repository_full_name']) {
+    model[field] = 'forged';
+    assert.throws(() => mergeExports(manifest, exports), /unknown document field/);
+    delete model[field];
+    assert.equal(collectionSchema('candidate').fields.find(item => item.name === field).index, undefined);
+  }
+  assert.throws(() => repositoryTerms({ source_repository: `owner/${'x'.repeat(160)}` }), /invalid source repository/);
 });
 test('derives core priority and entity field context only from pinned source records', () => {
   const { manifest, exports } = fixture();
@@ -158,6 +179,8 @@ function fakeEngine(failImport = false) {
       if (method === 'GET' && path.endsWith('/documents/search?'+path.split('/documents/search?')[1])) {
         const params = new URLSearchParams(path.split('?')[1]);
         const q = params.get('q');
+        assert.equal(params.get('query_by'), searchFields.query_by);
+        assert.equal(params.get('query_by_weights'), searchFields.query_by_weights);
         assert.equal(params.get('sort_by'), '_text_match:desc,core_priority:desc');
         assert.equal(params.get('prioritize_num_matching_fields'), params.get('filter_by').includes('domain:=meaninggraph') ? 'false' : null);
         const docs = collections.get(collection) || [];
@@ -234,12 +257,12 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
     assert.equal(options.redirect, 'manual');
     assert.equal(options.headers['x-typesense-api-key'], 'secret');
     const search = JSON.parse(options.body).searches[0];
-    assert.equal(search.query_by, 'identifier,qualified_name,title,aliases,description');
+    assert.deepEqual({ query_by: search.query_by, query_by_weights: search.query_by_weights }, searchFields);
     assert.equal(search.sort_by, '_text_match:desc,core_priority:desc');
     assert.equal(search.prioritize_num_matching_fields, false);
     assert.match(search.filter_by, /visibility:=public/);
     assert.match(search.include_fields, /domain,visibility/);
-    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_repository: 'meaninggraph/core', core_priority: 1, description: 'A customer.', field_preview: ['Country', 'City'], field_count: 2, source_path: 'private' } }] }] });
+    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_repository: 'meaninggraph/core', repository_owner: 'meaninggraph', repository_name: 'core', repository_full_name: 'meaninggraph/core', core_priority: 1, description: 'A customer.', field_preview: ['Country', 'City'], field_count: 2, source_path: 'private' } }] }] });
   });
   const response = await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), env);
   assert.equal(response.status, 200);
@@ -247,6 +270,8 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
   assert.equal(hit.source_path, undefined);
   assert.equal(hit.source_repository, undefined);
   assert.equal(hit.core_priority, undefined);
+  assert.equal(hit.repository, 'meaninggraph/core');
+  assert.equal(hit.repository_owner, undefined);
   assert.equal(hit.origin, 'core');
   assert.equal(hit.description, 'A customer.');
   assert.deepEqual(hit.field_preview, ['Country', 'City']);
@@ -255,6 +280,27 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
   assert.equal(target.search, '');
   assert.equal((await worker.fetch(request({ q: '*', domain: 'meaninggraph', filter_by: 'visibility:=private' }), env)).status, 400);
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }, { origin: 'https://evil.example' }), env)).status, 403);
+});
+test('gateway searches a ModelSpec repository owner, name and full path with public context', async () => {
+  const worker = createGateway(async (_url, options) => {
+    const search = JSON.parse(options.body).searches[0];
+    assert.equal(search.q, 'demo-db');
+    assert.deepEqual({ query_by: search.query_by, query_by_weights: search.query_by_weights }, searchFields);
+    assert.equal(search.prioritize_num_matching_fields, undefined);
+    return Response.json({ results: [{ found: 1, hits: [{ document: {
+      id: 'model', domain: 'modelspec', visibility: 'public', kind: 'model', title: 'Chinook',
+      source_repository: 'demo-db/chinook', repository_owner: 'demo-db', repository_name: 'chinook', repository_full_name: 'demo-db/chinook',
+      core_priority: 0, source_path: 'private', source_commit: sha('d')
+    } }] }] });
+  });
+  const response = await worker.fetch(request({ q: 'demo-db', domain: 'modelspec' }), env);
+  assert.equal(response.status, 200);
+  const [hit] = (await response.json()).hits;
+  assert.equal(hit.repository, 'demo-db/chinook');
+  assert.equal(hit.source_repository, undefined);
+  assert.equal(hit.source_path, undefined);
+  assert.equal(hit.source_commit, undefined);
+  assert.equal(hit.origin, 'public_registry');
 });
 test('gateway returns unavailable on engine failure and fails closed without rate binding', async () => {
   const worker = createGateway(async () => { throw new Error('secret engine error'); });

@@ -3,7 +3,7 @@ import { readFile, open, rename, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mergeExports, validateManifest } from './merge.mjs';
 import { collectionSchema, domains } from './schema.mjs';
-import { rankingForDomain } from './provenance.mjs';
+import { rankingForDomain, searchFields } from './provenance.mjs';
 
 const MAX_EXPORT = 256 * 1024 * 1024;
 const MAX_RESPONSE = 8 * 1024 * 1024;
@@ -134,7 +134,7 @@ export async function publish(manifest, exports, { api, stateDir, smokeQueries, 
     for (const query of smokeQueries) {
       if (!documents.some(doc => doc.id === query.id && doc.domain === query.domain) || typeof query.q !== 'string' || !query.q) throw new Error('invalid smoke query');
       const args = new URLSearchParams({
-        q: query.q, query_by: 'identifier,qualified_name,title,aliases,description',
+        q: query.q, ...searchFields,
         filter_by: `domain:=${query.domain} && visibility:=public`, per_page: '20',
         ...rankingForDomain(query.domain)
       });
