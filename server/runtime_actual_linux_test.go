@@ -500,7 +500,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		t.Fatal("native PostgreSQL capacity source SHA is missing or invalid")
 	}
 	for _, char := range sha {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
 			t.Fatal("native PostgreSQL capacity source SHA is missing or invalid")
 		}
 	}
