@@ -2,6 +2,8 @@ import { jsonResponse } from "./http";
 import type { UpstreamFetch } from "./proxy";
 
 type ChinookEnv = Env & { CHINOOK_RUN_ORIGIN?: string };
+type ECBEnv = Env & { CHINOOK_RUN_ORIGIN?: string; ECB_RUN_ORIGIN?: string; ECB_PROXY_SECRET?: string };
+const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret";
 
 const pinHeaders = [
   "OVDB-Provider-Revision",
@@ -20,7 +22,7 @@ const noRetentionPolicy: ProxyPolicy = Object.freeze({ noRetention: true, timeou
 // Neither request headers/URL/body nor deployment bindings select policy.
 // Only a future reviewed server-side composition can import this factory.
 export function createTrustedNoRetentionOVDBProxy(): typeof proxyChinook {
-  return (request, env, upstreamFetch) => proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy);
+  return (request, env, upstreamFetch) => proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy, env.CHINOOK_RUN_ORIGIN);
 }
 
 export async function proxyChinook(
@@ -28,32 +30,52 @@ export async function proxyChinook(
   env: ChinookEnv,
   upstreamFetch: UpstreamFetch,
 ): Promise<Response> {
-  return proxyWithPolicy(request, env, upstreamFetch, samplePolicy);
+  return proxyWithPolicy(request, env, upstreamFetch, samplePolicy, env.CHINOOK_RUN_ORIGIN);
+}
+
+export async function proxyECB(
+  request: Request,
+  env: ECBEnv,
+  upstreamFetch: UpstreamFetch,
+): Promise<Response> {
+  if (!env.ECB_PROXY_SECRET || !/^[A-Za-z0-9_-]{32,128}$/u.test(env.ECB_PROXY_SECRET) ||
+    !env.ECB_RUN_ORIGIN || env.ECB_RUN_ORIGIN !== env.CHINOOK_RUN_ORIGIN) {
+    return jsonResponse({ error: "ECB OVDB is not configured." }, 503);
+  }
+  return proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy, env.ECB_RUN_ORIGIN,
+    "/v1/databases/ecb/dtql", "ECB", env.ECB_PROXY_SECRET);
 }
 
 async function proxyWithPolicy(
   request: Request,
-  env: ChinookEnv,
+  env: Env,
   upstreamFetch: UpstreamFetch,
   policy: ProxyPolicy,
+  originValue: string | undefined,
+  selectedPath?: string,
+  service = "Chinook",
+  trustedSecret?: string,
 ): Promise<Response> {
-  if (!env.CHINOOK_RUN_ORIGIN) {
-    return jsonResponse({ error: "Chinook OVDB is not configured." }, 503);
+  if (!originValue) {
+    return jsonResponse({ error: `${service} OVDB is not configured.` }, 503);
   }
   let origin: URL;
-  try { origin = new URL(env.CHINOOK_RUN_ORIGIN); }
-  catch { return jsonResponse({ error: "Chinook OVDB origin is invalid." }, 503); }
-  if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
-    return jsonResponse({ error: "Chinook OVDB origin is invalid." }, 503);
+  try { origin = new URL(originValue); }
+  catch { return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503); }
+  if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash ||
+    (service === "ECB" && (origin.port !== "" || !origin.hostname.endsWith(".run.app") ||
+      (originValue !== origin.origin && originValue !== `${origin.origin}/`)))) {
+    return jsonResponse({ error: `${service} OVDB origin is invalid.` }, 503);
   }
   const publicURL = new URL(request.url);
-  const upstreamURL = new URL(publicURL.pathname + publicURL.search, origin);
+  const upstreamURL = new URL((selectedPath ?? publicURL.pathname) + publicURL.search, origin);
   const headers = new Headers();
   for (const name of ["Accept", "Content-Type", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers", "OVDB-Execution-ID", "OVDB-Page-Size", "OVDB-Page-Token", "OVDB-Page-Close", ...pinHeaders] as const) {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
-  if (request.signal.aborted) return jsonResponse({ error: "Chinook OVDB request cancelled." }, 503);
+  if (trustedSecret) headers.set(ecbProxySecretHeader, trustedSecret);
+  if (request.signal.aborted) return jsonResponse({ error: `${service} OVDB request cancelled.` }, 503);
   const abort = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -83,7 +105,7 @@ async function proxyWithPolicy(
     });
     if (abort.signal.aborted) {
       void upstream.body?.cancel().catch(() => {});
-      return jsonResponse({ error: "Chinook OVDB request cancelled." }, 503);
+      return jsonResponse({ error: `${service} OVDB request cancelled.` }, 503);
     }
     const responseHeaders = new Headers();
     for (const name of ["Content-Type", "Cache-Control", "Location", "Link", "Vary", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Access-Control-Expose-Headers", "Access-Control-Max-Age", "Retry-After", "X-Content-Type-Options", "Content-Security-Policy", ...pinHeaders] as const) {
@@ -127,7 +149,7 @@ async function proxyWithPolicy(
     dispose();
     abort.abort();
     void reader?.cancel().catch(() => {});
-    console.error("Chinook OVDB upstream failed");
-    return jsonResponse({ error: "Chinook OVDB is temporarily unavailable." }, 503);
+    console.error(`${service} OVDB upstream failed`);
+    return jsonResponse({ error: `${service} OVDB is temporarily unavailable.` }, 503);
   }
 }
