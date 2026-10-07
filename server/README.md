@@ -12,9 +12,10 @@ as runtime configuration.
 `ovdb-ecb-host-candidate/1`, paths to the original publisher manifest and a
 separate local HTTP storage manifest, the reviewed publisher commit and Git
 blob, decoder version and module version, and the exact detached `sourceRight`
-and `binding` from the accepted B1 inventory. It verifies the original
-publisher bytes, SHA-256 and Git blob, and the complete rights digest before
-mounting. The local storage manifest must match `ecbHTTPManifest` byte for byte:
+and `binding` from the reviewed preparatory B1 proposal. It verifies the
+original publisher bytes, SHA-256 and Git blob, and the complete rights digest
+before mounting. The local storage manifest must match `ecbHTTPManifest`
+byte for byte:
 strict `ecb/daily`, fixed `ecb-daily/1` HTTP profile, native string fields and
 no retention. The server also checks the mounted manifest after opening it.
 It uses the stable `openvaultdb-cloud` rights identity and the library's
