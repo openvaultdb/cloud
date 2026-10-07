@@ -341,3 +341,73 @@ func TestConfiguredHandlerIANARejectsMountedManifestSwap(t *testing.T) {
 		t.Fatal("manifest swap admitted")
 	}
 }
+
+func TestConfiguredHandlerIANAPublisherHTMLDefinition(t *testing.T) {
+	for _, drift := range []string{"", "publisher", "directory", "mixed origin"} {
+		t.Run(drift, func(t *testing.T) {
+			reads := 0
+			path, config, admission := configureSyntheticIANA(t, syntheticIANAMount(t, probeTransport(func(*http.Request) (*http.Response, error) {
+				reads++
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/csv"}}, Body: io.NopCloser(strings.NewReader(syntheticIANACSV))}, nil
+			})))
+			config.DirectoryDefinition = config.PublisherDefinition
+			config.PublisherDefinition = filepath.Join(filepath.Dir(path), "publisher-html.json")
+			config.SourceRight.EvidenceOrigin = "publisher-html-metadata-verified"
+			config.SourceRight.Pins[0].Role = "discovery"
+			config.SourceRight.Pins[0].Repository = "https://github.com/openvaultdb/directory"
+			config.SourceRight.Pins[0].Path = "sources/$records/iana-http-status-codes.yaml"
+			config.SourceRight.PublisherHTMLDefinition = &license.PublisherHTMLDefinition{
+				Format: "ovdb-iana-publisher-html-definition/1", RegistryURL: "https://www.iana.org/assignments/http-status-codes",
+				RegistrySHA256: strings.Repeat("d", 64), RegistryBytes: 100, TermsURL: manifest.IANALicensingTermsURL,
+				TermsSHA256: strings.Repeat("e", 64), TermsBytes: 200, ObservedAt: "2026-10-07T00:00:00Z",
+				ResourceURL: manifest.IANAHTTPStatusURL, NativeFields: []string{"Value", "Description", "Reference"},
+				RightsScope: "iana-ietf-held-protocol-registry-rights-cc0-excluding-linked-material",
+			}
+			definition, err := providerreads.Canonical(config.SourceRight.PublisherHTMLDefinition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(config.PublisherDefinition, definition, 0600); err != nil {
+				t.Fatal(err)
+			}
+			admission.DefinitionSHA256 = fmt.Sprintf("%x", sha256.Sum256(definition))
+			config.Binding.DefinitionDigest = admission.DefinitionSHA256
+			admission.RightsSHA256, err = providerreads.RightsDigest(config.SourceRight)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config.Binding.RightsDigest = admission.RightsSHA256
+			if drift == "mixed origin" {
+				config.SourceRight.EvidenceOrigin = "publisher-definition-verified"
+			}
+			admission.HostConfigSHA256 = writeIANAJSON(t, path, config)
+			t.Setenv("OVDB_IANA_ADMISSION_SHA256", writeIANAJSON(t, os.Getenv("OVDB_IANA_ADMISSION_FILE"), admission))
+			if drift == "publisher" || drift == "directory" {
+				changed := config.PublisherDefinition
+				if drift == "directory" {
+					changed = config.DirectoryDefinition
+				}
+				if err := os.WriteFile(changed, []byte("changed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, handler, closeHandler, err := configuredHandler()
+			if drift != "" {
+				if err == nil || handler != nil || closeHandler != nil || reads != 0 {
+					t.Fatal("mixed or changed metadata admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = closeHandler() })
+			if reads != 0 {
+				t.Fatal("metadata startup read provider")
+			}
+			if result := ianaRequest(handler, "from: {name: rows}\nlimit: 1\n"); result.Code != 200 || reads != 1 {
+				t.Fatalf("distinct metadata execution: %d reads=%d", result.Code, reads)
+			}
+		})
+	}
+}
