@@ -1,4 +1,5 @@
 import { productionEngineOrigin } from './engine-policy.mjs';
+import { originForDocument, rankingForDomain } from './provenance.mjs';
 
 const domains = new Set(['meaninggraph', 'modelspec', 'ovdb']);
 const kinds = new Set(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
@@ -101,7 +102,8 @@ export function createGateway(fetcher = fetch) {
         const search = {
           collection: 'registry_metadata', q: query.q, query_by: 'identifier,qualified_name,title,aliases,description', query_by_weights: '12,10,6,3,1',
           filter_by: filters.join(' && '), page: String(query.page), per_page: '20',
-          include_fields: display.join(',') + ',generation_id,domain,visibility', highlight_fields: 'none', search_cutoff_ms: '1500'
+          ...rankingForDomain(query.domain),
+          include_fields: display.join(',') + ',description,field_preview,field_count,source_repository,core_priority,generation_id,domain,visibility', highlight_fields: 'none', search_cutoff_ms: '1500'
         };
         const target = new URL('/multi_search', origin);
         stage = 'engine_fetch';
@@ -116,8 +118,15 @@ export function createGateway(fetcher = fetch) {
         if (!Number.isSafeInteger(result.found) || !Array.isArray(result.hits) || result.search_cutoff === true) throw new Error('incomplete search response');
         const hits = result.hits.slice(0, 20).map(hit => {
           const doc = hit.document;
-          if (!doc || doc.domain !== query.domain || doc.visibility !== 'public') throw new Error('search scope violation');
-          return Object.fromEntries(display.filter(field => doc[field] !== undefined).map(field => [field, doc[field]]));
+          if (!doc || doc.domain !== query.domain || doc.visibility !== 'public' || !kinds.has(doc.kind) || doc.core_priority !== (originForDocument(doc) === 'core' ? 1 : 0)) throw new Error('search scope violation');
+          const item = Object.fromEntries(display.filter(field => doc[field] !== undefined).map(field => [field, doc[field]]));
+          item.origin = originForDocument(doc);
+          if (typeof doc.description === 'string') item.description = [...doc.description.trim()].slice(0, 240).join('');
+          if (['meaning_entity', 'model_entity', 'model_collection'].includes(doc.kind)) {
+            if (Array.isArray(doc.field_preview)) item.field_preview = doc.field_preview.filter(field => typeof field === 'string').slice(0, 4).map(field => [...field].slice(0, 64).join(''));
+            if (Number.isSafeInteger(doc.field_count) && doc.field_count >= 0) item.field_count = doc.field_count;
+          }
+          return item;
         });
         return reply(200, { hits, found: result.found, page: query.page, generation: result.hits[0]?.document?.generation_id || null }, cors || {});
       } catch (error) {

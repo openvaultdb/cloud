@@ -7,12 +7,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stableId, collectionSchema } from '../schema.mjs';
+import { originForDocument, corePriority } from '../provenance.mjs';
 import { mergeExports, validateManifest } from '../merge.mjs';
 import { publish, typesenseClient } from '../publish.mjs';
 import { createGateway } from '../gateway.mjs';
 import { productionEngineOrigin } from '../engine-policy.mjs';
 import { fetchCurrentCorpus, refresh } from '../refresh.mjs';
-import { serviceUnit } from '../vm-refresh-service.mjs';
+import { serviceUnit, sourceFiles } from '../vm-refresh-service.mjs';
 import { insertRoute, removeRoute } from '../vm-caddy-route.mjs';
 import { runUnderPublicationLock, assertPublicationLock } from '../lock.mjs';
 
@@ -66,6 +67,49 @@ test('accepts approved object-repository provenance and rejects missing envelope
   delete exports[2].source_revisions['datatug/chinookdb'];
   assert.throws(() => mergeExports(manifest, exports), /document missing source pin/);
 });
+test('derives core priority and entity field context only from pinned source records', () => {
+  const { manifest, exports } = fixture();
+  const core = exports[0].documents[0];
+  manifest.approved_revisions['meaninggraph/core'] = sha('c');
+  exports[0].source_revisions['meaninggraph/core'] = sha('c');
+  core.source_repository = 'meaninggraph/core';
+  core.source_commit = sha('c');
+  core.description = 'A customer in the core vocabulary.';
+  const field = {
+    ...core, id: stableId('meaninggraph', 'meaning_field', 'core/Customer/country'), kind: 'meaning_field',
+    native_id: 'core/Customer/country', title: 'Country', identifier: 'country', qualified_name: 'core.Customer.country',
+    parent_id: core.id, parent_label: 'Customer', description: 'Customer country.'
+  };
+  const publicField = {
+    ...field, id: stableId('meaninggraph', 'meaning_field', 'northwind/Customer/credit'),
+    native_id: 'northwind/Customer/credit', title: 'Credit', identifier: 'credit', qualified_name: 'northwind.Customer.credit',
+    source_repository: 'meaninggraph/registry', source_commit: manifest.sources[0].revision
+  };
+  exports[0].documents.push(field, publicField);
+  const merged = mergeExports(manifest, exports);
+  const indexedCore = merged.documents.find(doc => doc.id === core.id);
+  assert.equal(indexedCore.core_priority, 1);
+  assert.deepEqual(indexedCore.field_preview, ['Country']);
+  assert.equal(indexedCore.field_count, 1);
+  assert.equal(merged.documents.find(doc => doc.id === field.id).core_priority, 1);
+  assert.equal(merged.documents.find(doc => doc.id === publicField.id).core_priority, 0);
+  assert.notEqual(merged.generation, mergeExports(fixture().manifest, fixture().exports).generation);
+  exports[0].documents[0].core_priority = 1;
+  assert.throws(() => mergeExports(manifest, exports), /unknown document field/);
+});
+test('a core-like name, parent or unrelated domain cannot claim the core origin', () => {
+  const core = { domain: 'meaninggraph', kind: 'meaning_entity', source_repository: 'meaninggraph/core' };
+  assert.equal(originForDocument(core), 'core');
+  for (const doc of [
+    { ...core, source_repository: 'meaninggraph/core-fork' },
+    { ...core, source_repository: 'meaninggraph/registry', qualified_name: 'core.customer' },
+    { ...core, kind: 'meaning_field', source_repository: 'meaninggraph/registry', parent_label: 'Core' },
+    { ...core, domain: 'modelspec' }
+  ]) {
+    assert.equal(originForDocument(doc), 'public_registry');
+    assert.equal(corePriority(doc), 0);
+  }
+});
 test('merges a ModelSpec component-use effective field with its declaring anchor', () => {
   const { manifest, exports } = fixture();
   const model = exports[1].documents[0];
@@ -87,6 +131,8 @@ test('merges a ModelSpec component-use effective field with its declaring anchor
   const merged = mergeExports(manifest, exports);
   assert.equal(merged.documents.length, 5);
   assert.equal(merged.documents.find(doc => doc.id === field.id).declaring_component, 'Auditable');
+  assert.deepEqual(merged.documents.find(doc => doc.id === entity.id).field_preview, ['createdAt']);
+  assert.equal(merged.documents.find(doc => doc.id === entity.id).field_count, 1);
   assert.equal(collectionSchema('candidate').fields.find(item => item.name === 'declaring_component').index, false);
 });
 function fakeEngine(failImport = false) {
@@ -110,7 +156,10 @@ function fakeEngine(failImport = false) {
       const collection = path.match(/^\/collections\/([^/]+)/)?.[1];
       if (method === 'DELETE' && collection) { if (failDelete) return { status: 500, body: '{}' }; collections.delete(collection); return { status: 200, body: '{}' }; }
       if (method === 'GET' && path.endsWith('/documents/search?'+path.split('/documents/search?')[1])) {
-        const q = new URLSearchParams(path.split('?')[1]).get('q');
+        const params = new URLSearchParams(path.split('?')[1]);
+        const q = params.get('q');
+        assert.equal(params.get('sort_by'), '_text_match:desc,core_priority:desc');
+        assert.equal(params.get('prioritize_num_matching_fields'), params.get('filter_by').includes('domain:=meaninggraph') ? 'false' : null);
         const docs = collections.get(collection) || [];
         return { status: 200, body: JSON.stringify({ hits: docs.filter(doc => doc.identifier === q).map(document => ({ document })) }) };
       }
@@ -186,13 +235,22 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
     assert.equal(options.headers['x-typesense-api-key'], 'secret');
     const search = JSON.parse(options.body).searches[0];
     assert.equal(search.query_by, 'identifier,qualified_name,title,aliases,description');
+    assert.equal(search.sort_by, '_text_match:desc,core_priority:desc');
+    assert.equal(search.prioritize_num_matching_fields, false);
     assert.match(search.filter_by, /visibility:=public/);
     assert.match(search.include_fields, /domain,visibility/);
-    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_path: 'private' } }] }] });
+    return Response.json({ results: [{ found: 1, hits: [{ document: { id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_entity', canonical_url: 'https://meaninggraph.io/graphs/g/concepts/Customer/', generation_id: 'gen', source_repository: 'meaninggraph/core', core_priority: 1, description: 'A customer.', field_preview: ['Country', 'City'], field_count: 2, source_path: 'private' } }] }] });
   });
   const response = await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), env);
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).hits[0].source_path, undefined);
+  const [hit] = (await response.json()).hits;
+  assert.equal(hit.source_path, undefined);
+  assert.equal(hit.source_repository, undefined);
+  assert.equal(hit.core_priority, undefined);
+  assert.equal(hit.origin, 'core');
+  assert.equal(hit.description, 'A customer.');
+  assert.deepEqual(hit.field_preview, ['Country', 'City']);
+  assert.equal(hit.field_count, 2);
   assert.equal(target.pathname, '/multi_search');
   assert.equal(target.search, '');
   assert.equal((await worker.fetch(request({ q: '*', domain: 'meaninggraph', filter_by: 'visibility:=private' }), env)).status, 400);
@@ -204,6 +262,15 @@ test('gateway returns unavailable on engine failure and fails closed without rat
   assert.deepEqual(await response.json(), { error: 'unavailable' });
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_RATE_LIMITER: undefined })).status, 503);
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_SEARCH_MODE: 'production', REGISTRY_TYPESENSE_DEPLOYMENT: 'self-hosted' })).status, 503);
+});
+test('gateway rejects an indexed core-priority claim that disagrees with provenance', async () => {
+  const worker = createGateway(async () => Response.json({ results: [{ found: 1, hits: [{ document: {
+    id: 'a', domain: 'meaninggraph', visibility: 'public', title: 'Customer', kind: 'meaning_field',
+    source_repository: 'meaninggraph/registry', core_priority: 1
+  } }] }] }));
+  const response = await worker.fetch(request({ q: 'Customer', domain: 'meaninggraph' }), env);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'unavailable' });
 });
 test('gateway diagnostics disclose only a fixed stage, reason, and numeric upstream status', async () => {
   const logs = [];
@@ -310,6 +377,15 @@ test('one-shot timer has an effective start timeout and private state path', () 
   assert.match(unit, /MemoryMax=768M/);
   assert.match(unit, /ReadWritePaths=\/opt\/datatug\/registry-search\/state/);
   assert.doesNotMatch(unit, /REGISTRY_TYPESENSE_ADMIN_KEY/);
+});
+test('refresh installer copies every local module its publisher imports', () => {
+  const files = sourceFiles();
+  for (const [name, bytes] of Object.entries(files)) {
+    if (!name.endsWith('.mjs')) continue;
+    const imports = [...bytes.toString('utf8').matchAll(/\bfrom ['"]\.\/([^'"]+)['"]/g)];
+    for (const [, dependency] of imports) assert.ok(files[dependency], `${name} imports missing installed ${dependency}`);
+  }
+  assert.ok(files['provenance.mjs']);
 });
 test('Caddy route insertion preserves unrelated hosts and reverses exactly', async () => {
   const snippet = await readFile(new URL('../vm1-search.caddy', import.meta.url), 'utf8');

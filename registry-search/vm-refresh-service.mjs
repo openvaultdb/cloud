@@ -13,7 +13,7 @@ const ownerFile = join(root, 'live-owner.json');
 const serviceName = 'registry-search-refresh.service';
 const timerName = 'registry-search-refresh.timer';
 const unitDir = '/etc/systemd/system';
-const files = ['refresh.mjs', 'engine-policy.mjs', 'merge.mjs', 'schema.mjs', 'publish.mjs', 'lock.mjs', 'lock_exec.py'];
+const files = ['refresh.mjs', 'engine-policy.mjs', 'merge.mjs', 'schema.mjs', 'provenance.mjs', 'publish.mjs', 'lock.mjs', 'lock_exec.py'];
 const task = '01a114c1-e447-7a81-a869-0d82ca2a7747';
 
 function fail(message) { throw new Error(message); }
@@ -37,7 +37,7 @@ function privateWrite(path, data) {
   renameSync(temp, path);
 }
 function hash(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
-function sourceFiles() {
+export function sourceFiles() {
   const dir = dirname(fileURLToPath(import.meta.url));
   return Object.fromEntries(files.map(name => [name, readFileSync(join(dir, name))]));
 }
