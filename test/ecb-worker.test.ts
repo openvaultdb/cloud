@@ -5,9 +5,10 @@ import { createWorker } from "../src/worker";
 
 const publicURL = "https://cloud.openvaultdb.com/ecb/v1/databases/ecb/dtql";
 const syntheticProxySecret = "synthetic-ecb-proxy-secret-32-bytes-long";
+const operatorToken = "synthetic-operator-token-32-bytes-long";
 const ecbEnv = { ...env, ECB_ENABLED: "true", ECB_RUN_ORIGIN: "https://synthetic-ecb.a.run.app",
   CHINOOK_RUN_ORIGIN: "https://synthetic-ecb.a.run.app",
-  ECB_PROXY_SECRET: syntheticProxySecret } as Env;
+  ECB_PROXY_SECRET: syntheticProxySecret, ECB_OPERATOR_TOKEN: operatorToken } as Env;
 
 function invoke(worker: ReturnType<typeof createWorker>, environment: Env, request: Request): Promise<Response> {
   return Promise.resolve((worker.fetch as (request: Request, env: Env, context: ExecutionContext) => Response | Promise<Response>)(
@@ -44,12 +45,14 @@ describe("selected ECB Worker route", () => {
       "https://user:pass@synthetic-ecb.a.run.app", "https://synthetic-ecb.a.run.app:444",
       "https://synthetic-ecb.a.run.app:443", "https://synthetic-ecb.a.run.app/%2e%2e/"]) {
       const response = await invoke(worker, { ...ecbEnv, ECB_RUN_ORIGIN: origin, CHINOOK_RUN_ORIGIN: origin } as Env,
-        new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n" }));
+        new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n",
+          headers: { "X-OVDB-ECB-Operator-Token": operatorToken } }));
       expect(response.status, origin).toBe(503);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
     }
     const mismatched = await invoke(worker, { ...ecbEnv, ECB_RUN_ORIGIN: "https://other-ecb.a.run.app" } as Env,
-      new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n" }));
+      new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n",
+        headers: { "X-OVDB-ECB-Operator-Token": operatorToken } }));
     expect(mismatched.status).toBe(503);
     for (const request of [new Request(publicURL), new Request(publicURL + "?q=marker", { method: "POST" }),
       new Request(publicURL.replace("/dtql", "/records/daily/USD"), { method: "POST" })]) {
@@ -75,13 +78,14 @@ describe("selected ECB Worker route", () => {
       const body = "from: {name: daily}\nlimit: 1\n";
       const response = await invoke(worker, ecbEnv, new Request(publicURL, {
         method: "POST", body, headers: { "Content-Type": "text/plain", Authorization: "Bearer marker", Cookie: "marker=1",
-          "X-OVDB-ECB-Proxy-Secret": "attacker-secret" },
+          "X-OVDB-ECB-Proxy-Secret": "attacker-secret", "X-OVDB-ECB-Operator-Token": operatorToken },
       }));
       expect(requests).toHaveLength(1);
       expect(requests[0].url).toBe("https://synthetic-ecb.a.run.app/v1/databases/ecb/dtql");
       expect(requests[0].headers.get("Authorization")).toBeNull();
       expect(requests[0].headers.get("Cookie")).toBeNull();
       expect(requests[0].headers.get("X-OVDB-ECB-Proxy-Secret")).toBe(syntheticProxySecret);
+      expect(requests[0].headers.get("X-OVDB-ECB-Operator-Token")).toBeNull();
       expect(await requests[0].text()).toBe(body);
       expect(response.status).toBe(200);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -99,7 +103,8 @@ describe("selected ECB Worker route", () => {
     try {
       const worker = createWorker(async () => { throw new Error("synthetic-private-error-marker"); });
       const response = await invoke(worker, ecbEnv,
-        new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n" }));
+        new Request(publicURL, { method: "POST", body: "from: {name: daily}\nlimit: 1\n",
+          headers: { "X-OVDB-ECB-Operator-Token": operatorToken } }));
       expect(response.status).toBe(503);
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       expect(await response.text()).not.toContain("synthetic-private-error-marker");
@@ -121,5 +126,24 @@ describe("selected ECB Worker route", () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe("ECB operator-only admission", () => {
+  it("refuses absent, wrong, duplicated and unconfigured operator tokens before upstream I/O", async () => {
+    let reads = 0;
+    const worker = createWorker(async () => { reads++; return Response.json({ records: [] }); });
+    for (const token of [undefined, "wrong", `${operatorToken},${operatorToken}`]) {
+      const headers = token ? { "X-OVDB-ECB-Operator-Token": token } : undefined;
+      const response = await invoke(worker, ecbEnv, new Request(publicURL, {
+        method: "POST", body: "from: {name: daily}\nlimit: 1\n", headers,
+      }));
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }
+    const absentBinding = await invoke(worker, { ...ecbEnv, ECB_OPERATOR_TOKEN: undefined } as Env,
+      new Request(publicURL, { method: "POST", headers: { "X-OVDB-ECB-Operator-Token": operatorToken } }));
+    expect(absentBinding.status).toBe(503);
+    expect(reads).toBe(0);
   });
 });

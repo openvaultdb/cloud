@@ -7,6 +7,56 @@ daily HTTP resource. It remains off by default. The Go service selects it only
 when `OVDB_ECB_ENABLED=true`, `OVDB_ECB_HOST_CONFIG` names a separately
 reviewed operator JSON document, and `OVDB_ECB_PROXY_SECRET` supplies a
 dedicated 32 to 128 character ASCII letter, digit, `_` or `-` secret. A present candidate file alone does nothing.
+Selection also requires `OVDB_ECB_ADMISSION_FILE` and its exact raw-byte
+SHA-256 in `OVDB_ECB_ADMISSION_SHA256`. This operator-owned decision is
+separate from the OVDB preparatory B1 proposal. Its closed JSON format is
+`ovdb-ecb-b1-operator-admission/1` with decision
+`operator-free-transient-read-only`, nonempty `approvedBy`, RFC 3339
+`approvedAt`, and these exact fields: `hostConfigSHA256` of the operator host
+JSON, `publisherManifestSHA256` equal to the pinned original publisher SHA in
+`ecb_candidate.go`, `rightsDigest` equal to its pinned rights SHA,
+`executorId: openvaultdb-cloud`, `resourceId: ecb-daily`, `method: POST`,
+`path: /v1/databases/ecb/dtql`, `maxReadsPerExecution: 1`, `maxRows: 50`,
+`publicAccess: false`, and `paidAccess: false`. The gate refuses a missing,
+altered, duplicate-key, broader or unbound decision before mounting and
+rechecks the host-config digest during assembly. The named approver is an
+operator assertion, not an identity proof by this service. Keep both JSON
+files and the local HTTP manifest under operator control; review their exact
+raw-byte hashes before configuring a service.
+
+An operator can prepare the decision from this shape after independently
+reviewing the exact pinned host JSON and ECB terms. Replace the placeholder
+digest and approver; never deploy this example as an approval:
+
+```json
+{
+  "format": "ovdb-ecb-b1-operator-admission/1",
+  "decision": "operator-free-transient-read-only",
+  "approvedBy": "<operator identity>",
+  "approvedAt": "<RFC 3339 time>",
+  "hostConfigSHA256": "<SHA-256 of exact host JSON bytes>",
+  "publisherManifestSHA256": "399ce77bc4513b1a819f61e26a54fe8e6c46569b2b45ea078582d9ad6758697e",
+  "rightsDigest": "08669fda7a7d255d1c77d2be733e587a23bb2ff1a916e96c727b82d2540cdc93",
+  "executorId": "openvaultdb-cloud",
+  "resourceId": "ecb-daily",
+  "method": "POST",
+  "path": "/v1/databases/ecb/dtql",
+  "maxReadsPerExecution": 1,
+  "maxRows": 50,
+  "publicAccess": false,
+  "paidAccess": false
+}
+```
+
+The [ECB reuse conditions](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html)
+require accurate reproduction and ECB source citation, an explicit notice of
+modification, and specific free-original notices when information is put in
+sold documents. The selected `sourceRight` carries attribution, the free ECB
+resource link and the XML-to-row transformation notice. Whether a paid SaaS
+presentation falls under the sold-document condition, and whether its UI meets
+the before-payment and each-access notice duties, is a separate rights decision.
+This operator-only admission does not infer it.
+
 The selected Go handler admits only `POST /v1/databases/ecb/dtql`; other ECB
 paths, passive reads and query strings do not reach the ECB provider. Existing
 sample routes retain their current handler.
@@ -34,16 +84,21 @@ hold the same secret as the Go service. The Worker sends it in a dedicated upstr
 client-supplied values are discarded. The Go route returns 404 before provider
 I/O when the secret is missing, wrong or duplicated. The Worker forwards the query to the fixed Go path
 through the no-retention proxy, using `cache: no-store` and a `no-store`
-response. Neither Worker setting is present in `wrangler.jsonc`; no production
-configuration or deployment is changed by this code.
+response. It also requires an independent 32 to 128 character
+`ECB_OPERATOR_TOKEN` secret and exact `X-OVDB-ECB-Operator-Token` request
+header. Missing, wrong or duplicated tokens return 404 before upstream I/O,
+and the token is never forwarded. This selected route is only for controlled
+free operator requests. These ECB bindings are absent from `wrangler.jsonc`;
+no production configuration or deployment is changed by this code.
 
 Synthetic tests enter `configuredHandler` and `createWorker().fetch` with
 invented XML and an injected transport. They do not contact ECB. The opt-in
 `TestECBSelectedCrossRuntimeChain` starts a loopback Go HTTP server and runs a
 Worker test through it. It covers a bounded row, refusal before provider I/O,
 and a marker-bearing provider panic across the selected path. The preparatory
-B1 proposal is never a runtime input. B1, B2 and B3 admission are unclaimed;
-Cloud Run, browser and operational sink evidence is still absent. Directory
+B1 proposal is never a runtime input. B1 completion requires an actual
+operator-reviewed decision and remains unclaimed by these tests. B2 and B3
+remain open; Cloud Run, browser and operational sink evidence is still absent. Directory
 registration and public activation remain blocked.
 
 The Go service mounts the database providers listed in [`providers.json`](providers.json)

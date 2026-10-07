@@ -2,8 +2,9 @@ import { jsonResponse } from "./http";
 import type { UpstreamFetch } from "./proxy";
 
 type ChinookEnv = Env & { CHINOOK_RUN_ORIGIN?: string };
-type ECBEnv = Env & { CHINOOK_RUN_ORIGIN?: string; ECB_RUN_ORIGIN?: string; ECB_PROXY_SECRET?: string };
+type ECBEnv = Env & { CHINOOK_RUN_ORIGIN?: string; ECB_RUN_ORIGIN?: string; ECB_PROXY_SECRET?: string; ECB_OPERATOR_TOKEN?: string };
 const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret";
+const ecbOperatorTokenHeader = "X-OVDB-ECB-Operator-Token";
 
 const pinHeaders = [
   "OVDB-Provider-Revision",
@@ -39,9 +40,24 @@ export async function proxyECB(
   upstreamFetch: UpstreamFetch,
 ): Promise<Response> {
   if (!env.ECB_PROXY_SECRET || !/^[A-Za-z0-9_-]{32,128}$/u.test(env.ECB_PROXY_SECRET) ||
+    !env.ECB_OPERATOR_TOKEN || !/^[A-Za-z0-9_-]{32,128}$/u.test(env.ECB_OPERATOR_TOKEN) ||
     !env.ECB_RUN_ORIGIN || env.ECB_RUN_ORIGIN !== env.CHINOOK_RUN_ORIGIN) {
     return jsonResponse({ error: "ECB OVDB is not configured." }, 503);
   }
+  const presented = request.headers.get(ecbOperatorTokenHeader);
+  if (!presented || !/^[A-Za-z0-9_-]{32,128}$/u.test(presented)) {
+    return jsonResponse({ error: "Not found." }, 404);
+  }
+  const encoder = new TextEncoder();
+  const [expected, actual] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(env.ECB_OPERATOR_TOKEN)),
+    crypto.subtle.digest("SHA-256", encoder.encode(presented)),
+  ]);
+  let difference = 0;
+  const expectedBytes = new Uint8Array(expected);
+  const actualBytes = new Uint8Array(actual);
+  for (let index = 0; index < expectedBytes.length; index++) difference |= expectedBytes[index] ^ actualBytes[index];
+  if (difference !== 0) return jsonResponse({ error: "Not found." }, 404);
   return proxyWithPolicy(request, env, upstreamFetch, noRetentionPolicy, env.ECB_RUN_ORIGIN,
     "/v1/databases/ecb/dtql", "ECB", env.ECB_PROXY_SECRET);
 }

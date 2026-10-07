@@ -44,13 +44,18 @@ func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, ht
 	var proxySecret string
 	var proxySecretHash [sha256.Size]byte
 	if enabled == "true" {
+		configPath := os.Getenv("OVDB_ECB_HOST_CONFIG")
+		configDigest, err := checkedECBAdmission(os.Getenv("OVDB_ECB_ADMISSION_FILE"),
+			os.Getenv("OVDB_ECB_ADMISSION_SHA256"), configPath)
+		if err != nil {
+			return nil, nil, nil, errECBCandidate
+		}
 		proxySecret = os.Getenv("OVDB_ECB_PROXY_SECRET")
 		if !validECBProxySecret(proxySecret) {
 			return nil, nil, nil, errECBCandidate
 		}
 		proxySecretHash = sha256.Sum256([]byte(proxySecret))
-		var err error
-		ecbHandler, closeECB, err = assembleECBHostCandidate(os.Getenv("OVDB_ECB_HOST_CONFIG"), selectedECBMount, selectedECBDiagnostic)
+		ecbHandler, closeECB, err = assembleECBHostCandidate(configPath, selectedECBMount, selectedECBDiagnostic, configDigest)
 		if err != nil {
 			return nil, nil, nil, errECBCandidate
 		}
