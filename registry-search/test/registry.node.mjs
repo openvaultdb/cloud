@@ -182,6 +182,7 @@ test('gateway fixes query policy, checks domain/scope, and hides engine response
   let target;
   const worker = createGateway(async (url, options) => {
     target = url;
+    assert.equal(options.redirect, 'manual');
     assert.equal(options.headers['x-typesense-api-key'], 'secret');
     const search = JSON.parse(options.body).searches[0];
     assert.equal(search.query_by, 'identifier,qualified_name,title,aliases,description');
@@ -203,6 +204,30 @@ test('gateway returns unavailable on engine failure and fails closed without rat
   assert.deepEqual(await response.json(), { error: 'unavailable' });
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_RATE_LIMITER: undefined })).status, 503);
   assert.equal((await worker.fetch(request({ q: 'x', domain: 'meaninggraph' }), { ...env, REGISTRY_SEARCH_MODE: 'production', REGISTRY_TYPESENSE_DEPLOYMENT: 'self-hosted' })).status, 503);
+});
+test('gateway diagnostics disclose only a fixed stage, reason, and numeric upstream status', async () => {
+  const logs = [];
+  const warn = console.warn;
+  console.warn = (...items) => logs.push(items);
+  try {
+    const secretQuery = 'private-query-marker';
+    const secretKey = 'private-key-marker';
+    const secretEnv = { ...env, REGISTRY_TYPESENSE_SEARCH_KEY: secretKey };
+    const throwing = createGateway(async () => { throw new Error(`upstream ${secretQuery} ${secretKey}`); });
+    assert.equal((await throwing.fetch(request({ q: secretQuery, domain: 'meaninggraph' }), secretEnv)).status, 503);
+    assert.deepEqual(logs.at(-1), ['registry-search unavailable', { stage: 'engine_fetch', status: null, reason: 'exception' }]);
+    const rejected = createGateway(async () => new Response('untrusted upstream body', { status: 502 }));
+    assert.equal((await rejected.fetch(request({ q: secretQuery, domain: 'meaninggraph' }), secretEnv)).status, 503);
+    assert.deepEqual(logs.at(-1), ['registry-search unavailable', { stage: 'engine_http', status: 502, reason: 'exception' }]);
+    let calls = 0;
+    const redirecting = createGateway(async () => { calls++; return Response.redirect('https://evil.example/multi_search', 302); });
+    assert.equal((await redirecting.fetch(request({ q: secretQuery, domain: 'meaninggraph' }), secretEnv)).status, 503);
+    assert.equal(calls, 1);
+    assert.deepEqual(logs.at(-1), ['registry-search unavailable', { stage: 'engine_http', status: 302, reason: 'exception' }]);
+    assert.equal((await rejected.fetch(request({ q: secretQuery, domain: 'meaninggraph' }), { ...secretEnv, REGISTRY_RATE_LIMITER: undefined })).status, 503);
+    assert.deepEqual(logs.at(-1), ['registry-search unavailable', { stage: 'rate_limit', status: null, reason: 'missing_binding' }]);
+    assert.doesNotMatch(JSON.stringify(logs), /private-query-marker|private-key-marker|untrusted upstream body/);
+  } finally { console.warn = warn; }
 });
 test('production VM gateway pins the exact HTTPS engine host and search path', async () => {
   const live = { ...env, REGISTRY_SEARCH_MODE: 'production', REGISTRY_TYPESENSE_DEPLOYMENT: 'vm-pilot', REGISTRY_TYPESENSE_ORIGIN: 'https://vm1.sneat.dev/' };

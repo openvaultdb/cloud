@@ -63,6 +63,14 @@ function engineOrigin(env) {
   if (env.REGISTRY_SEARCH_MODE === 'production') return productionEngineOrigin(env);
   return url;
 }
+function failureReason(error) {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return 'timeout';
+  const message = String(error?.message || '');
+  if (/\b1042\b/.test(message)) return 'same_zone_worker';
+  if (/\b1024\b/.test(message)) return 'cloudflare_ip';
+  if (/redirect/i.test(message)) return 'redirect';
+  return 'exception';
+}
 export function createGateway(fetcher = fetch) {
   return {
     async fetch(request, env) {
@@ -75,10 +83,16 @@ export function createGateway(fetcher = fetch) {
       if (!['staging', 'production'].includes(env.REGISTRY_SEARCH_MODE)) return reply(503, { error: 'disabled' }, cors || {});
       let query;
       try { query = parseQuery(await readBody(request)); } catch { return reply(400, { error: 'invalid_request' }, cors || {}); }
-      if (!env.REGISTRY_RATE_LIMITER?.limit) return reply(503, { error: 'unavailable' }, cors || {});
+      if (!env.REGISTRY_RATE_LIMITER?.limit) {
+        console.warn('registry-search unavailable', { stage: 'rate_limit', status: null, reason: 'missing_binding' });
+        return reply(503, { error: 'unavailable' }, cors || {});
+      }
+      let stage = 'rate_limit';
+      let upstreamStatus = null;
       try {
         const key = `${query.domain}:${request.headers.get('cf-connecting-ip') || 'unknown'}`;
         if (!(await env.REGISTRY_RATE_LIMITER.limit({ key })).success) return reply(429, { error: 'rate_limited' }, cors || {});
+        stage = 'engine_config';
         const origin = engineOrigin(env);
         if (!env.REGISTRY_TYPESENSE_SEARCH_KEY) throw new Error('missing search key');
         const filters = [`domain:=${query.domain}`, 'visibility:=public'];
@@ -90,9 +104,14 @@ export function createGateway(fetcher = fetch) {
           include_fields: display.join(',') + ',generation_id,domain,visibility', highlight_fields: 'none', search_cutoff_ms: '1500'
         };
         const target = new URL('/multi_search', origin);
-        const response = await fetcher(target, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(2500), headers: { 'x-typesense-api-key': env.REGISTRY_TYPESENSE_SEARCH_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ searches: [search] }) });
+        stage = 'engine_fetch';
+        const response = await fetcher(target, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(2500), headers: { 'x-typesense-api-key': env.REGISTRY_TYPESENSE_SEARCH_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ searches: [search] }) });
+        upstreamStatus = response.status;
+        stage = 'engine_http';
         if (!response.ok || response.redirected) throw new Error('search failed');
+        stage = 'engine_body';
         const raw = await boundedText(response, 1024 * 1024);
+        stage = 'engine_result';
         const result = JSON.parse(raw).results?.[0];
         if (!Number.isSafeInteger(result.found) || !Array.isArray(result.hits) || result.search_cutoff === true) throw new Error('incomplete search response');
         const hits = result.hits.slice(0, 20).map(hit => {
@@ -101,7 +120,11 @@ export function createGateway(fetcher = fetch) {
           return Object.fromEntries(display.filter(field => doc[field] !== undefined).map(field => [field, doc[field]]));
         });
         return reply(200, { hits, found: result.found, page: query.page, generation: result.hits[0]?.document?.generation_id || null }, cors || {});
-      } catch { return reply(503, { error: 'unavailable' }, cors || {}); }
+      } catch (error) {
+        // Fixed labels and numeric status only: never log the query, key, headers, body or URL.
+        console.warn('registry-search unavailable', { stage, status: Number.isInteger(upstreamStatus) ? upstreamStatus : null, reason: failureReason(error) });
+        return reply(503, { error: 'unavailable' }, cors || {});
+      }
     }
   };
 }
