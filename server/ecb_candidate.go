@@ -19,7 +19,6 @@ import (
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
 	"github.com/openvaultdb/openvaultdb-go/pkg/license"
 	"github.com/openvaultdb/openvaultdb-go/pkg/manifest"
-	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
 	"github.com/openvaultdb/openvaultdb-go/pkg/providerreads"
 	"github.com/openvaultdb/openvaultdb-go/pkg/server"
 )
@@ -81,9 +80,9 @@ func readECBFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, errECBCandidate
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil || int64(len(data)) > limit {
+	data, readErr := io.ReadAll(io.LimitReader(f, limit+1))
+	closeErr := f.Close()
+	if readErr != nil || closeErr != nil || int64(len(data)) > limit {
 		return nil, errECBCandidate
 	}
 	return data, nil
@@ -139,12 +138,6 @@ func checkedECBConfig(path string) (ecbHostConfig, error) {
 	return config, nil
 }
 
-// newECBHostCandidate uses the production mount. No shipping startup or
-// Worker route calls it; a later admission decision must wire it deliberately.
-func newECBHostCandidate(configPath string) (http.Handler, func() error, error) {
-	return assembleECBHostCandidate(configPath, mount.File, os.Stderr)
-}
-
 type ecbMount func(string) (*core.Database, error)
 
 func assembleECBHostCandidate(configPath string, open ecbMount, diagnostic io.Writer) (http.Handler, func() error, error) {
@@ -164,7 +157,7 @@ func assembleECBHostCandidate(configPath string, open ecbMount, diagnostic io.Wr
 		return fail()
 	}
 	// Recheck the mounted object, not just the path read before opening it.
-	// This also rejects a manifest swap between pin verification and mount.File.
+	// This also rejects a manifest swap between pin verification and opening.
 	expectedManifest, err := manifest.Parse([]byte(ecbHTTPManifest))
 	if err != nil || !reflect.DeepEqual(db.Manifest, expectedManifest) {
 		return fail()

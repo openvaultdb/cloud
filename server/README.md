@@ -8,7 +8,7 @@ calls it. Directory registration, provider admission, deployment and public
 activation remain blocked; the preparatory OVDB B1 proposal is never accepted
 as runtime configuration.
 
-`newECBHostCandidate` requires an operator-owned JSON document with format
+The candidate assembly requires an operator-owned JSON document with format
 `ovdb-ecb-host-candidate/1`, paths to the original publisher manifest and a
 separate local HTTP storage manifest, the reviewed publisher commit and Git
 blob, decoder version and module version, and the exact detached `sourceRight`
