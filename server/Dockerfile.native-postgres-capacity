@@ -1,0 +1,9 @@
+# Build an observer image from the exact shipping image. The test binary is
+# compiled separately from this same server tree; secrets are supplied only as
+# Cloud Run Job Secret Manager bindings at execution time.
+ARG SHIPPING_IMAGE
+FROM ${SHIPPING_IMAGE}
+COPY --chown=0:0 --chmod=0555 actual-test /srv/actual-test
+USER 65532:65532
+ENTRYPOINT ["/srv/actual-test"]
+CMD ["-test.run=^TestActualDemoPostgresCapacity$", "-test.v", "-test.timeout=10m"]

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -318,6 +319,8 @@ func actualCancel(t *testing.T, handler http.Handler) map[string]any {
 type actualWork struct {
 	name, path, body string
 	want             int
+	expectedRows     int
+	noSourceRights   bool
 	errorCode, route string
 }
 
@@ -374,6 +377,21 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	}
 	if err := json.Unmarshal(result.Body.Bytes(), &document); err != nil {
 		return entry, err
+	}
+	if work.expectedRows > 0 && len(document.Records) != work.expectedRows {
+		return entry, fmt.Errorf("%s returned %d rows, want %d", work.name, len(document.Records), work.expectedRows)
+	}
+	if work.noSourceRights {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(result.Body.Bytes(), &payload); err != nil {
+			return entry, err
+		}
+		if _, exists := payload["sourceRights"]; exists {
+			return entry, fmt.Errorf("%s exposed undeclared source rights", work.name)
+		}
+		if _, exists := payload["usedSourceIds"]; exists {
+			return entry, fmt.Errorf("%s exposed undeclared source identifiers", work.name)
+		}
 	}
 	entry["rows"], entry["route"], entry["error_code"] = len(document.Records), document.Execution.Route, document.Error.Code
 	if work.want == 200 && len(document.Records) == 0 {
@@ -483,6 +501,262 @@ func actualMatrix(t *testing.T, handler http.Handler, w1 []actualWork) []map[str
 		}
 	}
 	return results
+}
+
+// TestActualDemoPostgresCapacity runs inside a 512 MiB, one-CPU Linux shipping-
+// image job whose six read-only DSNs are bound directly from Secret Manager.
+// It intentionally emits only identifiers and measurements, never environment
+// values or provider errors that could contain a connection string.
+func TestActualDemoPostgresCapacity(t *testing.T) {
+	if os.Getenv("OVDB_NATIVE_PG_CAPACITY") != "1" {
+		t.Skip("requires the secret-bound Linux native PostgreSQL capacity job")
+	}
+	const shaName = "OVDB_NATIVE_PG_CAPACITY_SOURCE_SHA"
+	sha := os.Getenv(shaName)
+	if len(sha) != 40 {
+		t.Fatal("native PostgreSQL capacity source SHA is missing or invalid")
+	}
+	for _, char := range sha {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			t.Fatal("native PostgreSQL capacity source SHA is missing or invalid")
+		}
+	}
+
+	receipt := map[string]any{
+		"source_sha":                 sha,
+		"memory_limit_bytes":         uint64(512 << 20),
+		"peak_limit_bytes":           actualPeakLimit,
+		"credential_values_recorded": false,
+		"provider_errors_recorded":   false,
+	}
+	defer actualEmit(t, "NATIVE_POSTGRES_CAPACITY_JSON=", receipt)
+	initial, err := actualCgroup()
+	if err != nil {
+		t.Fatal("native PostgreSQL capacity job lacks the required 512 MiB Linux cgroup")
+	}
+	receipt["initial_cgroup"] = initial
+	monitor := actualStartMonitor()
+	defer func() {
+		peaks, monitorErr := monitor.finish()
+		receipt["phase_memory_current_peaks"] = peaks
+		if monitorErr != "" {
+			t.Error("native PostgreSQL cgroup monitoring failed")
+		}
+		final, cgroupErr := actualCgroup()
+		if cgroupErr != nil {
+			t.Error("native PostgreSQL final cgroup metrics unavailable")
+			return
+		}
+		receipt["final_cgroup"] = final
+		if final["memory.peak"].(uint64) > actualPeakLimit {
+			t.Error("native PostgreSQL workload exceeded the 435 MiB memory gate")
+		}
+		events := final["memory.events"].(map[string]uint64)
+		if events["oom"] != 0 || events["oom_kill"] != 0 || events["max"] != 0 {
+			t.Error("native PostgreSQL capacity job recorded cgroup memory pressure")
+		}
+	}()
+
+	if os.Getenv(demoPostgresEnabledEnv) != "true" {
+		t.Fatal("native PostgreSQL capacity job is not configured for all six sources")
+	}
+	started := time.Now()
+	providers, handler, closeHandler, err := configuredHandler()
+	if err != nil {
+		t.Fatal("shipping image could not mount its configured read-only databases")
+	}
+	defer func() {
+		if closeHandler() != nil {
+			t.Error("native PostgreSQL capacity handler cleanup failed")
+		}
+	}()
+	receipt["startup_seconds"] = time.Since(started).Seconds()
+	if len(providers) != 12 {
+		t.Fatalf("shipping image mounted %d providers, want six SQLite plus six PostgreSQL", len(providers))
+	}
+	receipt["provider_count"] = len(providers)
+	var mountedIDs []string
+	for _, provider := range providers {
+		mountedIDs = append(mountedIDs, provider.ID)
+	}
+	sort.Strings(mountedIDs)
+	var wantMountedIDs []string
+	for _, source := range demoPostgresSources {
+		wantMountedIDs = append(wantMountedIDs, source.databaseID, source.databaseID+"-postgresql")
+	}
+	sort.Strings(wantMountedIDs)
+	if strings.Join(mountedIDs, "\n") != strings.Join(wantMountedIDs, "\n") {
+		t.Fatal("shipping image did not mount the expected six SQLite and six PostgreSQL sources")
+	}
+	receipt["provider_ids"] = mountedIDs
+
+	var beforeQueries runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&beforeQueries)
+	var workloads []map[string]any
+	expectedCatalogCounts := map[string]int{
+		"chinook": 11, "northwind": 30, "pubs": 12,
+		"sakila": 23, "adventureworks": 82, "employees": 8,
+	}
+	for _, source := range demoPostgresSources {
+		id := source.databaseID + "-postgresql"
+		descriptorResponse := actualRequest(handler, http.MethodGet, "/v1/databases/"+id, "", nil, context.Background())
+		if descriptorResponse.Code != http.StatusOK {
+			t.Fatalf("native PostgreSQL descriptor failed for %s", source.databaseID)
+		}
+		var descriptor struct {
+			Capabilities map[string]bool `json:"capabilities"`
+			Collections  []string        `json:"collections"`
+			Schemas      struct {
+				Collections map[string]struct {
+					Source struct {
+						Schema string `json:"schema"`
+						Name   string `json:"name"`
+					} `json:"source"`
+					Fields map[string]struct {
+						PrimaryKey bool `json:"primaryKey"`
+					} `json:"fields"`
+				} `json:"collections"`
+			} `json:"schemas"`
+		}
+		if json.Unmarshal(descriptorResponse.Body.Bytes(), &descriptor) != nil ||
+			descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] ||
+			len(descriptor.Collections) == 0 || strings.Contains(descriptorResponse.Body.String(), "_import_manifest") {
+			t.Fatalf("native PostgreSQL descriptor was incomplete or advertised unsupported behavior for %s", source.databaseID)
+		}
+		if want := expectedCatalogCounts[source.databaseID]; len(descriptor.Collections) != want {
+			t.Fatalf("native PostgreSQL catalog for %s has %d collections, want %d", source.databaseID, len(descriptor.Collections), want)
+		}
+		receipt["catalog_count_"+source.databaseID] = len(descriptor.Collections)
+		collectionIDs := append([]string(nil), descriptor.Collections...)
+		sort.Strings(collectionIDs)
+		var selectedCollection string
+		var selectedField string
+		var selectedKey string
+		for _, collectionID := range collectionIDs {
+			collection, ok := descriptor.Schemas.Collections[collectionID]
+			if !ok || collection.Source.Schema != source.databaseID || collection.Source.Name == "_import_manifest" {
+				continue
+			}
+			fields := make([]string, 0, len(collection.Fields))
+			for field := range collection.Fields {
+				fields = append(fields, field)
+			}
+			sort.Strings(fields)
+			if len(fields) == 0 {
+				continue
+			}
+			selectedCollection = collectionID
+			for _, field := range fields {
+				if collection.Fields[field].PrimaryKey {
+					selectedKey = field
+					selectedField = field
+					break
+				}
+			}
+			if selectedKey != "" {
+				break
+			}
+		}
+		if selectedCollection == "" || selectedField == "" || selectedKey == "" {
+			t.Fatalf("native PostgreSQL catalog lacks a queryable keyed relation for %s", source.databaseID)
+		}
+		collection := descriptor.Schemas.Collections[selectedCollection]
+		base := fmt.Sprintf("from: {schema: %s, name: %s}\n", strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name))
+		read := actualWork{
+			name: source.databaseID + "-native-read",
+			path: "/v1/databases/" + id + "/dtql",
+			body: base + fmt.Sprintf("columns: [{field: %s}]\nlimit: 1\n", strconv.Quote(selectedField)),
+			want: http.StatusOK, expectedRows: 1, noSourceRights: true,
+		}
+		entry, queryErr := actualExecute(handler, read)
+		if queryErr != nil {
+			t.Fatalf("bounded native PostgreSQL read failed for %s", source.databaseID)
+		}
+		workloads = append(workloads, entry)
+		join := actualWork{
+			name: source.databaseID + "-native-self-join",
+			path: "/v1/databases/" + id + "/dtql",
+			body: fmt.Sprintf("from:\n  schema: %s\n  name: %s\n  alias: l\n  joins:\n    - type: inner\n      from: {schema: %s, name: %s, alias: r}\n      on:\n        - {left: {field: %s, source: l}, op: '==', right: {field: %s, source: r}}\ncolumns: [{field: %s, source: l}]\nlimit: 1\n",
+				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
+				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
+				strconv.Quote(selectedKey), strconv.Quote(selectedKey), strconv.Quote(selectedKey)),
+			want: http.StatusOK, expectedRows: 1, noSourceRights: true,
+		}
+		entry, queryErr = actualExecute(handler, join)
+		if queryErr != nil {
+			t.Fatalf("bounded native PostgreSQL self-join failed for %s", source.databaseID)
+		}
+		workloads = append(workloads, entry)
+	}
+	for _, table := range []struct {
+		name string
+		rows int
+	}{{"Artist", 275}, {"Album", 347}, {"Track", 3503}} {
+		work := actualWork{
+			name:           "chinook-postgresql-full-" + strings.ToLower(table.name),
+			path:           "/v1/databases/chinook-postgresql/dtql",
+			body:           fmt.Sprintf("from: {schema: %s, name: %s}\nlimit: 4000\n", strconv.Quote("chinook"), strconv.Quote(table.name)),
+			want:           http.StatusOK,
+			expectedRows:   table.rows,
+			noSourceRights: true,
+		}
+		entry, queryErr := actualExecute(handler, work)
+		if queryErr != nil {
+			t.Fatalf("bounded full-table PostgreSQL read failed for Chinook %s", table.name)
+		}
+		workloads = append(workloads, entry)
+	}
+	concurrentWorks := []actualWork{
+		{
+			name: "chinook-postgresql-concurrent-track-read", path: "/v1/databases/chinook-postgresql/dtql",
+			body: "from: {schema: chinook, name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000, noSourceRights: true,
+		},
+		{
+			name: "chinook-sqlite-concurrent-track-read", path: "/v1/databases/chinook/dtql",
+			body: "from: {name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000,
+		},
+	}
+	startConcurrent := make(chan struct{})
+	type concurrentResult struct {
+		entry map[string]any
+		err   error
+	}
+	concurrentDone := make(chan concurrentResult, len(concurrentWorks))
+	for _, work := range concurrentWorks {
+		go func(work actualWork) {
+			<-startConcurrent
+			entry, queryErr := actualExecute(handler, work)
+			concurrentDone <- concurrentResult{entry: entry, err: queryErr}
+		}(work)
+	}
+	close(startConcurrent)
+	for range concurrentWorks {
+		result := <-concurrentDone
+		if result.err != nil {
+			t.Fatal("concurrent SQLite and PostgreSQL reads failed")
+		}
+		result.entry["concurrency"] = len(concurrentWorks)
+		workloads = append(workloads, result.entry)
+	}
+	var afterQueries runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&afterQueries)
+	heapGrowth := uint64(0)
+	if afterQueries.HeapAlloc > beforeQueries.HeapAlloc {
+		heapGrowth = afterQueries.HeapAlloc - beforeQueries.HeapAlloc
+	}
+	receipt["native_query_count"] = len(workloads)
+	receipt["native_workloads"] = workloads
+	receipt["query_heap_growth_bytes"] = heapGrowth
+	if heapGrowth > 64<<20 {
+		t.Fatal("native PostgreSQL query heap growth exceeded 64 MiB")
+	}
+	spoolCount, spoolBytes, spoolErr := actualSpools()
+	if spoolErr != nil || spoolCount != 0 || spoolBytes != 0 {
+		t.Fatal("native PostgreSQL bounded workload retained unexpected query snapshots")
+	}
+	receipt["temporary_query_spools"] = 0
 }
 
 // actualManifestReadStart: portable regression exercises this exact read with the real inventory loader.

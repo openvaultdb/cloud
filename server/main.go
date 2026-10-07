@@ -92,7 +92,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 			}
 		}
-		if manifest == "" {
+		if manifest == "" && provider.nativePostgres == nil {
 			return nil, nil, errors.Join(fmt.Errorf("manifest path for database %q is empty", id), closeMountedDatabases(databases))
 		}
 		if _, exists := databases[id]; exists {
@@ -107,6 +107,8 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 				database, err = mountSelectedSnapshot(provider)
 			}
 			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
+		} else if provider.nativePostgres != nil {
+			database, err = mountDemoPostgres(provider)
 		} else {
 			database, err = mount.File(manifest)
 		}
@@ -142,7 +144,14 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 		}
 	}
-	options := append(cloudServerOptions(),
+	hasNativePostgres := false
+	for _, provider := range providers {
+		if provider.nativePostgres != nil {
+			hasNativePostgres = true
+			break
+		}
+	}
+	options := append(cloudServerOptions(hasNativePostgres),
 		server.WithReadOnly(true),
 		server.WithDatabaseReadProfiles(profiles),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
