@@ -1,5 +1,30 @@
 # Read-only sample database service
 
+## Dormant ECB original HTTP candidate
+
+`ecb_candidate.go` compiles a separate, default-off host composition for the
+original ECB daily HTTP resource. Neither `configuredHandler` nor the Worker
+calls it. Directory registration, provider admission, deployment and public
+activation remain blocked; the preparatory OVDB B1 proposal is never accepted
+as runtime configuration.
+
+`newECBHostCandidate` requires an operator-owned JSON document with format
+`ovdb-ecb-host-candidate/1`, paths to the original publisher manifest and a
+separate local HTTP storage manifest, the reviewed publisher commit and Git
+blob, decoder version and module version, and the exact detached `sourceRight`
+and `binding` from the accepted B1 inventory. It verifies the original
+publisher bytes, SHA-256 and Git blob, and the complete rights digest before
+mounting. The local storage manifest must match `ecbHTTPManifest` byte for byte:
+strict `ecb/daily`, fixed `ecb-daily/1` HTTP profile, native string fields and
+no retention. The server also checks the mounted manifest after opening it.
+It uses the stable `openvaultdb-cloud` rights identity and the library's
+`ecb-public-free/1` request profile. Request Host, query data and command-line
+flags cannot select this composition.
+
+The synthetic host test uses invented XML and an injected transport; it does
+not contact ECB. Any future public route needs its own admission decision and
+selected-path sink and browser evidence before activation.
+
 The Go service mounts the database providers listed in [`providers.json`](providers.json)
 through the real `openvaultdb-go` server. A provider entry pins the GitHub
 repository commit, provider manifest, contract, checksum index, public database
