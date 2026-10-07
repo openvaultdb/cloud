@@ -131,3 +131,17 @@ it("total deadline bounds ignored-abort headers/body and prevents late release",
         vi.useRealTimers();
     }
 });
+
+it("budgets invalid native syntax as transport, leaving native refusal to Go", async () => {
+    const e = await environment();
+    const limiter = (e as Env & {ECB_PUBLIC_LIMITER: {limit: ReturnType<typeof vi.fn>}}).ECB_PUBLIC_LIMITER;
+    const backendCall = vi.fn(async () => new Response('{"error":"native request refused"}', {status: 422, headers: {"Content-Type":"application/json", "Cache-Control":"no-store"}}));
+    const worker = createWorker(backendCall);
+    const invalid = new Request(`https://cloud.openvaultdb.com${ECB_PUBLIC_PATH}`, {method: "POST", headers: {Origin: origin, "Content-Type":"application/yaml", "OVDB-Execution-ID":id}, body:"from: {name: daily}\nlimit: 51\n"});
+    const result = await invoke(worker, invalid, e);
+    expect(result.status).toBe(503);
+    expect(limiter.limit).toHaveBeenCalledTimes(1);
+    expect(backendCall).toHaveBeenCalledTimes(1);
+    expect(result.headers.get("Cache-Control")).toBe("no-store");
+    expect(await result.text()).not.toContain("records");
+});

@@ -55,16 +55,20 @@ it.skipIf(!bridge.ECB_PUBLIC_CHAIN_ADMISSION)("released selected Go gate authent
         expect(zero.records).toHaveLength(0);
         expect(zero.sourceRights).toHaveLength(1);
         expect(zero.providerReads).toBeDefined();
+        const invalid = await run(query.replace("limit: 1", "limit: 51"));
+        expect(invalid.status).toBe(503);
+        expect(await invalid.text()).not.toContain(marker);
+        expect(calls).toBe(3);
         const refused = await run(query, { Authorization: marker });
         expect(refused.status).not.toBe(200);
         expect(await refused.text()).not.toContain(marker);
-        expect(calls).toBe(2);
+        expect(calls).toBe(3);
         badFooter = true;
         const bad = await run(query);
         expect(bad.status).toBe(503);
         expect(await bad.text()).not.toContain(marker);
         expect(bad.headers.get("Cache-Control")).toBe("no-store");
-        expect(calls).toBe(3);
+        expect(calls).toBe(4);
         expect(put).not.toHaveBeenCalled();
         expect(JSON.stringify(logs.mock.calls)).not.toContain(marker);
     }

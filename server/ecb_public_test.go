@@ -226,3 +226,21 @@ func TestECBPublicCancellationAndServiceBudget(t *testing.T) {
 		t.Fatal("service concurrency budget missing")
 	}
 }
+
+func TestECBPublicInvalidNativeDoesNotClaimExecutionSlot(t *testing.T) {
+	reads := 0
+	a, c, digest := configureSyntheticECBPublic(t, &reads)
+	candidate, closeCandidate, err := assembleECBHostVersion(os.Getenv("OVDB_ECB_PUBLIC_HOST_CONFIG"), selectedECBPublicMount, io.Discard, true, a.HostConfigSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeCandidate() }()
+	calls := 0
+	gate := newECBPublicGate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; candidate.ServeHTTP(w, r) }), a, c, digest, syntheticPublicSecret)
+	for _, query := range []string{"from: {name: daily}\nlimit: 51\n", "from: {name: daily}\nlimit: 1\norderBy: [{field: rate}]\n", "[malformed"} {
+		w := publicRequest(gate, digest, query)
+		if w.Code != 422 || gate.count != 0 || gate.active || calls != 0 || reads != 0 {
+			t.Fatalf("invalid syntax crossed execution budget/provider: status=%d slots=%d calls=%d reads=%d", w.Code, gate.count, calls, reads)
+		}
+	}
+}

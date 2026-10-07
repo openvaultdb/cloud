@@ -110,7 +110,10 @@ export function createECBPublicProxy(upstreamFetch: UpstreamFetch) {
                     const body = await bounded(request.body, requestCap);
                     if (active)
                         return response(429, origin);
-                    const limit = await Promise.race([env.ECB_PUBLIC_LIMITER!.limit({ key: "ecb-public-service" }), cutoff]);
+                    // This budget counts all admitted transport attempts, including invalid
+                // native syntax. Go alone validates native grammar before its execution
+                // slot/provider I/O; Worker never duplicates that YAML parser.
+                const limit = await Promise.race([env.ECB_PUBLIC_LIMITER!.limit({ key: "ecb-public-service" }), cutoff]);
                     if (abort.signal.aborted)
                         throw new Error("cancelled");
                     if (!limit.success || active)

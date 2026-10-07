@@ -63,6 +63,15 @@ and cancels owned reader on failure/cancel/deadline and disposes timers/listener
 Go absorbs late flush/abort/panic, drops buffers and releases the service slot.
 Neither side retries, persists, spools, caches or keeps a replay body.
 
+Malformed/unsupported native query bodies can consume one bounded Worker
+transport limiter attempt/slot and a Go HTTP call. Go alone performs native
+syntax/operation validation, and refuses those bodies before its execution
+slot or any ECB provider read. Header/audience/admission/origin/size refusals
+happen before backend dispatch. The transport budget deliberately includes
+invalid native attempts to bound parser/HTTP work; it is not a successful-query
+counter. No before-backend native-syntax guarantee is claimed. Synthetic tests
+assert Worker limiter1/backend1 and Go execution-slot0/provider-read0 separately.
+
 The Go instance permits one concurrent read and six executions/minute. Worker
 requires a shared ECB_PUBLIC_LIMITER binding and uses one service key plus one
 per-isolate slot; activation must prove the binding is6/60s and impose global
