@@ -68,6 +68,7 @@ type ianaAdmission struct {
 type ianaHostConfig struct {
 	Format               string                `json:"format"`
 	PublisherDefinition  string                `json:"publisherDefinition"`
+	DirectoryDefinition  string                `json:"directoryDefinition,omitempty"`
 	HTTPManifest         string                `json:"httpManifest"`
 	DecoderVersion       string                `json:"decoderVersion"`
 	DecoderModuleVersion string                `json:"decoderModuleVersion"`
@@ -79,12 +80,12 @@ func isSHA256(value string) bool {
 	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
 }
 
-func decodeIANAFile(path, digest string, limit int64, members map[string]byte, out any) error {
+func decodeIANAFile(path, digest string, limit int64, members, optional map[string]byte, out any) error {
 	data, err := readECBFile(path, limit)
 	if err != nil || !isSHA256(digest) || fmt.Sprintf("%x", sha256.Sum256(data)) != digest || rejectDuplicateJSON(data) != nil {
 		return errIANAConfig
 	}
-	if _, err := canonicalMembers(data, members, nil, true); err != nil {
+	if _, err := canonicalMembers(data, members, optional, true); err != nil {
 		return errIANAConfig
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -102,7 +103,7 @@ func checkedIANAAdmission(path, digest string) (ianaAdmission, error) {
 		"hostConfigSHA256": '"', "definitionSHA256": '"', "decoderSHA256": '"', "rightsSHA256": '"',
 		"executorId": '"', "resourceId": '"', "method": '"', "path": '"',
 		"maxReadsPerExecution": 'n', "maxRows": 'n', "publicAccess": 'b', "paidAccess": 'b',
-	}, &a)
+	}, nil, &a)
 	approvedAt, dateErr := time.Parse(time.RFC3339, a.ApprovedAt)
 	if err != nil || dateErr != nil || approvedAt.IsZero() || strings.TrimSpace(a.ApprovedBy) == "" || strings.TrimSpace(a.ApprovedBy) != a.ApprovedBy ||
 		a.Format != "ovdb-iana-operator-admission/1" || a.Decision != "operator-free-transient-read-only" ||
@@ -119,7 +120,7 @@ func assembleIANAHost(path string, admission ianaAdmission, open ecbMount, diagn
 	if decodeIANAFile(path, admission.HostConfigSHA256, 32<<10, map[string]byte{
 		"format": '"', "publisherDefinition": '"', "httpManifest": '"', "decoderVersion": '"', "decoderModuleVersion": '"',
 		"sourceRight": '{', "binding": '{',
-	}, &config) != nil || config.Format != "ovdb-iana-host-candidate/1" || config.DecoderVersion != "strict-csv-three-column/1" || config.DecoderModuleVersion != "v0.4.0" {
+	}, map[string]byte{"directoryDefinition": '"'}, &config) != nil || config.Format != "ovdb-iana-host-candidate/1" || config.DecoderVersion != "strict-csv-three-column/1" || config.DecoderModuleVersion != "v0.4.0" {
 		return nil, nil, errIANAConfig
 	}
 	want := providerreads.Binding{ProviderSourceID: "provider:iana/HttpStatusRegistryRow", RightsSourceID: "ovdb:openvaultdb-cloud/iana-http-status/rows",
@@ -128,10 +129,7 @@ func assembleIANAHost(path string, admission ianaAdmission, open ecbMount, diagn
 	if err != nil || config.Binding != want || rightsDigest != admission.RightsSHA256 || len(config.SourceRight.Pins) != 1 {
 		return nil, nil, errIANAConfig
 	}
-	// Operator pins cover definition metadata, never a saved upstream CSV response.
-	pin := config.SourceRight.Pins[0]
-	definition, err := readECBFile(config.PublisherDefinition, 32<<10)
-	if err != nil || pin.Role != "provider" || pin.SHA256 != admission.DefinitionSHA256 || pin.Bytes != int64(len(definition)) || fmt.Sprintf("%x", sha256.Sum256(definition)) != admission.DefinitionSHA256 {
+	if !checkedIANADefinition(config, admission) {
 		return nil, nil, errIANAConfig
 	}
 	transport, err := readECBFile(config.HTTPManifest, int64(len(ianaHTTPManifest)))
@@ -161,6 +159,25 @@ func assembleIANAHost(path string, admission ianaAdmission, open ecbMount, diagn
 		}
 		return nil
 	}, nil
+}
+
+func checkedIANADefinition(config ianaHostConfig, admission ianaAdmission) bool {
+	// Official HTML observations and authored Directory discovery are separate
+	// artifacts. Neither artifact contains or certifies an actual CSV response.
+	pin := config.SourceRight.Pins[0]
+	definition, err := readECBFile(config.PublisherDefinition, 32<<10)
+	if err != nil || fmt.Sprintf("%x", sha256.Sum256(definition)) != admission.DefinitionSHA256 {
+		return false
+	}
+	if config.SourceRight.EvidenceOrigin == "publisher-html-metadata-verified" {
+		expected, err := providerreads.Canonical(config.SourceRight.PublisherHTMLDefinition)
+		if err != nil || config.SourceRight.PublisherHTMLDefinition == nil || !bytes.Equal(expected, definition) {
+			return false
+		}
+		directory, err := readECBFile(config.DirectoryDefinition, 32<<10)
+		return err == nil && pin.Role == "discovery" && pin.Bytes == int64(len(directory)) && fmt.Sprintf("%x", sha256.Sum256(directory)) == pin.SHA256
+	}
+	return config.DirectoryDefinition == "" && pin.Role == "provider" && pin.SHA256 == admission.DefinitionSHA256 && pin.Bytes == int64(len(definition))
 }
 
 type ianaMarkerHandler struct {

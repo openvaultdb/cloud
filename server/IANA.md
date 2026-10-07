@@ -2,7 +2,7 @@
 
 This component prepares the fixed IANA HTTP Status Codes CSV path for independently
 admitted operator requests. It ships no accepted operator decision, publisher
-definition pin, decoder digest, rights digest, source response, or production
+definition evidence, decoder digest, rights digest, source response, or production
 configuration. Its synthetic tests do not contact IANA. Directory registration,
 public access, paid use, live runtime/browser verification and sink review remain
 separate gates.
@@ -35,23 +35,33 @@ This gate permits at most one upstream read **per explicit execution**. It has n
 persistent single-use activation ledger. Before configuring flags and secrets, the
 separate operator pilot process must accept the exact pins, code, rights, sinks,
 and operational conditions and control how many invocations are authorized. A
-failed execution never authorizes an automatic retry or broader query.
+failed execution never authorizes an automatic retry or broader query. The
+transport envelope `maxRows: 50` is not a one-row pilot authorization. A private
+one-attempt control must independently bind the exact limit-one query digest and
+consume a durable owner/session claim before dispatch, including on failure.
 
 The host JSON is bounded to 32 KiB, must match `hostConfigSHA256`, and has exactly:
 `format` (`ovdb-iana-host-candidate/1`), `publisherDefinition` (local metadata file),
 `httpManifest` (local transport manifest), `decoderVersion`
 (`strict-csv-three-column/1`), `decoderModuleVersion` (`v0.4.0`), `sourceRight`, and
-`binding`. The binding fixes `provider:iana/HttpStatusRegistryRow`,
+`binding`, with optional `directoryDefinition` for the HTML evidence route. The
+binding fixes `provider:iana/HttpStatusRegistryRow`,
 `ovdb:openvaultdb-cloud/iana-http-status/rows`, `iana-http-status-codes` and the three
 admitted digests. The source right must match its canonical digest, preserve the
-mounted declaration and carry exactly one valid provider GitHub pin whose byte
-count and SHA match the local definition metadata. Definition metadata is not a
-captured CSV response. No production pin is inferred from a synthetic fixture.
+mounted declaration. The `publisher-definition-verified` origin carries exactly
+one valid provider GitHub pin whose byte count and SHA match the local definition
+metadata. The IANA-specific `publisher-html-metadata-verified` origin instead
+binds `publisherDefinition` to the exact canonical `publisherHtmlDefinition`
+descriptor of independently checked official registry/licensing HTML. Its
+separate Directory `discovery` pin must match the bytes and SHA of
+`directoryDefinition`. The authored Directory metadata is not publisher
+verification; neither evidence artifact is a captured or verified CSV response.
+No production approval is inferred from a synthetic fixture.
 
 The local transport file must byte-match `ianaHTTPManifest` in
 [`iana_candidate.go`](iana_candidate.go). The mounted manifest is checked again to
 refuse a file swap. `server.NewChecked` additionally validates the native IANA
-request profile, source-right notices, publisher definition pin and fixed original
+request profile, source-right notices, publisher-definition evidence and fixed original
 resource/licensing URLs. Missing files, duplicate or unknown fields, malformed
 digests, changed bytes and broadened admission fail closed. Keep all operator files
 and service bindings under operator control; the service does not fetch metadata

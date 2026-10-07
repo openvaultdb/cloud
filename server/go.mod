@@ -7,7 +7,7 @@ toolchain go1.27.0
 require (
 	github.com/dal-go/dalgo2http v0.4.0
 	github.com/dal-go/record v0.1.4
-	github.com/openvaultdb/openvaultdb-go v0.23.0
+	github.com/openvaultdb/openvaultdb-go v0.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
