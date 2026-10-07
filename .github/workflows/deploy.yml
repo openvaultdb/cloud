@@ -61,7 +61,8 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.receipt.outputs.sha }}
         run: |
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
+          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # actions/setup-node v6

@@ -51,8 +51,16 @@ func deploymentStepNamed(t *testing.T, steps []deploymentStep, name string) (int
 // Execute the actual workflow scripts with authored CLI seams. No cloud command,
 // HTTP request, provider body or listener is used by this harness.
 const deploymentCLISeams = `
-gcloud() { printf '%s\n' "$SYNTHETIC_URL"; }
-git() { printf '%s\trefs/heads/main\n' "$SYNTHETIC_MAIN"; }
+gcloud() {
+  if [ "${1:-} ${2:-}" = 'run deploy' ]; then
+    printf 'deploy\n' >> "$SYNTHETIC_CALLS"
+  fi
+  printf '%s\n' "$SYNTHETIC_URL"
+}
+git() {
+  printf '%s\trefs/heads/main\n' "$SYNTHETIC_MAIN"
+  return "$SYNTHETIC_GIT_EXIT"
+}
 curl() { printf 'curl\n' >> "$SYNTHETIC_CALLS"; }
 jq() { :; }
 grep() { :; }
@@ -66,15 +74,24 @@ python3() {
 `
 
 func runDeploymentScript(t *testing.T, dir, script, origin, mainSHA string) error {
+	return runDeploymentScriptWithGit(t, dir, script, origin, mainSHA, "0", true)
+}
+
+func runDeploymentScriptWithGit(t *testing.T, dir, script, origin, mainSHA, gitExit string, pipefail bool) error {
 	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", deploymentCLISeams+script)
+	args := []string{"--noprofile", "--norc", "-e"}
+	if pipefail {
+		args = append(args, "-o", "pipefail")
+	}
+	cmd := exec.Command("bash", append(args, "-c", deploymentCLISeams+script)...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"SYNTHETIC_URL="+origin, "SYNTHETIC_MAIN="+mainSHA,
+		"SYNTHETIC_GIT_EXIT="+gitExit,
 		"SYNTHETIC_PYTHON="+python, "SYNTHETIC_CALLS="+filepath.Join(dir, "calls"),
 		"DEPLOY_SHA="+strings.Repeat("a", 40), "SERVICE_URL="+origin,
 		"SERVICE_NAME=synthetic", "PROJECT_ID=synthetic", "REGION=synthetic",
@@ -84,6 +101,62 @@ func runDeploymentScript(t *testing.T, dir, script, origin, mainSHA string) erro
 		t.Logf("authored workflow script output: %s", output)
 	}
 	return err
+}
+
+func TestCloudRunExactSHAGuardsRequireSuccessfulGitLookup(t *testing.T) {
+	upstream := deploymentSteps(t, "deploy-chinook-cloudrun.yml")
+	downstream := deploymentSteps(t, "deploy.yml")
+	sha, origin := strings.Repeat("a", 40), "https://synthetic.a.run.app"
+	for _, guard := range []struct {
+		steps []deploymentStep
+		name  string
+	}{
+		{upstream, "Reject an older main commit"},
+		{upstream, "Deploy the public read-only service"},
+		{upstream, "Record deployed service origin and source"},
+		{upstream, "Verify live profile and cacheable DTQL"},
+		{downstream, "Reject stale deployment"},
+	} {
+		_, step := deploymentStepNamed(t, guard.steps, guard.name)
+		for _, mode := range []struct {
+			name     string
+			pipefail bool
+		}{{"bash-e", false}, {"bash-eo-pipefail", true}} {
+			for _, lookup := range []struct {
+				name, output, status string
+				wantSuccess          bool
+			}{
+				{"current", sha, "0", true},
+				{"stale", strings.Repeat("b", 40), "0", false},
+				{"correct-output-exit8", sha, "8", false},
+			} {
+				t.Run(guard.name+"/"+mode.name+"/"+lookup.name, func(t *testing.T) {
+					dir := t.TempDir()
+					err := runDeploymentScriptWithGit(t, dir, step.Run, origin, lookup.output, lookup.status, mode.pipefail)
+					if (err == nil) != lookup.wantSuccess {
+						t.Fatalf("git lookup success=%v: step error=%v", lookup.wantSuccess, err)
+					}
+					if !lookup.wantSuccess {
+						for _, file := range []string{"chinook-run-origin.txt", "chinook-deploy-sha.txt", "outputs"} {
+							if _, err := os.Stat(filepath.Join(dir, file)); !os.IsNotExist(err) {
+								t.Fatal("failed lookup published metadata", file, err)
+							}
+						}
+					}
+					if guard.name == "Deploy the public read-only service" {
+						calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+						if lookup.wantSuccess {
+							if err != nil || string(calls) != "deploy\n" {
+								t.Fatal("successful lookup did not reach synthetic deployment", string(calls), err)
+							}
+						} else if !os.IsNotExist(err) {
+							t.Fatal("failed lookup reached deployment", string(calls), err)
+						}
+					}
+				})
+			}
+		}
+	}
 }
 
 func TestCloudRunSmokeIsOptInAndDeploymentReceiptSurvives(t *testing.T) {

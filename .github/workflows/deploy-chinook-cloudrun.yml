@@ -33,7 +33,9 @@ jobs:
           ref: ${{ env.DEPLOY_SHA }}
 
       - name: Reject an older main commit
-        run: test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+        run: |
+          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
+          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
       - name: Download the validated Go binary
         uses: actions/download-artifact@v8
@@ -93,7 +95,8 @@ jobs:
 
       - name: Deploy the public read-only service
         run: |
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
+          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
           # --concurrency is written out because the memory arithmetic in
           # server/limits.go depends on it (the platform default is 80);
           # TestCloudLimitsFitTheInstance reads it from here.
@@ -133,7 +136,8 @@ jobs:
                   or url.path or url.query or url.fragment):
               raise SystemExit("invalid Chinook Cloud Run origin")
           PY
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
+          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
           printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
           printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
           echo "origin=${SERVICE_URL}" >> "${GITHUB_OUTPUT}"
@@ -178,7 +182,8 @@ jobs:
           jq -e '(.records | length == 2) and all(.records[]; (.data.id | type == "string") and ((.data.id | length) > 0) and (.key == ("Order Details/" + .data.id)))' "${RUNNER_TEMP}/northwind-result.json"
           grep -iq '^access-control-allow-origin: https://northwind.demodb.dev' "${RUNNER_TEMP}/northwind-headers"
           python3 smoke_inventory.py --origin "${SERVICE_URL}" --inventory fixture/output/inventory.json
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "${DEPLOY_SHA}"
+          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
+          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
       - name: Publish deployment metadata for the Worker deploy
         uses: actions/upload-artifact@v7
