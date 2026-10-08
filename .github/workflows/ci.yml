@@ -32,6 +32,18 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Set up Go for synthetic ECB chain
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: server/go.sum
+
+      - name: Verify synthetic public ECB completion chain
+        working-directory: server
+        env:
+          OVDB_ECB_PUBLIC_CROSS_RUNTIME: '1'
+        run: go test . -run 'TestECBPublic' -count=1
+
       - name: Verify Worker facade, assets, and deployment bundle
         run: npm run check
 

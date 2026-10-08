@@ -442,3 +442,6 @@ Cloud revision and total memory accounting ([Cloud Run startup contract](https:/
 [memory limits](https://docs.cloud.google.com/run/docs/configuring/services/memory-limits)).
 Transport pins/CORS, descriptor routes, wrappers and Directory/App public
 admission remain separate downstream gates.
+
+The separate default-off [public-free ECB completion candidate](ECB_PUBLIC.md)
+uses synthetic admission and a bounded authenticated completion gate.

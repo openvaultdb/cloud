@@ -1,3 +1,4 @@
+import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import {
@@ -10,10 +11,12 @@ import {
 export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
 ): ExportedHandler<Env> {
+  const publicECB = createECBPublicProxy(upstreamFetch);
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        if (url.pathname === ECB_PUBLIC_PATH || url.pathname === "/ecb-public" || url.pathname.startsWith("/ecb-public/")) return publicECB(request, env);
         if (url.pathname === "/iana/v1/databases/iana-http-status/dtql") {
           if ((env as Env & { IANA_ENABLED?: string }).IANA_ENABLED !== "true") {
             return jsonResponse({ error: "IANA OVDB is not configured." }, 503);
