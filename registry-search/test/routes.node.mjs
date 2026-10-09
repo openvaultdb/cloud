@@ -117,6 +117,15 @@ test('meaninggraph.io: unsafe variants of the repository-qualified route stay re
     'https://meaninggraph.io/registry/github.com.evil/demo-db/pubs/entities/author/',
     'https://meaninggraph.io/registry/github.com/demo db/pubs/entities/author/',
     'https://meaninggraph.io/registry/github.com/demo-db/pu:bs/entities/author/',
+    // the dot in github.com is literal
+    'https://meaninggraph.io/registry/githubXcom/demo-db/pubs/entities/author/',
+    // spellings that parse to a valid URL but are not written as the site writes it
+    'HTTPS://meaninggraph.io/registry/github.com/demo-db/pubs/entities/author/',
+    'https://MeaningGraph.io/registry/github.com/demo-db/pubs/entities/author/',
+    'https://meaninggraph.io:443/registry/github.com/demo-db/pubs/entities/author/',
+    'https://@meaninggraph.io/registry/github.com/demo-db/pubs/entities/author/',
+    'https://meaninggraph.io\\registry\\github.com\\demo-db\\pubs\\entities\\author\\',
+    'https://meaninggraph.io/registry\\github.com/demo-db/pubs/entities/author/',
     // a prefix or suffix around the whole path
     'https://meaninggraph.io/x/registry/github.com/demo-db/pubs/entities/author/',
     'https://meaninggraph.io/registry/github.com/demo-db/pubs/entities/author/x/'

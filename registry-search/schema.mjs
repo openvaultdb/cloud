@@ -12,8 +12,9 @@ const sha = /^[a-f0-9]{40}$/;
 // /registry/github.com/<owner>/<repo>/(entities|concepts)/<slug>/. The segment classes are the
 // site's own (its concept-id rule, and the safe-destination check in its search client). The
 // older /graphs/<graph>/concepts/<concept>/ form stays accepted in validateDocument.
-// URL parsing resolves dot segments, so the new form is also required to be written as it parses.
-const meaninggraphRegistryPath = /^\/registry\/github\.com\/(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?:entities|concepts)\/[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*\/$/;
+// URL parsing resolves dot segments and normalises case, default ports and slashes, so the new form is
+// also required to be written exactly as it parses (isWrittenAsParsed).
+const meaninggraphRegistryPath = /^\/registry\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:entities|concepts)\/[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*\/$/;
 
 export function stableId(domain, kind, nativeId) {
   return createHash('sha256').update(JSON.stringify(['public', domain, kind, nativeId])).digest('hex');
