@@ -55,7 +55,8 @@ export function generate(count) {
     }
     let fieldParent = parent;
     if (slot === 1 && parentKind === 'model') {
-      fieldParent = document(source, 'model_entity', `${name}/CustomerEntity`, parent, i, 'CustomerEntity');
+      // Both spellings of a ModelSpec record type occur, as they do while sites switch over.
+      fieldParent = document(source, i % 4 === 0 ? 'model_record' : 'model_entity', `${name}/CustomerEntity`, parent, i, 'CustomerEntity');
       envelope.documents.push(fieldParent);
       stats.parents++;
     }

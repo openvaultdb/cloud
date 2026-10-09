@@ -1,3 +1,23 @@
+// Every document kind the service accepts. This module has no imports, so the Worker bundle
+// (gateway.mjs) and the VM refresh service share one list without pulling in node:crypto.
+// model_record is the current name of a ModelSpec record type; model_entity and
+// model_collection are the earlier spellings and stay accepted until a later change removes them.
+export const kinds = Object.freeze(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_record', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
+// Kinds that hold a field list: they carry field_count and field_preview.
+export const fieldParentKinds = Object.freeze(['meaning_entity', 'model_entity', 'model_record', 'model_collection']);
+// A request for either spelling of a ModelSpec record type returns both, so a client or stored
+// link that still sends the old kind name (or already sends the new one) keeps working across
+// the switch. Every request is per domain, and only modelspec.org exports record types.
+const recordTypeKinds = Object.freeze(['model_entity', 'model_record']);
+
+export function kindsForFilter(requested) {
+  const expanded = [];
+  for (const kind of requested) {
+    for (const item of recordTypeKinds.includes(kind) ? recordTypeKinds : [kind]) if (!expanded.includes(item)) expanded.push(item);
+  }
+  return expanded;
+}
+
 // This is an exact source identity, not a graph name or a user-supplied label.
 export function originForDocument(doc) {
   return doc.domain === 'meaninggraph' &&
@@ -11,7 +31,7 @@ export function corePriority(doc) {
 
 export function kindPriority(doc) {
   if (doc.kind === 'model') return 3;
-  if (['meaning_entity', 'model_entity', 'model_collection', 'ovdb_server', 'ovdb_database', 'ovdb_collection'].includes(doc.kind)) return 2;
+  if (['meaning_entity', 'model_entity', 'model_record', 'model_collection', 'ovdb_server', 'ovdb_database', 'ovdb_collection'].includes(doc.kind)) return 2;
   return 0;
 }
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { domains, validateDocument } from './schema.mjs';
-import { corePriority, kindPriority, repositoryTerms } from './provenance.mjs';
+import { corePriority, fieldParentKinds, kindPriority, repositoryTerms } from './provenance.mjs';
 
 export const canonicalRoutes = Object.freeze({
   meaninggraph: { hosts: ['meaninggraph.io'], paths: ['/graphs/'] },
@@ -66,7 +66,7 @@ export function mergeExports(manifest, exports) {
   if (manifest.sources.some(source => !used.has(source.domain))) throw new Error('missing domain export');
   if (!docs.length && !manifest.allow_empty) throw new Error('empty corpus requires explicit review');
   const fieldKinds = new Set(['meaning_field', 'model_field']);
-  const entityKinds = new Set(['meaning_entity', 'model_entity', 'model_collection']);
+  const entityKinds = new Set(fieldParentKinds);
   const fieldsByParent = new Map();
   for (const doc of docs) {
     if (!fieldKinds.has(doc.kind) || !doc.parent_id) continue;
