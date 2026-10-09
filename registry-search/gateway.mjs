@@ -1,8 +1,8 @@
 import { productionEngineOrigin } from './engine-policy.mjs';
-import { kindPriority, originForDocument, rankingForDomain, repositoryTerms, searchFieldsForQuery } from './provenance.mjs';
+import { fieldParentKinds, kindPriority, kinds as acceptedKinds, kindsForFilter, originForDocument, rankingForDomain, repositoryTerms, searchFieldsForQuery } from './provenance.mjs';
 
 const domains = new Set(['meaninggraph', 'modelspec', 'ovdb']);
-const kinds = new Set(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
+const kinds = new Set(acceptedKinds);
 const origins = new Set(['https://meaninggraph.io', 'https://modelspec.org', 'https://directory.openvaultdb.com']);
 const display = ['id', 'title', 'kind', 'identifier', 'qualified_name', 'parent_id', 'parent_label', 'canonical_url', 'status', 'native_kind'];
 
@@ -53,10 +53,10 @@ function parseQuery(value) {
   if (typeof value.q !== 'string' || !value.q.trim() || [...value.q].length > 200 || /[\x00-\x1f]/.test(value.q)) throw new Error('invalid q');
   if (!domains.has(value.domain)) throw new Error('invalid domain');
   const requested = value.kind === undefined ? [] : typeof value.kind === 'string' ? [value.kind] : value.kind;
-  if (!Array.isArray(requested) || requested.length > 9 || requested.some(kind => !kinds.has(kind)) || new Set(requested).size !== requested.length) throw new Error('invalid kind');
+  if (!Array.isArray(requested) || requested.length > kinds.size || requested.some(kind => !kinds.has(kind)) || new Set(requested).size !== requested.length) throw new Error('invalid kind');
   if (value.parent_id !== undefined && (typeof value.parent_id !== 'string' || !/^[a-f0-9]{64}$/.test(value.parent_id))) throw new Error('invalid parent');
   if (value.page !== undefined && (!Number.isSafeInteger(value.page) || value.page < 1 || value.page > 20)) throw new Error('invalid page');
-  return { q: value.q.trim(), domain: value.domain, kinds: requested, parent: value.parent_id, page: value.page || 1 };
+  return { q: value.q.trim(), domain: value.domain, kinds: kindsForFilter(requested), parent: value.parent_id, page: value.page || 1 };
 }
 function engineOrigin(env) {
   const url = new URL(env.REGISTRY_TYPESENSE_ORIGIN);
@@ -125,7 +125,7 @@ export function createGateway(fetcher = fetch) {
           item.origin = originForDocument(doc);
           item.repository = repository.repository_full_name;
           if (typeof doc.description === 'string') item.description = [...doc.description.trim()].slice(0, 240).join('');
-          if (['meaning_entity', 'model_entity', 'model_collection'].includes(doc.kind)) {
+          if (fieldParentKinds.includes(doc.kind)) {
             if (Array.isArray(doc.field_preview)) item.field_preview = doc.field_preview.filter(field => typeof field === 'string').slice(0, 4).map(field => [...field].slice(0, 64).join(''));
             if (Number.isSafeInteger(doc.field_count) && doc.field_count >= 0) item.field_count = doc.field_count;
           }

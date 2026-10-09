@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
+import { kinds } from './provenance.mjs';
 
 export const domains = ['meaninggraph', 'modelspec', 'ovdb'];
-export const kinds = ['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection'];
+export { kinds };
 const required = ['id', 'domain', 'kind', 'native_id', 'title', 'identifier', 'qualified_name', 'canonical_url', 'visibility', 'source_repository', 'source_commit', 'source_path'];
 const optionalStrings = ['description', 'parent_id', 'parent_label', 'status', 'native_kind', 'declaring_component'];
 const optionalArrays = ['aliases', 'related_ids'];
