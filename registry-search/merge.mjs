@@ -3,7 +3,7 @@ import { domains, validateDocument } from './schema.mjs';
 import { corePriority, fieldParentKinds, kindPriority, repositoryTerms } from './provenance.mjs';
 
 export const canonicalRoutes = Object.freeze({
-  meaninggraph: { hosts: ['meaninggraph.io'], paths: ['/graphs/'] },
+  meaninggraph: { hosts: ['meaninggraph.io'], paths: ['/graphs/', '/registry/github.com/'] },
   modelspec: { hosts: ['modelspec.org'], paths: ['/registry/models/'] },
   ovdb: { hosts: ['directory.openvaultdb.com'], paths: ['/ovdb/', '/databases/', '/servers/'] }
 });
