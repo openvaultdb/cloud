@@ -8,10 +8,19 @@ const optionalStrings = ['description', 'parent_id', 'parent_label', 'status', '
 const optionalArrays = ['aliases', 'related_ids'];
 const allowed = new Set([...required, ...optionalStrings, ...optionalArrays]);
 const sha = /^[a-f0-9]{40}$/;
+// The repository-qualified route meaninggraph.io publishes since 2026-10-07:
+// /registry/github.com/<owner>/<repo>/(entities|concepts)/<slug>/. The segment classes are the
+// site's own (its concept-id rule, and the safe-destination check in its search client). The
+// older /graphs/<graph>/concepts/<concept>/ form stays accepted in validateDocument.
+// URL parsing resolves dot segments and normalises case, default ports and slashes, so the new form is
+// also required to be written exactly as it parses (isWrittenAsParsed).
+const meaninggraphRegistryPath = /^\/registry\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/(?:entities|concepts)\/[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*\/$/;
 
 export function stableId(domain, kind, nativeId) {
   return createHash('sha256').update(JSON.stringify(['public', domain, kind, nativeId])).digest('hex');
 }
+
+const isWrittenAsParsed = (raw, url) => raw.split('#')[0] === `${url.origin}${url.pathname}`;
 
 export function validateDocument(doc, source, routes, revisions) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('document must be an object');
@@ -25,7 +34,7 @@ export function validateDocument(doc, source, routes, revisions) {
   if (!doc.source_path || doc.source_path.startsWith('/') || doc.source_path.split('/').includes('..') || /[\x00-\x1f]/.test(doc.source_path)) throw new Error('unsafe source path');
   const url = new URL(doc.canonical_url);
   const route = routes[doc.domain];
-  const matchesRoute = doc.domain === 'meaninggraph' ? /^\/graphs\/[^/]+\/concepts\/[^/]+\/?$/.test(url.pathname)
+  const matchesRoute = doc.domain === 'meaninggraph' ? /^\/graphs\/[^/]+\/concepts\/[^/]+\/?$/.test(url.pathname) || meaninggraphRegistryPath.test(url.pathname) && isWrittenAsParsed(doc.canonical_url, url)
     : doc.domain === 'modelspec' ? /^\/registry\/models\/[^/]+\/?$/.test(url.pathname)
       : /^\/ovdb\/[^/]+(?:\/[^/]*)*$/.test(url.pathname) || /^\/databases\/[^/]+\/?$/.test(url.pathname) || /^\/servers\/[a-f0-9]{64}\/?$/.test(url.pathname);
   if (!route || url.protocol !== 'https:' || url.username || url.password || url.port || url.search || !route.hosts.includes(url.hostname) || !matchesRoute || url.hash && !/^#[A-Za-z0-9._:-]+$/.test(url.hash)) throw new Error('unsafe canonical URL');
