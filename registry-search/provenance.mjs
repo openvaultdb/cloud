@@ -5,8 +5,9 @@
 export const kinds = Object.freeze(['meaning_entity', 'meaning_field', 'model', 'model_entity', 'model_record', 'model_collection', 'model_field', 'ovdb_server', 'ovdb_database', 'ovdb_collection']);
 // Kinds that hold a field list: they carry field_count and field_preview.
 export const fieldParentKinds = Object.freeze(['meaning_entity', 'model_entity', 'model_record', 'model_collection']);
-// A request for either spelling of a ModelSpec record type returns both, because during the
-// transition one site may export model_record while another still exports model_entity.
+// A request for either spelling of a ModelSpec record type returns both, so a client or stored
+// link that still sends the old kind name (or already sends the new one) keeps working across
+// the switch. Every request is per domain, and only modelspec.org exports record types.
 const recordTypeKinds = Object.freeze(['model_entity', 'model_record']);
 
 export function kindsForFilter(requested) {
