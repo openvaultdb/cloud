@@ -173,8 +173,12 @@ test('gateway: the priority comparison treats model_record like model_entity and
     assert.equal(response.status, 503, `kind_priority ${wrong} on model_record`);
     assert.deepEqual(await response.json(), { error: 'unavailable' });
   }
-  const unknown = { ...stored, kind: 'model_stray' };
-  assert.equal((await search(gatewayOver([unknown]), {})).status, 503);
+  // An unknown kind is refused by the kind check itself, not only by the priority comparison:
+  // a stored priority of 0 is what kindPriority computes for an unknown kind, so it matches.
+  for (const claimed of [0, 2]) {
+    const unknown = { ...stored, kind: 'model_stray', kind_priority: claimed };
+    assert.equal((await search(gatewayOver([unknown]), {})).status, 503, `unknown kind with priority ${claimed}`);
+  }
   const field = documents.find(doc => doc.kind === 'model_field');
   const leaked = await (await search(gatewayOver([{ ...field, field_count: 9, field_preview: ['x'] }]), {})).json();
   assert.equal(leaked.hits[0].field_count, undefined, 'field context is returned only for record-type kinds');
