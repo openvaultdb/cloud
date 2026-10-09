@@ -51,3 +51,33 @@ On the VM, `node registry-search/vm-refresh-service.mjs install` as root install
 Each run fetches the three fixed public `/registry-search.json` URLs over HTTPS with redirects refused, a 30-second timeout per source, and a 32 MB limit per export. It rejects fixtures, conflicting pins, invalid routes and more than 10,000 expanded documents. Fresh smoke queries are chosen from the current exports. The publisher uses the existing single-host advisory lock and durable sequence; a failed fetch, validation, import or smoke test leaves the active alias intact. The one-shot service has a 240-second start timeout, 768 MB memory and one-CPU limit. Check `systemctl list-timers registry-search-refresh.timer`, `systemctl show registry-search-refresh.service -p TimeoutStartUSec`, and `journalctl -u registry-search-refresh.service` for the last successful generation before calling the corpus current.
 
 `npm test` runs the existing Vitest suite and the dedicated Node tests for validation, import failures, sequence fencing, query policy, and unavailable errors. `node registry-search/benchmark.mjs` measures synthetic 10k/50k/100k source-record expansion and JSONL bytes. One source record means a graph concept, model descriptor or collection, or registered database; child fields/entities/collections and grouped servers are derived documents. The fixture includes repeated `CustomerId_N` field labels under different parents, component-like effective fields, a sparse ModelSpec tail of 100-field descriptors, and a heavy database tail. `node registry-search/benchmark.mjs --profile 10000 --out /private/tmp/registry-10k` emits three explicit fixture exports and a pinned manifest for local Typesense import; repeat with 50000 and 100000 in separate processes. These figures are not engine disk/RAM, query latency, relevance, or live capacity measurements. The synthetic mix is an experiment shape, not a forecast or capacity qualification; run the plan's real Typesense and browser gates separately.
+
+## Document kinds and the `model_record` transition
+
+The service accepts these document kinds and refuses a document or request with any other: `meaning_entity`, `meaning_field`, `model`, `model_entity`, `model_record`, `model_collection`, `model_field`, `ovdb_server`, `ovdb_database`, `ovdb_collection`. The list lives once, in `provenance.mjs`, and the validator, merger, gateway and VM refresh service all read it.
+
+ModelSpec renamed its `entity` construct to `record`, so a ModelSpec record type is now a `model_record` document; `model_entity` is the earlier name. Both are accepted and treated identically: validation, `kind_priority` 2, `field_count` and `field_preview`, and the gateway's check of a stored priority. `model_collection` also stays accepted; nothing is removed.
+
+- A request that filters on `model_entity` or on `model_record` (or on both) returns documents of both kinds, because during the transition one site may export `model_record` while another still exports `model_entity`. Every hit carries the kind its document was stored with; stored kinds are never rewritten. Other kind filters are unchanged.
+- The document id hashes the kind (`stableId`), so a document that changes kind gets a new id, and the fields under it a new `parent_id`. The next refresh after a site switches therefore publishes a new generation; the five-minute timer does this by itself and no manual reindex step exists.
+- With a corpus that holds only `model_entity` documents the merged output is byte for byte what it was before this change (same generation hash), so deploying either part changes nothing a user can see.
+
+### Deploy order for this change
+
+Two parts are deployed by hand and may briefly run different versions: the Worker (`gateway.mjs` with `provenance.mjs`) and the VM refresh service (`refresh.mjs`, `merge.mjs`, `schema.mjs`, `provenance.mjs`, `publish.mjs`). Behaviour of each pairing, from the code:
+
+| | corpus has only `model_entity` | corpus has `model_record` documents (a site switched) |
+|---|---|---|
+| New Worker, old VM service | works; the index is unchanged | the old refresh refuses the whole export set (`invalid public scope`), the active generation stays, the corpus goes stale; the gateway never sees a `model_record` hit |
+| Old Worker, new VM service | works; the new refresh produces the identical generation, so nothing is republished | **unsafe**: the first refresh indexes `model_record` documents and the old gateway answers 503 (`unavailable`) to every query that returns one, and 400 to a request that filters on `model_record` |
+| Both new | works | works |
+
+So the safe order is: **Worker first, then the VM refresh service, then the sites**. Do not switch any site to export `model_record` until both parts are deployed; a site that switches earlier makes the refresh fail for all three domains (the alias is kept, the data goes stale), not only its own. The VM service must not be deployed before the Worker once any site exports `model_record`.
+
+These steps were **not executed by the author of this change**; they are the existing commands of this package, in the order above, for the owner or operator.
+
+1. Worker, from a checkout containing this change: `npm run deploy:registry-search:live:dry`, then `npm run deploy:registry-search:live`.
+2. VM refresh service, on the VM as root, from a checkout containing this change. An installed version is not replaced in place (`installed version differs; stop and teardown before installing a new version`), so first `node /opt/datatug/registry-search/live/vm-refresh-service.mjs teardown`, then `node registry-search/vm-refresh-service.mjs install`, then `node /opt/datatug/registry-search/live/vm-refresh-service.mjs status`. Teardown retains the engine, data, credentials and publication state; no refresh runs between teardown and install, and the active generation keeps serving.
+3. Only then may a site export `model_record`. After that, check `journalctl -u registry-search-refresh.service` for the new generation.
+
+Rollback of either part to the previous version is safe while no site exports `model_record`.
