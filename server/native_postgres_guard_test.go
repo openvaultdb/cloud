@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -106,34 +108,30 @@ func TestDemoPostgresNeonPoolerIsDetected(t *testing.T) {
 }
 
 func TestDemoPostgresRoleSelfCheck(t *testing.T) {
-	safe := demoPostgresRoleFacts{Role: "chinook_reader", SessionRole: "chinook_reader", StatementTimeoutMS: 10_000, ReadableSchemas: []string{"chinook"}}
+	safe := demoPostgresRoleFacts{Role: "chinook_reader", SessionRole: "chinook_reader", ReadableSchemas: []string{"chinook"}}
 	for _, c := range []struct {
-		name    string
-		mutate  func(*demoPostgresRoleFacts)
-		library bool
-		want    error
+		name   string
+		mutate func(*demoPostgresRoleFacts)
+		want   error
 	}{
-		{"dedicated reader", func(*demoPostgresRoleFacts) {}, false, nil},
-		{"neon owner role", func(f *demoPostgresRoleFacts) { f.Role = "neondb_owner" }, false, errDemoPostgresOwnerRole},
-		{"any owner-named role", func(f *demoPostgresRoleFacts) { f.Role = "chinook_owner" }, false, errDemoPostgresOwnerRole},
-		{"postgres", func(f *demoPostgresRoleFacts) { f.Role = "postgres" }, false, errDemoPostgresOwnerRole},
-		{"privileged attributes", func(f *demoPostgresRoleFacts) { f.Privileged = true }, false, errDemoPostgresOwnerRole},
-		{"member of a privileged role (even without INHERIT)", func(f *demoPostgresRoleFacts) { f.PrivilegedMember = true }, false, errDemoPostgresPrivilegedGrant},
-		{"switched session", func(f *demoPostgresRoleFacts) { f.SessionRole = "someone_else" }, false, errDemoPostgresRoleSwitched},
-		{"table write grant", func(f *demoPostgresRoleFacts) { f.CanWrite = true }, false, errDemoPostgresWritableRole},
-		{"create grant", func(f *demoPostgresRoleFacts) { f.CanCreate = true }, false, errDemoPostgresWritableRole},
-		{"no statement timeout", func(f *demoPostgresRoleFacts) { f.StatementTimeoutMS = 0 }, false, errDemoPostgresStatementTime},
-		{"statement timeout too long", func(f *demoPostgresRoleFacts) { f.StatementTimeoutMS = 120_000 }, false, errDemoPostgresStatementTime},
-		{"no statement timeout once the library bounds statements", func(f *demoPostgresRoleFacts) { f.StatementTimeoutMS = 0 }, true, nil},
-		{"second readable schema", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = []string{"chinook", "northwind"} }, false, errDemoPostgresSchemaScope},
-		{"other schema only", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = []string{"northwind"} }, false, errDemoPostgresSchemaScope},
-		{"nothing readable", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = nil }, false, errDemoPostgresSchemaScope},
+		{"dedicated reader", func(*demoPostgresRoleFacts) {}, nil},
+		{"neon owner role", func(f *demoPostgresRoleFacts) { f.Role = "neondb_owner" }, errDemoPostgresOwnerRole},
+		{"any owner-named role", func(f *demoPostgresRoleFacts) { f.Role = "chinook_owner" }, errDemoPostgresOwnerRole},
+		{"postgres", func(f *demoPostgresRoleFacts) { f.Role = "postgres" }, errDemoPostgresOwnerRole},
+		{"privileged attributes", func(f *demoPostgresRoleFacts) { f.Privileged = true }, errDemoPostgresOwnerRole},
+		{"member of a privileged role (even without INHERIT)", func(f *demoPostgresRoleFacts) { f.PrivilegedMember = true }, errDemoPostgresPrivilegedGrant},
+		{"switched session", func(f *demoPostgresRoleFacts) { f.SessionRole = "someone_else" }, errDemoPostgresRoleSwitched},
+		{"table write grant", func(f *demoPostgresRoleFacts) { f.CanWrite = true }, errDemoPostgresWritableRole},
+		{"create grant", func(f *demoPostgresRoleFacts) { f.CanCreate = true }, errDemoPostgresWritableRole},
+		{"second readable schema", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = []string{"chinook", "northwind"} }, errDemoPostgresSchemaScope},
+		{"other schema only", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = []string{"northwind"} }, errDemoPostgresSchemaScope},
+		{"nothing readable", func(f *demoPostgresRoleFacts) { f.ReadableSchemas = nil }, errDemoPostgresSchemaScope},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			facts := safe
 			facts.ReadableSchemas = append([]string(nil), safe.ReadableSchemas...)
 			c.mutate(&facts)
-			if err := judgeDemoPostgresRole(facts, "chinook", c.library); !errors.Is(err, c.want) {
+			if err := judgeDemoPostgresRole(facts, "chinook"); !errors.Is(err, c.want) {
 				t.Fatalf("judgeDemoPostgresRole = %v, want %v", err, c.want)
 			}
 		})
@@ -146,7 +144,7 @@ func TestDemoPostgresSourceCheckRunsTLSBeforeConnecting(t *testing.T) {
 	t.Cleanup(func() { readDemoPostgresRoleFacts = original })
 	readDemoPostgresRoleFacts = func(context.Context, string) (demoPostgresRoleFacts, error) {
 		connected = true
-		return demoPostgresRoleFacts{Role: "chinook_reader", SessionRole: "chinook_reader", StatementTimeoutMS: 5000, ReadableSchemas: []string{"chinook"}}, nil
+		return demoPostgresRoleFacts{Role: "chinook_reader", SessionRole: "chinook_reader", ReadableSchemas: []string{"chinook"}}, nil
 	}
 	t.Setenv(demoPostgresInsecureTLSEnv, "")
 	if err := checkDemoPostgresSource(context.Background(), "postgres://r@ep-x.neon.tech/chinook?sslmode=require&connect_timeout=10", "chinook"); !errors.Is(err, errDemoPostgresTLS) || connected {
@@ -218,13 +216,36 @@ func TestDemoPostgresReasonCodesAreStable(t *testing.T) {
 	}
 }
 
-func TestLibraryMountHardeningSeamIsInert(t *testing.T) {
-	// Until the openvaultdb-go release with per-mount hardening is pinned, the
-	// seam must not change the options and the in-repo checks must stay on.
+func TestLibraryMountHardeningOptionsAreSet(t *testing.T) {
 	options := mount.Options{CatalogueDir: "kept"}
 	applyLibraryMountHardening(&options)
-	if options.CatalogueDir != "kept" || libraryEnforcesMountHardening {
-		t.Fatalf("library hardening seam changed options or claims enforcement: %+v", options)
+	if options.CatalogueDir != "kept" || !options.RequireReadOnlyNativePostgresRole || options.NativePostgresStatementTimeout != 15*time.Second || options.NativePostgresDiscoveryTimeout != 30*time.Second || options.AllowInsecureNativePostgresTransport {
+		t.Fatalf("library hardening options = %+v", options)
+	}
+	options.AllowInsecureNativePostgresTransport = true
+	applyLibraryMountHardening(&options)
+	if options.AllowInsecureNativePostgresTransport {
+		t.Fatal("the seam must force verified TLS for remote hosts")
+	}
+	mounted, err := demoPostgresMountOptions(runtimeDatabase{ID: "chinook-postgresql", nativePostgres: &nativePostgresMountConfig{schemaName: "chinook", dsnEnv: "OVDB_PG_CHINOOK_DSN"}})
+	if err != nil || !mounted.RequireReadOnlyNativePostgresRole || mounted.NativePostgresStatementTimeout != demoPostgresStatementTimeout {
+		t.Fatalf("mount options do not carry the hardening: %+v, %v", mounted, err)
+	}
+}
+
+func TestDemoPostgresDSNRefusesLibraryInsecureTransportEnv(t *testing.T) {
+	const dsn = "postgres://r@h.example/db?sslmode=verify-full&connect_timeout=10"
+	for _, value := range []string{"true", "false", "1"} {
+		env := func(key string) (string, bool) {
+			if key == mount.InsecureNativePostgresTransportEnv {
+				return value, true
+			}
+			return "", false
+		}
+		err := validateDemoPostgresDSNWithEnv(dsn, false, env)
+		if !errors.Is(err, errDemoPostgresInsecureEnv) || demoPostgresReasonCode(err) != "tls_required" {
+			t.Errorf("%s=%s: err=%v, want tls_required refusal", mount.InsecureNativePostgresTransportEnv, value, err)
+		}
 	}
 }
 
@@ -292,7 +313,6 @@ func TestDemoPostgresRoleSelfCheckRefusesPrivilegedMemberships(t *testing.T) {
 		exec("CREATE ROLE " + role + " LOGIN")
 		exec("GRANT USAGE ON SCHEMA chinook TO " + role)
 		exec("GRANT SELECT ON ALL TABLES IN SCHEMA chinook TO " + role)
-		exec("ALTER ROLE " + role + " SET statement_timeout = '10s'")
 		return roleDSN(role)
 	}
 
@@ -342,6 +362,126 @@ func TestDemoPostgresRoleSelfCheckRefusesPrivilegedMemberships(t *testing.T) {
 		exec("GRANT ovdb_it_owner TO ovdb_it_ownermember WITH INHERIT FALSE, SET TRUE")
 		if err := checkDemoPostgresSource(ctx, dsn, "chinook"); !errors.Is(err, errDemoPostgresPrivilegedGrant) {
 			t.Fatalf("err = %v, want privileged membership refusal", err)
+		}
+	})
+}
+
+// TestDemoPostgresLibraryHardeningAgainstRealPostgres proves, on a real
+// PostgreSQL, what the library now enforces for this service: a reader role with
+// no statement_timeout of its own is mounted and its sessions run with the
+// library's 15s statement_timeout inside a read-only transaction; and a role the
+// library considers writable (here: EXECUTE on a SECURITY DEFINER function in the
+// dataset schema, which this service's own self-check does not look at) is refused
+// by the mount itself. It needs OVDB_PG_CHINOOK_DSN (URL form) and a superuser
+// OVDB_PG_TEST_PRIVILEGED_DSN on the same database; it creates and drops its own
+// throwaway roles, view and function.
+func TestDemoPostgresLibraryHardeningAgainstRealPostgres(t *testing.T) {
+	reader, admin := os.Getenv("OVDB_PG_CHINOOK_DSN"), os.Getenv("OVDB_PG_TEST_PRIVILEGED_DSN")
+	if reader == "" || admin == "" {
+		t.Skip("set OVDB_PG_CHINOOK_DSN and a superuser OVDB_PG_TEST_PRIVILEGED_DSN on the same chinook database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	newReader := func(role string) string {
+		t.Helper()
+		t.Cleanup(func() {
+			_, _ = conn.Exec(context.Background(), "DROP OWNED BY "+role)
+			_, _ = conn.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+		})
+		exec("DROP ROLE IF EXISTS " + role)
+		exec("CREATE ROLE " + role + " LOGIN")
+		exec("GRANT USAGE ON SCHEMA chinook TO " + role)
+		exec("GRANT SELECT ON ALL TABLES IN SCHEMA chinook TO " + role)
+		parsed, err := url.Parse(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed.User = url.User(role)
+		query := parsed.Query()
+		query.Del("statement_timeout")
+		parsed.RawQuery = query.Encode()
+		return parsed.String()
+	}
+	provider := runtimeDatabase{ID: "chinook-postgresql", CORSOrigins: demoPostgresCORSOrigins("chinook"), nativePostgres: &nativePostgresMountConfig{schemaName: "chinook", dsnEnv: "OVDB_PG_CHINOOK_DSN"}}
+
+	t.Run("sessions are bounded and read-only without a role timeout", func(t *testing.T) {
+		t.Cleanup(func() { _, _ = conn.Exec(context.Background(), "DROP VIEW IF EXISTS chinook.ovdb_it_session") })
+		exec("DROP VIEW IF EXISTS chinook.ovdb_it_session")
+		exec("CREATE VIEW chinook.ovdb_it_session AS SELECT current_setting('statement_timeout') AS statement_timeout, current_setting('transaction_read_only') AS read_only")
+		dsn := newReader("ovdb_it_notimeout")
+		exec("GRANT SELECT ON chinook.ovdb_it_session TO ovdb_it_notimeout")
+		if err := checkDemoPostgresSource(ctx, dsn, "chinook"); err != nil {
+			t.Fatalf("a reader without a role statement_timeout is refused: %v", err)
+		}
+		t.Setenv("OVDB_PG_CHINOOK_DSN", dsn)
+		db, err := mountDemoPostgres(provider)
+		if err != nil {
+			t.Fatalf("mount: %v", err)
+		}
+		_ = db.Close()
+		t.Setenv(demoPostgresEnabledEnv, "true")
+		for _, source := range demoPostgresSources[1:] {
+			t.Setenv(source.dsnEnv, "")
+		}
+		providers, err := appendConfiguredDemoPostgres(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler, closeDatabases, err := newHandlerWithProviders(providers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = closeDatabases() })
+		mounter := handler.(*demoPostgresHandler).mounter
+		if err := mounter.waitSettled(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if state, _ := mounter.state("chinook-postgresql"); state != demoPostgresAvailable {
+			t.Fatalf("chinook-postgresql is %s: %+v", state, mounter.snapshot())
+		}
+		response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/chinook-postgresql/dtql", "from: {schema: chinook, name: ovdb_it_session}\ncolumns: [{field: statement_timeout}, {field: read_only}]\n")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%d %s", response.Code, response.Body.String())
+		}
+		var answer struct {
+			Records []map[string]any `json:"records"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil || len(answer.Records) != 1 {
+			t.Fatalf("session settings: %v %s", err, response.Body.String())
+		}
+		got := fmt.Sprint(answer.Records[0])
+		if !strings.Contains(got, "statement_timeout:15s") || !strings.Contains(got, "read_only:on") {
+			t.Fatalf("mounted session settings = %s, want statement_timeout 15s and a read-only transaction", got)
+		}
+	})
+
+	t.Run("the library refuses a role this service's self-check passes", func(t *testing.T) {
+		t.Cleanup(func() { _, _ = conn.Exec(context.Background(), "DROP FUNCTION IF EXISTS chinook.ovdb_it_definer()") })
+		exec("DROP FUNCTION IF EXISTS chinook.ovdb_it_definer()")
+		exec("CREATE FUNCTION chinook.ovdb_it_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'")
+		dsn := newReader("ovdb_it_definer")
+		if err := checkDemoPostgresSource(ctx, dsn, "chinook"); err != nil {
+			t.Fatalf("self-check: %v (the scenario needs a role only the library refuses)", err)
+		}
+		t.Setenv("OVDB_PG_CHINOOK_DSN", dsn)
+		db, err := mountDemoPostgres(provider)
+		if err == nil {
+			_ = db.Close()
+			t.Fatal("the library mounted a role that may execute a SECURITY DEFINER function")
+		}
+		if !strings.Contains(err.Error(), "not read-only") || strings.Contains(err.Error(), dsn) {
+			t.Fatalf("library refusal = %v", err)
 		}
 	})
 }

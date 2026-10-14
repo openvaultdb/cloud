@@ -21,37 +21,45 @@ import (
 // never set by the deploy workflow.
 const demoPostgresInsecureTLSEnv = "OVDB_PG_INSECURE_TLS_FOR_TESTS"
 
-// demoPostgresMaxStatementTimeout bounds the session statement_timeout a demo
-// role must carry (as ALTER ROLE ... SET statement_timeout, or a
-// statement_timeout parameter in the DSN). Zero (unbounded) is refused.
-const demoPostgresMaxStatementTimeout = 60 * time.Second
-
 // demoPostgresMaxConnectTimeout bounds the connect_timeout every DSN must set, so
 // a dial that never answers ends and a background mount attempt always finishes.
 const demoPostgresMaxConnectTimeout = 30 * time.Second
 
-// libraryEnforcesMountHardening is the one switch of the go.mod bump to the
-// openvaultdb-go release that adds per-mount hardening options. Until then the
-// mount runs with the v0.24.1 options and this repository performs the checks
-// itself (TLS mode, role privileges, statement_timeout, schema scope, and
-// per-mount isolation in demoPostgresMounter).
-//
-// Follow-up when the release lands: set this to true, add the assignments in
-// applyLibraryMountHardening, adapt names if the released API differs.
-const libraryEnforcesMountHardening = false
+// demoPostgresStatementTimeout is the statement_timeout every mounted session
+// starts with. The library (openvaultdb-go >= v0.25.2) writes it into the
+// mount's connection string, after any statement_timeout the DSN sets, so it
+// wins over the DSN and over a role default.
+const demoPostgresStatementTimeout = 15 * time.Second
 
-// applyLibraryMountHardening is the seam for the library's per-mount options.
-// The intended names, from the sibling openvaultdb-go change, are:
+// demoPostgresDiscoveryTimeout bounds the library's catalogue read of one mount;
+// defaultDemoPostgresMountTiming's Attempt leaves room for it.
+const demoPostgresDiscoveryTimeout = 30 * time.Second
+
+// applyLibraryMountHardening sets the library's per-mount hardening options
+// (openvaultdb-go v0.25.2):
 //
-//	options.Required = false          // skip a failing mount, do not fail the server
-//	options.RequireSafeRole = true    // refuse superuser/owner/writable roles
-//	options.StatementTimeout = 10 * time.Second
-//	options.TLSVerify = true          // require verify-full
+//   - RequireReadOnlyNativePostgresRole: the library refuses a role that is a
+//     superuser, owns or may write an exposed relation, owns a schema, relation or
+//     function, may create in an exposed schema, may use or update a sequence, or
+//     may execute a SECURITY DEFINER function in an exposed schema. It overlaps
+//     with checkDemoPostgresSource, which stays: each refuses things the other
+//     does not (see README "Mount hardening and operator requirements").
+//   - NativePostgresStatementTimeout: every session starts with this
+//     statement_timeout. It replaces this service's former requirement that the
+//     role or DSN carry one.
+//   - AllowInsecureNativePostgresTransport stays false: a remote host needs
+//     verified TLS. This service's own DSN policy (verify-full only) is stricter,
+//     and OVDB_NATIVE_POSTGRES_INSECURE_TRANSPORT is refused by it.
 //
-// The in-repo checks below stay in place after the bump: they are cheap and
-// keep the refusal reasons this service reports.
+// Every read additionally runs in a BEGIN READ ONLY transaction (library
+// default for native mounts), on top of default_transaction_read_only=on.
+// mount.All / Spec.Optional is not used: demoPostgresMounter already isolates
+// each mount and, unlike mount.All, retries a failed one with backoff.
 func applyLibraryMountHardening(options *mount.Options) {
-	_ = options
+	options.RequireReadOnlyNativePostgresRole = true
+	options.NativePostgresStatementTimeout = demoPostgresStatementTimeout
+	options.NativePostgresDiscoveryTimeout = demoPostgresDiscoveryTimeout
+	options.AllowInsecureNativePostgresTransport = false
 }
 
 // The refusal errors are fixed strings: they are logged, and their reason codes
@@ -61,6 +69,7 @@ var (
 	errDemoPostgresDSNInvalid      = errors.New("DSN is not a valid PostgreSQL connection string")
 	errDemoPostgresDSNAmbiguous    = errors.New("DSN must name exactly one host and set each connection key once (no service files)")
 	errDemoPostgresEnv             = errors.New("PG* connection environment variables (PGSSLMODE, PGHOST, PGOPTIONS, PGSERVICE, ...) must not be set")
+	errDemoPostgresInsecureEnv     = errors.New(mount.InsecureNativePostgresTransportEnv + " must not be set: it would let the library skip TLS verification")
 	errDemoPostgresTLS             = errors.New("DSN must set sslmode=verify-full")
 	errDemoPostgresInsecureHost    = errors.New(demoPostgresInsecureTLSEnv + " is honoured only for a single loopback host")
 	errDemoPostgresOptionsParam    = errors.New("DSN must not set the PostgreSQL options parameter")
@@ -70,7 +79,6 @@ var (
 	errDemoPostgresPrivilegedGrant = errors.New("role is a member of a privileged, owning or server-access role; revoke the membership")
 	errDemoPostgresRoleSwitched    = errors.New("session_user and current_user differ")
 	errDemoPostgresWritableRole    = errors.New("role can write, create or own objects; grant SELECT and USAGE only")
-	errDemoPostgresStatementTime   = errors.New("role has no statement_timeout between 1ms and 60s")
 	errDemoPostgresSchemaScope     = errors.New("role can read relations outside its own schema")
 	errDemoPostgresUnreachable     = errors.New("could not connect to PostgreSQL or run the role self-check")
 )
@@ -110,6 +118,11 @@ func validateDemoPostgresDSNWithEnv(dsn string, allowInsecureLoopback bool, look
 		if value, set := lookupEnv(name); set && value != "" {
 			return errDemoPostgresEnv
 		}
+	}
+	// The library honours this process-wide opt-out of verified TLS; nothing in
+	// this service may set it, so its presence is a configuration error.
+	if value, set := lookupEnv(mount.InsecureNativePostgresTransportEnv); set && value != "" {
+		return errDemoPostgresInsecureEnv
 	}
 	params, hosts, err := demoPostgresDSNParams(dsn)
 	if err != nil {
@@ -281,14 +294,13 @@ func demoPostgresDSNParams(dsn string) (map[string]string, []string, error) {
 
 // demoPostgresRoleFacts is what the role self-check reads from PostgreSQL.
 type demoPostgresRoleFacts struct {
-	Role               string
-	SessionRole        string
-	Privileged         bool // superuser, createrole, createdb, replication or bypassrls
-	PrivilegedMember   bool // member (with or without INHERIT/SET) of a privileged, owning or server-access role
-	CanWrite           bool // owns, or may write/alter, any non-system relation or sequence
-	CanCreate          bool // may create in any non-system schema, or create schemas in the database
-	StatementTimeoutMS int64
-	ReadableSchemas    []string // non-system schemas holding at least one SELECT-able relation
+	Role             string
+	SessionRole      string
+	Privileged       bool     // superuser, createrole, createdb, replication or bypassrls
+	PrivilegedMember bool     // member (with or without INHERIT/SET) of a privileged, owning or server-access role
+	CanWrite         bool     // owns, or may write/alter, any non-system relation or sequence
+	CanCreate        bool     // may create in any non-system schema, or create schemas in the database
+	ReadableSchemas  []string // non-system schemas holding at least one SELECT-able relation
 }
 
 // demoPostgresRoleFactsSQL reads the facts. Membership uses pg_has_role(...,
@@ -326,7 +338,6 @@ SELECT
     WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'
       AND (pg_catalog.has_schema_privilege(n.oid, 'CREATE') OR pg_catalog.pg_has_role(n.nspowner, 'MEMBER'))
   ),
-  (SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'statement_timeout'),
   ARRAY(
     SELECT DISTINCT n.nspname::text FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -347,17 +358,17 @@ var readDemoPostgresRoleFacts = func(ctx context.Context, dsn string) (demoPostg
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
 	var facts demoPostgresRoleFacts
-	if err := conn.QueryRow(ctx, demoPostgresRoleFactsSQL).Scan(&facts.Role, &facts.SessionRole, &facts.Privileged, &facts.PrivilegedMember, &facts.CanWrite, &facts.CanCreate, &facts.StatementTimeoutMS, &facts.ReadableSchemas); err != nil {
+	if err := conn.QueryRow(ctx, demoPostgresRoleFactsSQL).Scan(&facts.Role, &facts.SessionRole, &facts.Privileged, &facts.PrivilegedMember, &facts.CanWrite, &facts.CanCreate, &facts.ReadableSchemas); err != nil {
 		return demoPostgresRoleFacts{}, errDemoPostgresUnreachable
 	}
 	return facts, nil
 }
 
 // judgeDemoPostgresRole refuses a role that could write or become a role that
-// could, a role named as an owner, a switched session, a session without a
-// bounded statement_timeout, and a role that can read any schema other than the
-// dataset's own one.
-func judgeDemoPostgresRole(facts demoPostgresRoleFacts, schemaName string, libraryBoundsStatements bool) error {
+// could, a role named as an owner, a switched session, and a role that can read
+// any schema other than the dataset's own one. The statement_timeout is no longer
+// judged here: the library sets it on every mounted session.
+func judgeDemoPostgresRole(facts demoPostgresRoleFacts, schemaName string) error {
 	role := strings.ToLower(facts.Role)
 	if role == "postgres" || role == "neondb_owner" || strings.HasSuffix(role, "_owner") || facts.Privileged {
 		return errDemoPostgresOwnerRole
@@ -370,9 +381,6 @@ func judgeDemoPostgresRole(facts demoPostgresRoleFacts, schemaName string, libra
 	}
 	if facts.CanWrite || facts.CanCreate {
 		return errDemoPostgresWritableRole
-	}
-	if !libraryBoundsStatements && (facts.StatementTimeoutMS <= 0 || facts.StatementTimeoutMS > demoPostgresMaxStatementTimeout.Milliseconds()) {
-		return errDemoPostgresStatementTime
 	}
 	if len(facts.ReadableSchemas) != 1 || facts.ReadableSchemas[0] != schemaName {
 		return errDemoPostgresSchemaScope
@@ -390,7 +398,7 @@ func checkDemoPostgresSource(ctx context.Context, dsn, schemaName string) error 
 	if err != nil {
 		return err
 	}
-	return judgeDemoPostgresRole(facts, schemaName, libraryEnforcesMountHardening)
+	return judgeDemoPostgresRole(facts, schemaName)
 }
 
 // demoPostgresScopeError reports a mounted collection outside the dataset schema.
