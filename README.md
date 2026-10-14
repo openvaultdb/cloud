@@ -51,21 +51,30 @@ Cloud Run service in [`server/`](server/). Two per-IP rate-limit bindings guard
 them, separate from the Northwind/OAuth bucket (`src/ovdb-limits.ts`,
 `wrangler.jsonc`):
 
-| Binding | Routes | Limit per IP |
+| Binding | Routes | Limit per client |
 | --- | --- | --- |
 | `OVDB_QUERY_LIMITER` (namespace 17033) | `/v1/dtql`, `/v1/databases/{db}/dtql`, `/query`, `/batch`, `/read` | 60 requests / 60 s |
 | `OVDB_READ_LIMITER` (namespace 17034) | every other forwarded OVDB route | 300 requests / 60 s |
+| `OVDB_PREFLIGHT_LIMITER` (namespace 17035) | `OPTIONS` preflights to any of them | 600 requests / 60 s |
 
 The service runs at most two instances of two concurrent requests with a 10 s
 query timeout, so 60 queries a minute (1/s sustained) from one address is
-already a large share; DataTug issues one or two queries per view. Preflight
-`OPTIONS` is never counted. A limited request gets
-`429 {"error":{"code":"rate_limited",…}}` with `Retry-After: 60`,
-`Cache-Control: no-store`, `Vary: Origin`, and `Access-Control-Allow-Origin`
-for the DemoDB/DataTug/Chinook origins the service itself allows, so browser
-clients can read it. A missing binding fails open (the previous behaviour).
-Cloudflare's limiter counts per location and is eventually consistent: these
-are abuse ceilings, not quotas.
+already a large share; DataTug issues one or two queries per view. A client is
+an IPv4 address, or an IPv6 /64 prefix (one subscriber usually holds a whole
+/64). A limited request gets `429 {"error":{"code":"rate_limited",…}}` with
+`Retry-After: 60`, `Cache-Control: no-store`, `Vary: Origin`, and
+`Access-Control-Allow-Origin` for the DemoDB/DataTug/Chinook origins the service
+itself allows, so browser clients can read it. A missing binding fails open
+(the previous behaviour) and logs one `console.warn` per isolate. Cloudflare's
+limiter counts per location and is eventually consistent: these are abuse
+ceilings, not quotas.
+
+The path is canonicalised once and that one spelling is both classified and
+forwarded, because Go decodes percent-escapes before routing (`d%74ql` is
+`dtql`). Escapes of unreserved characters are decoded and other escapes keep
+upper-case hex; a path under `/v1`, `/ovdb` or `/.well-known` with a malformed
+escape, an encoded slash or backslash (`%2F`, `%5C`), an empty segment (`//`),
+a `.`/`..` segment or a `;` parameter is refused with `400 invalid_path`.
 
 Cloud Run is deployed `--allow-unauthenticated`, so its `*.run.app` URL would
 bypass these limits. To close that, bind the same random value (32-128
