@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "npm run types && npm run typecheck && npm test && npm run deploy:dry",
-    "deploy": "wrangler deploy",
-    "deploy:dry": "wrangler deploy --dry-run",
+    "check": "npm run prepare:dependencies && npm run types && npm run typecheck && npm test && npm run test:deploy && npm run deploy:dry",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:dry": "node scripts/prepare-dalgo-core.mjs && wrangler deploy --dry-run",
     "dev": "wrangler dev --local",
-    "test": "vitest run && npm run test:registry-search",
+    "postinstall": "node scripts/prepare-dalgo-core.mjs",
+    "prepare:dependencies": "node scripts/prepare-dalgo-core.mjs",
+    "test:postgres": "vitest run -c vitest.node.config.ts",
+    "test:deploy": "node --test scripts/deploy.test.mjs",
+    "test": "vitest run && npm run test:postgres && npm run test:registry-search",
     "test:registry-search": "node --test registry-search/test/*.node.mjs",
     "benchmark:registry-search": "node registry-search/benchmark.mjs",
     "deploy:registry-search:dry": "wrangler deploy --dry-run --config registry-search/wrangler.jsonc",
@@ -17,9 +21,14 @@
     "typecheck": "tsc --noEmit",
     "types": "wrangler types"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@dalgo/core": "https://codeload.github.com/dal-go/dalgo-js/tar.gz/b863f32d2e92a0784e9633aa0eaa14d2d5528336",
+    "@dalgo/d1": "https://github.com/dal-go/dalgo-http-adapters/releases/download/d1-v0.2.0/dalgo-d1-0.2.0.tgz",
+    "@neondatabase/serverless": "1.2.0"
+  },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.2",
+    "@electric-sql/pglite": "^0.5.9",
     "@types/node": "^26.4.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",

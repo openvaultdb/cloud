@@ -2,6 +2,13 @@ import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import {
+  createNorthwindD1Handler,
+  createNorthwindNeonHandler,
+  northwindRateLimited,
+  type NorthwindEnv,
+  type NorthwindNeonQueryFactory,
+} from "./northwind";
+import {
   proxyCloudDatabase,
   proxyDeviceAuthorization,
   type DeviceAuthEnv,
@@ -10,6 +17,7 @@ import {
 
 export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
+  northwindNeonQueryFactory?: NorthwindNeonQueryFactory,
 ): ExportedHandler<Env> {
   const publicECB = createECBPublicProxy(upstreamFetch);
   return {
@@ -34,6 +42,16 @@ export function createWorker(
             return jsonResponse({ error: "ECB query request refused." }, 405);
           }
           return proxyECB(request, env, upstreamFetch);
+        }
+        if (url.pathname.startsWith("/northwind/") && request.method !== "OPTIONS" &&
+          !(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "northwind"))) {
+          return northwindRateLimited(request);
+        }
+        if (url.pathname.startsWith("/northwind/d1/")) {
+          return await createNorthwindD1Handler(request, env as NorthwindEnv);
+        }
+        if (url.pathname.startsWith("/northwind/neon/")) {
+          return await createNorthwindNeonHandler(request, env as NorthwindEnv, northwindNeonQueryFactory);
         }
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
