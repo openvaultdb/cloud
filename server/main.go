@@ -18,11 +18,13 @@ import (
 )
 
 func main() {
-	databases, err := configuredDatabases()
-	if err != nil {
-		log.Fatalf("load sample database inventory: %v", err)
+	if len(os.Args) > 1 {
+		if err := runSourceFreeProbe(os.Args[1:], os.Stdout); err != nil {
+			log.Fatal("source-free probe failed")
+		}
+		return
 	}
-	handler, closeDatabases, err := newHandlerWithProviders(databases)
+	databases, handler, closeDatabases, err := configuredHandler()
 	if err != nil {
 		log.Fatalf("mount sample databases: %v", err)
 	}
@@ -36,7 +38,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ErrorLog: safeHTTPErrorLog(os.Stderr)}
 	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	go func() {
@@ -66,21 +68,50 @@ func newHandlerWithManifests(manifests map[string]string) (http.Handler, func() 
 }
 
 func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() error, error) {
+	return newHandlerWithStorage(providers, sealedCopy, nil)
+}
+
+func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage, image *protectedImage) (http.Handler, func() error, error) {
+	if strategy != sealedCopy && strategy != protectedImageStorage {
+		return nil, nil, errors.New("unsupported selected storage strategy")
+	}
+	if strategy == protectedImageStorage && image == nil {
+		return nil, nil, errors.New("protected-image startup proof is missing")
+	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
 	if len(providers) == 0 {
 		return nil, nil, errors.New("no sample database manifests configured")
 	}
 	databases := make(map[string]*core.Database, len(providers))
 	corsOrigins := make(map[string]struct{})
+	profiles := map[string]server.ReadProfile{}
 	for _, provider := range providers {
 		id, manifest := provider.ID, provider.Manifest
-		if manifest == "" {
+		if provider.ReadProfile != "" || provider.ServingAdapter != "" || provider.PublisherManifest != nil || provider.PublicDescriptor != nil {
+			if err := validateRuntimeMode(provider, 2); err != nil {
+				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+			}
+		}
+		if manifest == "" && provider.nativePostgres == nil {
 			return nil, nil, errors.Join(fmt.Errorf("manifest path for database %q is empty", id), closeMountedDatabases(databases))
 		}
 		if _, exists := databases[id]; exists {
 			return nil, nil, errors.Join(fmt.Errorf("database ID %q is configured more than once", id), closeMountedDatabases(databases))
 		}
-		database, err := mount.File(manifest)
+		var database *core.Database
+		var err error
+		if provider.ReadProfile != "" {
+			if strategy == protectedImageStorage {
+				database, err = mountSelectedImage(provider, image)
+			} else {
+				database, err = mountSelectedSnapshot(provider)
+			}
+			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
+		} else if provider.nativePostgres != nil {
+			database, err = mountDemoPostgres(provider)
+		} else {
+			database, err = mount.File(manifest)
+		}
 		if err != nil {
 			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 		}
@@ -104,12 +135,33 @@ func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() 
 		origins = append(origins, origin)
 	}
 	sort.Strings(origins)
-	options := append(cloudServerOptions(),
+	cors := server.ParseCORSOrigins(origins)
+	if cors != nil {
+		pins := []string{"OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256"}
+		var err error
+		cors, err = cors.WithHeaders(pins, pins)
+		if err != nil {
+			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+		}
+	}
+	hasNativePostgres := false
+	for _, provider := range providers {
+		if provider.nativePostgres != nil {
+			hasNativePostgres = true
+			break
+		}
+	}
+	options := append(cloudServerOptions(hasNativePostgres),
 		server.WithReadOnly(true),
+		server.WithDatabaseReadProfiles(profiles),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
-		server.WithCORS(server.ParseCORSOrigins(origins)),
+		server.WithCORS(cors),
 	)
-	handler := server.New("demodb-cloud", databases, options...).Handler()
+	checked, err := server.NewChecked("demodb-cloud", databases, options...)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+	}
+	handler := checked.Handler()
 	return handler, func() error { return closeMountedDatabases(databases) }, nil
 }
 

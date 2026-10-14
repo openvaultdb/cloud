@@ -1,5 +1,110 @@
 # Read-only sample database service
 
+## Operator-selected ECB original HTTP query path
+
+`ecb_candidate.go` compiles the pinned host composition for the original ECB
+daily HTTP resource. It remains off by default. The Go service selects it only
+when `OVDB_ECB_ENABLED=true`, `OVDB_ECB_HOST_CONFIG` names a separately
+reviewed operator JSON document, and `OVDB_ECB_PROXY_SECRET` supplies a
+dedicated 32 to 128 character ASCII letter, digit, `_` or `-` secret. A present candidate file alone does nothing.
+Selection also requires `OVDB_ECB_ADMISSION_FILE` and its exact raw-byte
+SHA-256 in `OVDB_ECB_ADMISSION_SHA256`. This operator-owned decision is
+separate from the OVDB preparatory B1 proposal. Its closed JSON format is
+`ovdb-ecb-b1-operator-admission/1` with decision
+`operator-free-transient-read-only`, nonempty `approvedBy`, RFC 3339
+`approvedAt`, and these exact fields: `hostConfigSHA256` of the operator host
+JSON, `publisherManifestSHA256` equal to the pinned original publisher SHA in
+`ecb_candidate.go`, `rightsDigest` equal to its pinned rights SHA,
+`executorId: openvaultdb-cloud`, `resourceId: ecb-daily`, `method: POST`,
+`path: /v1/databases/ecb/dtql`, `maxReadsPerExecution: 1`, `maxRows: 50`,
+`publicAccess: false`, and `paidAccess: false`. The gate refuses a missing,
+altered, duplicate-key, broader or unbound decision before mounting and
+rechecks the host-config digest during assembly. The named approver is an
+operator assertion, not an identity proof by this service. Keep both JSON
+files and the local HTTP manifest under operator control; review their exact
+raw-byte hashes before configuring a service.
+
+An operator can prepare the decision from this shape after independently
+reviewing the exact pinned host JSON and ECB terms. Replace the placeholder
+digest and approver; never deploy this example as an approval:
+
+```json
+{
+  "format": "ovdb-ecb-b1-operator-admission/1",
+  "decision": "operator-free-transient-read-only",
+  "approvedBy": "<operator identity>",
+  "approvedAt": "<RFC 3339 time>",
+  "hostConfigSHA256": "<SHA-256 of exact host JSON bytes>",
+  "publisherManifestSHA256": "399ce77bc4513b1a819f61e26a54fe8e6c46569b2b45ea078582d9ad6758697e",
+  "rightsDigest": "08669fda7a7d255d1c77d2be733e587a23bb2ff1a916e96c727b82d2540cdc93",
+  "executorId": "openvaultdb-cloud",
+  "resourceId": "ecb-daily",
+  "method": "POST",
+  "path": "/v1/databases/ecb/dtql",
+  "maxReadsPerExecution": 1,
+  "maxRows": 50,
+  "publicAccess": false,
+  "paidAccess": false
+}
+```
+
+The [ECB reuse conditions](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html)
+require accurate reproduction and ECB source citation, an explicit notice of
+modification, and specific free-original notices when information is put in
+sold documents. The selected `sourceRight` carries attribution, the free ECB
+resource link and the XML-to-row transformation notice. Whether a paid SaaS
+presentation falls under the sold-document condition, and whether its UI meets
+the before-payment and each-access notice duties, is a separate rights decision.
+This operator-only admission does not infer it.
+
+The selected Go handler admits only `POST /v1/databases/ecb/dtql`; other ECB
+paths, passive reads and query strings do not reach the ECB provider. Existing
+sample routes retain their current handler.
+
+The candidate assembly requires an operator-owned JSON document with format
+`ovdb-ecb-host-candidate/1`, paths to the original publisher manifest and a
+separate local HTTP storage manifest, the reviewed publisher commit and Git
+blob, decoder version and module version, and the exact detached `sourceRight`
+and `binding` from the reviewed preparatory B1 proposal. It verifies the
+original publisher bytes, SHA-256 and Git blob, and the complete rights digest
+before mounting. The local storage manifest must match `ecbHTTPManifest`
+byte for byte:
+strict `ecb/daily`, fixed `ecb-daily/1` HTTP profile, native string fields and
+no retention. The server also checks the mounted manifest after opening it.
+It uses the stable `openvaultdb-cloud` rights identity and the library's
+`ecb-public-free/1` request profile. Request Host, query data and command-line
+flags cannot select this composition.
+
+The Cloudflare Worker has a separate exact route,
+`POST /ecb/v1/databases/ecb/dtql`. It requires `ECB_ENABLED=true` and
+`ECB_RUN_ORIGIN` set to an HTTPS root origin under `.run.app`, with no port,
+credentials, query or fragment. The origin must exactly match the existing
+`CHINOOK_RUN_ORIGIN` binding for that same Go service. `ECB_PROXY_SECRET` must
+hold the same secret as the Go service. The Worker sends it in a dedicated upstream header;
+client-supplied values are discarded. The Go route returns 404 before provider
+I/O when the secret is missing, wrong or duplicated. The Worker forwards the query to the fixed Go path
+through the no-retention proxy, using `cache: no-store` and a `no-store`
+response. It also requires an independent 32 to 128 character
+`ECB_OPERATOR_TOKEN` secret and exact `X-OVDB-ECB-Operator-Token` request
+header. Missing, wrong or duplicated tokens return 404 before upstream I/O,
+and the token is never forwarded. This selected route is only for controlled
+free operator requests. These ECB bindings are absent from `wrangler.jsonc`;
+no production configuration or deployment is changed by this code.
+
+Synthetic tests enter `configuredHandler` and `createWorker().fetch` with
+invented XML and an injected transport. They do not contact ECB. The opt-in
+`TestECBSelectedCrossRuntimeChain` starts a loopback Go HTTP server and runs a
+Worker test through it. It covers a bounded row, refusal before provider I/O,
+and a marker-bearing provider panic across the selected path. The preparatory
+B1 proposal is never a runtime input. B1 completion requires an actual
+operator-reviewed decision and remains unclaimed by these tests. B2 and B3
+remain open; Cloud Run, browser and operational sink evidence is still absent. Directory
+registration and public activation remain blocked.
+
+The separate [IANA operator query component](IANA.md) is also default off and
+synthetic-only. It requires its own reviewed admission and credentials; this ECB
+configuration does not enable it.
+
 The Go service mounts the database providers listed in [`providers.json`](providers.json)
 through the real `openvaultdb-go` server. A provider entry pins the GitHub
 repository commit, provider manifest, contract, checksum index, public database
@@ -35,6 +140,28 @@ adapter quotes them only when generating SQL.
 Chinook keeps its historical comma-separated composite identifiers. The live
 OVDB mount exposes physical tables; provider views remain represented in the
 published schema metadata and exports.
+
+## Optional DemoDB PostgreSQL editions
+
+The runtime can additionally mount the six native DemoDB editions as
+`chinook-postgresql`, `northwind-postgresql`, `pubs-postgresql`,
+`sakila-postgresql`, `adventureworks-postgresql`, and `employees-postgresql`.
+Set `OVDB_DEMODB_POSTGRES_ENABLED=true` and bind each corresponding
+`OVDB_PG_CHINOOK_DSN`, `OVDB_PG_NORTHWIND_DSN`, `OVDB_PG_PUBS_DSN`,
+`OVDB_PG_SAKILA_DSN`, `OVDB_PG_ADVENTUREWORKS_DSN`, and
+`OVDB_PG_EMPLOYEES_DSN` from Secret Manager. Enabling the feature without all six
+DSNs fails startup; an unset or false feature flag leaves the SQLite-only
+inventory unchanged. DSNs are only read by the server and are not written into
+the image, inventory, discovery responses, or temporary manifests.
+
+The runtime manifest for each mount is created temporarily and uses the
+library's native PostgreSQL collection IDs. The consumer excludes only the
+selected schema's `_import_manifest` relation. Each source role must retain its
+reviewed TLS-verified, read-only, selected-schema grants. Native PostgreSQL
+supports bounded relational DTQL reads and joins; the legacy `/query` route is
+not advertised for these mounts. The SQLite-only memory measurements below do
+not cover the six additional pools and schemas. Keep this opt-in disabled in
+production until the shipping-image and all-six live memory/query proof pass.
 
 The default legacy adapter reserves a native column named `id` (case-insensitively), because the
 read-only record adapter uses that name for serving identity. A source table
@@ -89,7 +216,7 @@ library only counts the JSON size of what it holds, so the limits are set in
 | Database-route query slots | 1 | 4 |
 | Rows one request may read from sources | 40,000 | 100,000 |
 | Snapshot spool | 2 slots of 64 MiB | 2 slots of 512 MiB |
-| Join engines | `sqlite` | `sqlite`, `ingitdb` |
+| Join engines | `sqlite` (PostgreSQL is opt-in) | `sqlite`, `ingitdb` |
 
 Query timeout (10 s), queue wait (1 s) and source bytes (64 MiB) are the library
 defaults. `limits.go` carries the arithmetic: the server at rest, the snapshot spool
@@ -110,8 +237,12 @@ buffer the figure is measured on; `TestCloudMeasureSingleCollectionReads` (set
 limit gets the library's answer: `422 query_budget_exceeded` with the budget it
 reached, `503 query_capacity` when no slot frees within the queue wait, `413
 snapshot_too_large` for a larger snapshot. A whole-collection read that outgrows the
-8 MiB buffer is answered `500` by the library, as before the bump; adding a limit on
-that endpoint belongs to the library. `/.well-known/openvaultdb` states the limits
+8 MiB response buffer is not a successful result: the default `application/json`
+stream is aborted after rows have been written, while a caller that negotiates
+`application/vnd.openvaultdb.query-stream+json` receives a bounded terminal
+`complete:false` with a `query_budget_exceeded` / `response_bytes` error. The
+fixture-backed capacity test checks the negotiated terminal and counts it as a
+refusal, never as an answered read. `/.well-known/openvaultdb` states the limits
 and the join engines this server enforces. It also states the library's fixed
 ceiling of 100,000 groups; with a budget of 40,000 source rows a grouping cannot
 reach more groups than the rows it reads, so 40,000 is the effective ceiling.
@@ -136,9 +267,12 @@ the limits were measured against: re-measure as described in
 The CI job builds and tests the Linux binary with all pinned fixtures, then
 publishes that exact binary plus the verified fixture directory. The Cloud Run
 deploy job checks the binary and every provider receipt, deploys the existing
-service, and runs profile, collection, query, CORS, and read-only checks for
-each inventory entry before it publishes the service-origin receipt consumed
-by the Cloudflare Worker deploy. Deployment keeps the existing Cloud Run
+service, and publishes the validated service-origin and source-SHA metadata
+consumed by the Cloudflare Worker deploy. Live profile, collection, query, CORS,
+and read-only checks run only when the repository variable
+`OVDB_CLOUD_RUN_SMOKE_ENABLED` is `true`; an unset variable skips those HTTP
+checks while retaining deployment and metadata publication. This metadata alone
+does not prove live query behavior. Deployment keeps the existing Cloud Run
 service, region, memory and CPU, Worker origin, and compatibility environment
 variables; the per-instance concurrency, which the memory arithmetic depends on, is
 written out in the deploy command.
@@ -163,22 +297,67 @@ native identifier semantics. Empty or non-unique transport identities refuse
 preparation. Sources remain unchanged unless the caller explicitly consumes a
 verified temporary staging source.
 
-Only opt-in YAML adds `storage.sqlite.record_keys` and `busy_timeout: 0s`.
-The YAML owns the complete table-to-serving-column map. Version 2 generated
-`inventory.json` adds `manifestSha256` and copies supplied adapter/profile
-values, without a second key map. This is **offline artifact preparation only**:
-the current Go runtime rejects inventory version 2, and its existing manifest
-parser rejects the new SQLite fields. `readProfile` is a future runtime policy
-input; preparing it does not enforce HTTP limits or authorize publication.
-Do not change production provider entries until released OVDB/SQL prerequisites
-and the separately reviewed runtime integration have landed.
+For `readProfile: "bounded-immutable/1"`, a closed `publisherManifest`
+`{path, sha256, bytes}` is mandatory. It is fetched from the same repository and
+full revision as other metadata, verified before the SQLite artifact is fetched,
+and parsed by `cmd/publisher-selection` using the existing pinned Go YAML library.
+Opt-in preparation needs the Go toolchain and module cache and invokes the helper
+once per provider. Legacy preparation remains standalone Python. The YAML parser
+rejects aliases, anchors, duplicate keys, unknown root fields, multiple documents
+and files over 2 MiB.
 
-The follow-on adoption work owns public route/homepage/descriptor/attribution
-preparation, descriptor field naming, runtime inventory validation, verified
-manifest mounting, four-pin immutable reads, request deadlines/order/CORS,
-smoke, and full six-plus-two capacity/publication proof. This offline version 2
-subset deliberately refuses those future input fields rather than silently
-ignoring them. W1 no-website wrappers therefore await that integration.
+The pinned publisher's `recordsets` is the sole selection authority. Only those
+physical tables receive serving helpers, indexes, schema collections and the
+complete `storage.sqlite.record_keys` map with `busy_timeout: 0s`. All native
+tables, including unselected diagnostics, retain their metadata and typed values
+in the serving copy. The public descriptor's selected native schema, homepage,
+Cloud routes and query availability must agree with provider/publisher metadata.
+There is no provider-name selection branch or second authored selection list.
+
+Runtime inventory version 2 adds `manifestSha256`, adapter/profile and publisher
+pin, a closed `publicDescriptor` pin and explicit boolean `requirePublishedQuery`.
+Preparation copies checked bytes to `<id>.publisher.yaml` and `<id>.descriptor.json`;
+original pin paths identify the files in the same pinned provider repository.
+Before mounting, runtime checks these pins, selection, generated schema/key
+allocation and native field types, exact routes and descriptor capability flags.
+Mixed version 2 inventories include legacy entries with manifest hashes. Version 1
+retains its receipt shape and refuses opt-in profile fields.
+
+Bounded startup streams SQLite through a held handle into a new private directory,
+hashes exactly the copied bytes, writes exactly the hashed/parsed manifest bytes
+there, then seals the directory (0500) and files (0400) before mounting. The driver
+opens private paths; replacing original files cannot replace mounted bytes. The
+service exposes only the handler, with no remount API. This trusts the process
+owner and OS credentials; another process with the same credentials deliberately
+modifying private files is outside this boundary. Closing a database removes its
+snapshot; failed startup removes staging copies. Metadata is bounded to 2 MiB per
+file and SQLite to 2 GiB per provider. The additional complete disk copy and startup
+hashing cost require six-plus-two capacity measurement; tiny fixtures establish no
+production memory/disk or latency headroom. Using the current native snapshot
+sizes only as an estimate, ROR's 238,563,328 bytes add 227.51 MiB (44.44% of
+512 MiB); Geo's 75,304,960 bytes add 71.82 MiB. Together these copies alone are
+299.33 MiB (58.46%), before serving helpers, the six legacy providers, heap,
+SQLite connections/cache and snapshot spooling. These are source-size arithmetic,
+not measured serving sizes or admitted memory use. Cloud Run's [writable
+filesystem uses instance memory](https://docs.cloud.google.com/run/docs/container-contract#filesystem).
+If this copy approach fails the later unchanged 512 MiB capacity gate, an image
+immutable binding must receive its own reviewed identity proof; do not increase
+resources or truncate native diagnostics to conceal the cost.
+
+`server.NewChecked` derives immutable per-database profiles from checked inventory.
+Candidate query advertisement stays false; final advertisement requires matching
+descriptor flags. The library mount verifies every selected serving ID. Legacy
+providers retain their read/snapshot behavior and existing limits, including the
+48 AdventureWorks decimal fields.
+
+The production `providers.json` and protected image continue to serve the six
+SQLite providers. Native PostgreSQL is a separate runtime opt-in and does not
+change that inventory. Four-pin HTTP guards, deadline/cache middleware, Worker
+propagation, public descriptor routes, attribution downloads, deploy verification
+and smoke, actual Geo/ROR preparation and all-key proof, six-plus-two capacity and
+live journeys, final wrapper repins, Directory and App admission remain downstream
+gates. The six PostgreSQL sources must pass their all-source runtime proof before
+the production opt-in or public edition admission is enabled.
 
 All immutable network assets use the exact raw GitHub HTTPS origin and a full
 40-hex commit. Every relative path segment is validated before URL encoding;
@@ -199,3 +378,70 @@ wb run -- python3 -m unittest discover -s server -p 'test_*.py' -v
 Successful Cloud Worker CI on `main` triggers the existing production deployment
 workflows. PR validation does not deploy; the landing owner controls when to
 merge this offline change.
+
+### Explicit selected storage at startup
+
+The production scratch image fixes `OVDB_SELECTED_STORAGE=protected-image` and
+uses only `/srv/fixture/inventory.json`. Before inventory access, Linux startup
+requires actual UID/GID 65532 and checks `/`, `/srv`, the fixture directory and
+its complete consumed tree: root ownership, ordinary directories without
+non-owner writes, regular singly-linked nonwritable files, no symlinks/special
+files, bounded metadata/SQLite sizes and no SQLite journal/WAL/SHM companions.
+Preparation rejects nested, hidden, linked and special output entries. The flat
+file set permits numeric Dockerfile frontend 1.2 `COPY --chmod=0444`; this avoids
+requiring newer symbolic-mode support. The build sets modes and owners using
+`COPY`; startup never chmods or copies
+image assets. `/tmp` is separately created with sticky mode 1777 for existing
+bounded legacy spools. Changing paths, using a legacy manifest override,
+observing relevant permission-bypass capabilities or an additional mount over
+`/srv`/the fixture tree, or failing any pin/profile check aborts before a handler
+or listener. There is no automatic fallback or partial provider omission.
+
+The trusted build/deploy owner must inspect the final merged image filesystem
+and record the exact image digest and revision configuration: no covering
+volume, mutable backing, external writer or application authority that defeats
+these permissions. The process owner/platform administrator remains trusted.
+Available Linux UID/group/capability/NoNewPrivs/mount observations are recorded;
+missing `/proc` observations alone rely on that admitted Cloud deployment
+profile rather than pretending to provide universal platform attestation.
+Observed unsafe evidence is never waived. NoNewPrivs is diagnostic and does not
+revoke existing authority ([Linux documentation](https://docs.kernel.org/userspace-api/no_new_privs.html)).
+
+Each SQLite file is streamed and pinned once at inventory admission, with
+checkpointed rollback-mode header and opened-file identity checks. Selected
+mounts reopen the exact protected manifest and `./<id>.sqlite` through the
+existing library API; the same fixed paths apply to driver, schema, sandbox and
+later connection opens. Direct-mode close/failure never removes image assets.
+All native diagnostics remain physically present and outside public routes.
+The production inventory remains the six legacy providers.
+
+For selected development/tests explicitly set `OVDB_SELECTED_STORAGE=sealed-copy`
+and `SAMPLE_DATABASES_INVENTORY` to the prepared inventory. This retains the
+captured private copy and cleanup/replacement tests. Unset storage retains the
+historical legacy-only environment contract; it refuses selected providers.
+Protected-image mode refuses non-Linux hosts.
+
+`python3 test_image_runtime.py` requires an already-running Linux Docker engine;
+it never installs/starts one. The disjoint `image-runtime.yml` CI job runs the
+finite synthetic experiment without listeners, mapped ports, secrets or deploys.
+It builds the production Dockerfile, records the final image config and entry
+modes, runs the real guard and checked handler as UID 65532, proves 16 native /
+11 selected tables, schema/ordinary/key reads, real SQLite reconnection, full
+handler reopen, denied SQL/filesystem writes, no selected writable copy, and
+hostile-image refusal. Its JSON receipt is a CI artifact. Cross-compilation and
+host tests do not substitute for this Linux result.
+
+This component does not admit actual Geo/ROR capacity. Complete six-plus-two
+fidelity/key proof, measured instance peak <=435 MiB under unchanged 512 MiB /
+1 CPU / concurrency 2, retained legacy spools, idle recovery and the existing
+10-second cancellation contract remain gates. Full startup must finish before
+listening within the actual configured startup-probe budget and Cloud Run's
+four-minute startup limit; record the observed margin. Tiny fixtures do not
+prove these conditions. The deploy owner must separately verify the actual
+Cloud revision and total memory accounting ([Cloud Run startup contract](https://docs.cloud.google.com/run/docs/container-contract#startup),
+[memory limits](https://docs.cloud.google.com/run/docs/configuring/services/memory-limits)).
+Transport pins/CORS, descriptor routes, wrappers and Directory/App public
+admission remain separate downstream gates.
+
+The separate default-off [public-free ECB completion candidate](ECB_PUBLIC.md)
+uses synthetic admission and a bounded authenticated completion gate.

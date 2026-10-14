@@ -81,6 +81,8 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 	type read struct {
 		form, database, collection string
 		status, answer             int
+		complete                   bool
+		errorCode                  string
 		growth                     uint64
 	}
 	var reads []read
@@ -92,6 +94,7 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 				body := fmt.Sprintf("from: {name: '%s'}\nlimit: 1000\n", strings.ReplaceAll(collection, "'", "''"))
 				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+id+"/dtql", strings.NewReader(body))
 				request.Header.Set("Content-Type", "application/yaml")
+				request.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
 				return request
 			}
 			for _, form := range []struct {
@@ -104,13 +107,26 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 			} {
 				response := httptest.NewRecorder()
 				growth := measureGrowth(func() { handler.ServeHTTP(response, form.request) })
-				reads = append(reads, read{form.name, id, collection, response.Code, response.Body.Len(), growth})
+				var envelope struct {
+					Complete *bool `json:"complete"`
+					Error    struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+					t.Fatalf("%s of %s %s returned invalid JSON: %v", form.name, id, collection, err)
+				}
+				complete := envelope.Complete != nil && *envelope.Complete
+				if response.Code == http.StatusOK && (envelope.Complete == nil || response.Header().Get("Content-Type") != "application/vnd.openvaultdb.query-stream+json") {
+					t.Fatalf("%s of %s %s returned a 200 without its negotiated stream footer", form.name, id, collection)
+				}
+				reads = append(reads, read{form.name, id, collection, response.Code, response.Body.Len(), complete, envelope.Error.Code, growth})
 			}
 		}
 	}
 	slices.SortFunc(reads, func(a, b read) int { return int(int64(b.growth) - int64(a.growth)) })
 	for _, r := range reads[:min(len(reads), 12)] {
-		t.Logf("%-16s %-14s %-48s status %d, answer %5.2f MiB, held %5.1f MiB", r.form, r.database, r.collection, r.status, float64(r.answer)/mebibyte, float64(r.growth)/mebibyte)
+		t.Logf("%-16s %-14s %-48s status %d complete=%t error=%s, answer %5.2f MiB, held %5.1f MiB", r.form, r.database, r.collection, r.status, r.complete, r.errorCode, float64(r.answer)/mebibyte, float64(r.growth)/mebibyte)
 	}
 	if got := reads[0].growth; got > measuredUngatedBytes {
 		t.Errorf("a read held %.1f MiB, above the %d MiB the arithmetic of limits.go uses: re-measure, then update both", float64(got)/mebibyte, measuredUngatedBytes/mebibyte)
@@ -165,5 +181,6 @@ func wireRequest(t *testing.T, database string, query core.Query) *http.Request 
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+database+"/query", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
 	return request
 }

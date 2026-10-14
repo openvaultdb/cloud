@@ -227,6 +227,7 @@ def prepare(
     *,
     consume_source: bool = False,
     serving_adapter: str | None = None,
+    selected_tables: list[str] | None = None,
 ) -> Path:
     actual_sha256 = sha256_file(source)
     if expected_sha256 and actual_sha256 != expected_sha256:
@@ -238,6 +239,9 @@ def prepare(
 
     if serving_adapter not in (None, "separate-id/1"):
         raise ValueError(f"unknown serving adapter: {serving_adapter!r}")
+
+    if selected_tables is not None and (serving_adapter != "separate-id/1" or not selected_tables or len(set(selected_tables)) != len(selected_tables)):
+        raise ValueError("selected tables require a non-empty unique separate-id selection")
 
     output.mkdir(parents=True, exist_ok=True)
     database_path = output / f"{database_id}.sqlite"
@@ -263,6 +267,9 @@ def prepare(
         )]
         if not tables:
             raise ValueError(f"{database_id} source contains no tables")
+        selected = tables if selected_tables is None else sorted(selected_tables)
+        if set(selected) - set(tables):
+            raise ValueError("publisher selection names absent physical tables")
         native_metadata = {table: table_metadata(connection, table) for table in tables}
         column_pragma = "table_xinfo" if serving_adapter else "table_info"
         native_columns = {table: [tuple(column[:6]) for column in connection.execute(f"PRAGMA {column_pragma}({quote_identifier(table)})")] for table in tables}
@@ -271,7 +278,7 @@ def prepare(
         native_views = tuple(connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='view' ORDER BY name"
         ))
-        for table in tables:
+        for table in selected:
             columns = native_columns[table]
             if not columns:
                 raise ValueError(f"table {table!r} has no readable columns")
@@ -288,12 +295,12 @@ def prepare(
             manifest.append(f'        {json.dumps(generated_objects[table][0])}: {{type: string}}')
 
         for table in tables:
-            if table_metadata(connection, table, generated_objects[table]) != native_metadata[table]:
+            if table_metadata(connection, table, generated_objects.get(table)) != native_metadata[table]:
                 raise ValueError(f"adapter preparation changed native schema metadata for {table!r}")
             if serving_adapter and native_value_digest(connection, table, native_columns[table]) != native_values[table]:
                 raise ValueError(f"adapter preparation changed native row values for {table!r}")
         if serving_adapter:
-            record_keys = {table: generated_objects[table][0] for table in tables}
+            record_keys = {table: generated_objects[table][0] for table in selected}
             manifest[1] = f"storage: {{engine: sqlite, path: ./{database_id}.sqlite, sqlite: {{record_keys: {json.dumps(record_keys)}, busy_timeout: 0s}}}}"
         if tuple(connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='view' ORDER BY name"

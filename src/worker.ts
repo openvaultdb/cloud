@@ -1,5 +1,6 @@
+import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
-import { proxyChinook } from "./chinook";
+import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import {
   createNorthwindD1Handler,
   createNorthwindNeonHandler,
@@ -17,10 +18,30 @@ export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
   northwindNeonQueryFactory?: NorthwindNeonQueryFactory,
 ): ExportedHandler<Env> {
+  const publicECB = createECBPublicProxy(upstreamFetch);
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        if (url.pathname === ECB_PUBLIC_PATH || url.pathname === "/ecb-public" || url.pathname.startsWith("/ecb-public/")) return publicECB(request, env);
+        if (url.pathname === "/iana/v1/databases/iana-http-status/dtql") {
+          if ((env as Env & { IANA_ENABLED?: string }).IANA_ENABLED !== "true") {
+            return jsonResponse({ error: "IANA OVDB is not configured." }, 503);
+          }
+          if (request.method !== "POST" || url.search !== "" || request.url.includes("?")) {
+            return jsonResponse({ error: "IANA query request refused." }, 405);
+          }
+          return proxyIANA(request, env, upstreamFetch);
+        }
+        if (url.pathname === "/ecb/v1/databases/ecb/dtql") {
+          if ((env as Env & { ECB_ENABLED?: string }).ECB_ENABLED !== "true") {
+            return jsonResponse({ error: "ECB OVDB is not configured." }, 503);
+          }
+          if (request.method !== "POST" || url.search !== "") {
+            return jsonResponse({ error: "ECB query request refused." }, 405);
+          }
+          return proxyECB(request, env, upstreamFetch);
+        }
         if (url.pathname.startsWith("/northwind/d1/")) {
           return await createNorthwindD1Handler(request, env as NorthwindEnv);
         }
@@ -188,6 +209,14 @@ export function createWorker(
         }
         return withAssetSecurityHeaders(await env.ASSETS.fetch(request));
       } catch (error) {
+        if (url.pathname.startsWith("/iana/")) {
+          console.error("iana_worker_internal_error");
+          return jsonResponse({ error: "IANA OVDB is temporarily unavailable." }, 503);
+        }
+        if (url.pathname.startsWith("/ecb/")) {
+          console.error("ecb_worker_internal_error");
+          return jsonResponse({ error: "ECB OVDB is temporarily unavailable." }, 500);
+        }
         console.error(
           JSON.stringify({
             message: "Unhandled OpenVaultDB Cloud request error",

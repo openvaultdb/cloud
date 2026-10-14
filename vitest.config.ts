@@ -37,6 +37,9 @@ export default defineConfig({
           OVDB_DEVICE_AUTH_PROXY_SECRET: "test-proxy-secret",
           NORTHWIND_NEON_TEST_URL: northwindNeonTestURL,
           NORTHWIND_NEON_TEST_ENABLED: northwindNeonTestURL.length > 0 ? "true" : "false",
+          ...(process.env.ECB_PUBLIC_CHAIN_ADMISSION ? { ECB_PUBLIC_CHAIN_ADMISSION: process.env.ECB_PUBLIC_CHAIN_ADMISSION, ECB_PUBLIC_CHAIN_DIGEST: process.env.ECB_PUBLIC_CHAIN_DIGEST } : {}),
+          ...(process.env.ECB_CHAIN_BRIDGE_URL ? { ECB_CHAIN_BRIDGE_URL: process.env.ECB_CHAIN_BRIDGE_URL } : {}),
+          ...(process.env.IANA_CHAIN_BRIDGE_URL ? { IANA_CHAIN_BRIDGE_URL: process.env.IANA_CHAIN_BRIDGE_URL } : {}),
         },
         d1Databases: {
           NORTHWIND_D1: "local-test-northwind",

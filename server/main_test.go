@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,14 @@ func TestPublicChinookJourney(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Errorf("GET %s: %d %s", path, response.Code, response.Body.String())
 		}
+		if path == "/v1/databases/chinook" {
+			var descriptor struct {
+				Capabilities map[string]bool `json:"capabilities"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &descriptor); err != nil || !descriptor.Capabilities["dtqlStreaming"] {
+				t.Errorf("Chinook descriptor lacks streaming DTQL capability: %v", err)
+			}
+		}
 		if path == "/ovdb/dbs/chinook" && !strings.Contains(response.Body.String(), "https://cloud.openvaultdb.com/ovdb/dbs/chinook") {
 			t.Error("database profile lacks canonical cloud URL")
 		}
@@ -63,19 +72,59 @@ func TestPublicChinookJourney(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/dtql", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://chinookdb.com")
-	response := httptest.NewRecorder()
+	response := newFlushTrackingResponseWriter()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("DTQL: %d %s", response.Code, response.Body.String())
 	}
 	var result struct {
-		Records []json.RawMessage `json:"records"`
+		Records  []json.RawMessage `json:"records"`
+		Complete bool              `json:"complete"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Records) != 5 {
 		t.Fatalf("DTQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
 	}
+	if !result.Complete {
+		t.Fatal("DTQL response lacks complete:true footer")
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("default DTQL response Content-Type = %q, want application/json", got)
+	}
+	streamedRowBeforeCompletion := false
+	for _, flushedAt := range response.flushSizes {
+		if flushedAt < response.Body.Len() && bytes.Contains(response.Body.Bytes()[:flushedAt], result.Records[0]) {
+			streamedRowBeforeCompletion = true
+			break
+		}
+	}
+	if !streamedRowBeforeCompletion || len(response.flushSizes) < len(result.Records) {
+		t.Fatalf("DTQL did not flush each row before its completion footer: rows=%d flushes=%v", len(result.Records), response.flushSizes)
+	}
 	if response.Header().Get("Access-Control-Allow-Origin") != "https://chinookdb.com" {
 		t.Error("ChinookDB CORS origin missing")
+	}
+	// The public handler must preserve opt-in stream protocol negotiation.
+	// Existing callers keep ordinary application/json.
+	streamRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/dtql", bytes.NewReader(body))
+	streamRequest.Header.Set("Content-Type", "application/json")
+	streamRequest.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
+	streamResponse := httptest.NewRecorder()
+	handler.ServeHTTP(streamResponse, streamRequest)
+	if streamResponse.Code != http.StatusOK {
+		t.Fatalf("opt-in streaming DTQL: %d %s", streamResponse.Code, streamResponse.Body.String())
+	}
+	if got := streamResponse.Header().Get("Content-Type"); got != "application/vnd.openvaultdb.query-stream+json" {
+		t.Fatalf("opt-in DTQL response Content-Type = %q", got)
+	}
+	if got := strings.Join(streamResponse.Header().Values("Vary"), ", "); !strings.Contains(got, "Accept") {
+		t.Fatalf("opt-in DTQL Vary does not include Accept: %q", got)
+	}
+	var streamed struct {
+		Records  []json.RawMessage `json:"records"`
+		Complete bool              `json:"complete"`
+	}
+	if err := json.Unmarshal(streamResponse.Body.Bytes(), &streamed); err != nil || len(streamed.Records) != 5 || !streamed.Complete {
+		t.Fatalf("opt-in DTQL stream: records=%d complete=%t err=%v body=%s", len(streamed.Records), streamed.Complete, err, streamResponse.Body.String())
 	}
 	get := httptest.NewRecorder()
 	getURL := "/v1/databases/chinook/dtql?" + url.Values{
@@ -97,6 +146,39 @@ func TestPublicChinookJourney(t *testing.T) {
 	if write.Code != http.StatusForbidden {
 		t.Errorf("write was not rejected: %d %s", write.Code, write.Body.String())
 	}
+}
+
+type flushTrackingResponseWriter struct {
+	header     http.Header
+	Body       bytes.Buffer
+	Code       int
+	flushSizes []int
+}
+
+func newFlushTrackingResponseWriter() *flushTrackingResponseWriter {
+	return &flushTrackingResponseWriter{header: make(http.Header)}
+}
+
+func (w *flushTrackingResponseWriter) Header() http.Header { return w.header }
+
+func (w *flushTrackingResponseWriter) WriteHeader(status int) {
+	if w.Code == 0 {
+		w.Code = status
+	}
+}
+
+func (w *flushTrackingResponseWriter) Write(body []byte) (int, error) {
+	if w.Code == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.Body.Write(body)
+}
+
+func (w *flushTrackingResponseWriter) Flush() {
+	if w.Code == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	w.flushSizes = append(w.flushSizes, w.Body.Len())
 }
 
 func TestPublicNorthwindJourney(t *testing.T) {
