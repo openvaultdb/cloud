@@ -41,6 +41,8 @@ jobs:
         run: |
           printf '%s  %s\n' 'fea7d05421f0297adc18c41196f22b498c669abf78c2392b50343091df8810d7' 'testdata/northwind/artifacts/hosting-imports/d1.sql' | sha256sum --check --status
           echo "NORTHWIND_D1_SEED_SQL=${GITHUB_WORKSPACE}/testdata/northwind/artifacts/hosting-imports/d1.sql" >> "${GITHUB_ENV}"
+          printf '%s  %s\n' 'b6efe271401eba9d4738a2bbea294cc205dd6e02f47864bd3f21e195310afbee' 'testdata/northwind/artifacts/hosting-imports/postgres.sql' | sha256sum --check --status
+          echo "NORTHWIND_POSTGRES_SEED_SQL=${GITHUB_WORKSPACE}/testdata/northwind/artifacts/hosting-imports/postgres.sql" >> "${GITHUB_ENV}"
 
       - name: Install locked dependencies
         run: npm ci

@@ -1133,3 +1133,272 @@ export const NORTHWIND_EXPECTED_VIEW_ROWS = {
 } as const;
 
 export const NORTHWIND_D1_IMPORT_SHA256 = "fea7d05421f0297adc18c41196f22b498c669abf78c2392b50343091df8810d7";
+
+// Column types of the pinned northwind/postgres.sql import, read from information_schema.columns
+// (test/northwind-postgres.test.ts fails if this drifts). Collations and bound values follow these, not the SQLite types.
+export const NORTHWIND_PG_TYPES = {
+  "Alphabetical list of products": {
+    "ProductID": "bigint",
+    "ProductName": "text",
+    "SupplierID": "bigint",
+    "CategoryID": "bigint",
+    "QuantityPerUnit": "text",
+    "UnitPrice": "numeric",
+    "UnitsInStock": "bigint",
+    "UnitsOnOrder": "bigint",
+    "ReorderLevel": "bigint",
+    "Discontinued": "text",
+    "CategoryName": "text"
+  },
+  "Categories": {
+    "CategoryID": "bigint",
+    "CategoryName": "text",
+    "Description": "text",
+    "Picture": "bytea"
+  },
+  "Category Sales for 1997": {
+    "CategoryName": "text",
+    "CategorySales": "double precision"
+  },
+  "Current Product List": {
+    "ProductID": "bigint",
+    "ProductName": "text"
+  },
+  "Customer and Suppliers by City": {
+    "City": "text",
+    "CompanyName": "text",
+    "ContactName": "text",
+    "Relationship": "text"
+  },
+  "CustomerCustomerDemo": {
+    "CustomerID": "text",
+    "CustomerTypeID": "text"
+  },
+  "CustomerDemographics": {
+    "CustomerTypeID": "text",
+    "CustomerDesc": "text"
+  },
+  "Customers": {
+    "CustomerID": "text",
+    "CompanyName": "text",
+    "ContactName": "text",
+    "ContactTitle": "text",
+    "Address": "text",
+    "City": "text",
+    "Region": "text",
+    "PostalCode": "text",
+    "Country": "text",
+    "Phone": "text",
+    "Fax": "text"
+  },
+  "EmployeeTerritories": {
+    "EmployeeID": "bigint",
+    "TerritoryID": "text"
+  },
+  "Employees": {
+    "EmployeeID": "bigint",
+    "LastName": "text",
+    "FirstName": "text",
+    "Title": "text",
+    "TitleOfCourtesy": "text",
+    "BirthDate": "text",
+    "HireDate": "text",
+    "Address": "text",
+    "City": "text",
+    "Region": "text",
+    "PostalCode": "text",
+    "Country": "text",
+    "HomePhone": "text",
+    "Extension": "text",
+    "Photo": "bytea",
+    "Notes": "text",
+    "ReportsTo": "bigint",
+    "PhotoPath": "text"
+  },
+  "Invoices": {
+    "ShipName": "text",
+    "ShipAddress": "text",
+    "ShipCity": "text",
+    "ShipRegion": "text",
+    "ShipPostalCode": "text",
+    "ShipCountry": "text",
+    "CustomerID": "text",
+    "CustomerName": "text",
+    "Address": "text",
+    "City": "text",
+    "Region": "text",
+    "PostalCode": "text",
+    "Country": "text",
+    "Salesperson": "integer",
+    "OrderID": "bigint",
+    "OrderDate": "text",
+    "RequiredDate": "text",
+    "ShippedDate": "text",
+    "ShipperName": "text",
+    "ProductID": "bigint",
+    "ProductName": "text",
+    "UnitPrice": "double precision",
+    "Quantity": "bigint",
+    "Discount": "double precision",
+    "ExtendedPrice": "double precision",
+    "Freight": "numeric"
+  },
+  "Order Details": {
+    "OrderID": "bigint",
+    "ProductID": "bigint",
+    "UnitPrice": "numeric",
+    "Quantity": "bigint",
+    "Discount": "double precision"
+  },
+  "Order Details Extended": {
+    "OrderID": "bigint",
+    "ProductID": "bigint",
+    "ProductName": "text",
+    "UnitPrice": "double precision",
+    "Quantity": "bigint",
+    "Discount": "double precision",
+    "ExtendedPrice": "double precision"
+  },
+  "Order Subtotals": {
+    "OrderID": "bigint",
+    "Subtotal": "double precision"
+  },
+  "Orders": {
+    "OrderID": "bigint",
+    "CustomerID": "text",
+    "EmployeeID": "bigint",
+    "OrderDate": "text",
+    "RequiredDate": "text",
+    "ShippedDate": "text",
+    "ShipVia": "bigint",
+    "Freight": "numeric",
+    "ShipName": "text",
+    "ShipAddress": "text",
+    "ShipCity": "text",
+    "ShipRegion": "text",
+    "ShipPostalCode": "text",
+    "ShipCountry": "text"
+  },
+  "Orders Qry": {
+    "OrderID": "bigint",
+    "CustomerID": "text",
+    "EmployeeID": "bigint",
+    "OrderDate": "text",
+    "RequiredDate": "text",
+    "ShippedDate": "text",
+    "ShipVia": "bigint",
+    "Freight": "numeric",
+    "ShipName": "text",
+    "ShipAddress": "text",
+    "ShipCity": "text",
+    "ShipRegion": "text",
+    "ShipPostalCode": "text",
+    "ShipCountry": "text",
+    "CompanyName": "text",
+    "Address": "text",
+    "City": "text",
+    "Region": "text",
+    "PostalCode": "text",
+    "Country": "text"
+  },
+  "Product Sales for 1997": {
+    "CategoryName": "text",
+    "ProductName": "text",
+    "ProductSales": "double precision"
+  },
+  "ProductDetails_V": {
+    "ProductID": "bigint",
+    "ProductName": "text",
+    "SupplierID": "bigint",
+    "CategoryID": "bigint",
+    "QuantityPerUnit": "text",
+    "UnitPrice": "numeric",
+    "UnitsInStock": "bigint",
+    "UnitsOnOrder": "bigint",
+    "ReorderLevel": "bigint",
+    "Discontinued": "text",
+    "CategoryName": "text",
+    "CategoryDescription": "text",
+    "SupplierName": "text",
+    "SupplierRegion": "text"
+  },
+  "Products": {
+    "ProductID": "bigint",
+    "ProductName": "text",
+    "SupplierID": "bigint",
+    "CategoryID": "bigint",
+    "QuantityPerUnit": "text",
+    "UnitPrice": "numeric",
+    "UnitsInStock": "bigint",
+    "UnitsOnOrder": "bigint",
+    "ReorderLevel": "bigint",
+    "Discontinued": "text"
+  },
+  "Products Above Average Price": {
+    "ProductName": "text",
+    "UnitPrice": "numeric"
+  },
+  "Products by Category": {
+    "CategoryName": "text",
+    "ProductName": "text",
+    "QuantityPerUnit": "text",
+    "UnitsInStock": "bigint",
+    "Discontinued": "text"
+  },
+  "Quarterly Orders": {
+    "CustomerID": "text",
+    "CompanyName": "text",
+    "City": "text",
+    "Country": "text"
+  },
+  "Regions": {
+    "RegionID": "bigint",
+    "RegionDescription": "text"
+  },
+  "Sales Totals by Amount": {
+    "SaleAmount": "double precision",
+    "OrderID": "bigint",
+    "CompanyName": "text",
+    "ShippedDate": "text"
+  },
+  "Sales by Category": {
+    "CategoryID": "bigint",
+    "CategoryName": "text",
+    "ProductName": "text",
+    "ProductSales": "double precision"
+  },
+  "Shippers": {
+    "ShipperID": "bigint",
+    "CompanyName": "text",
+    "Phone": "text"
+  },
+  "Summary of Sales by Quarter": {
+    "ShippedDate": "text",
+    "OrderID": "bigint",
+    "Subtotal": "double precision"
+  },
+  "Summary of Sales by Year": {
+    "ShippedDate": "text",
+    "OrderID": "bigint",
+    "Subtotal": "double precision"
+  },
+  "Suppliers": {
+    "SupplierID": "bigint",
+    "CompanyName": "text",
+    "ContactName": "text",
+    "ContactTitle": "text",
+    "Address": "text",
+    "City": "text",
+    "Region": "text",
+    "PostalCode": "text",
+    "Country": "text",
+    "Phone": "text",
+    "Fax": "text",
+    "HomePage": "text"
+  },
+  "Territories": {
+    "TerritoryID": "text",
+    "TerritoryDescription": "text",
+    "RegionID": "bigint"
+  }
+} as const;

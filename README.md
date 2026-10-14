@@ -85,6 +85,19 @@ The worker allows browser reads from `https://northwind.demodb.dev`,
 deployment. Unsupported collections and fields are rejected, and SQL values
 are always bound parameters.
 
+Both routes apply one request policy before touching a database: a filter value
+that cannot be compared with its column (for example `"abc"` or `1.5` on an
+integer column) is `400 invalid_request`, never an empty page; an unknown
+collection is `422 unsupported_query`; `offset` is capped at 10000 (`400`
+beyond that); a failed query is a generic `500 query_failed`; `503` means the
+endpoint is not configured. Every Northwind response carries
+`Cache-Control: no-store` and `X-Content-Type-Options: nosniff`, and every
+non-preflight request passes the same Cloudflare rate limiter as the other
+public lookup routes (`429`). On Neon each query runs in a `READ ONLY`
+transaction with a 10 second server-side `statement_timeout`, and text
+collation (`COLLATE "C"`) is chosen from the real PostgreSQL column types
+(`NORTHWIND_PG_TYPES`), never from the SQLite types.
+
 PostgreSQL `NUMERIC` and `BIGINT` values that the Neon HTTP driver represents as
 decimal strings stay strings so their precision is preserved. D1 uses native
 SQLite runtime types. Numeric aggregates can differ at floating-point
@@ -98,6 +111,11 @@ production Actions secret to Wrangler's secret input; it is never written to
 the repository or emitted to logs. The secret must target database `northwind`
 on a Neon host as user `northwind_reader`. If either runtime configuration is
 absent, that endpoint returns a generic `503` response.
+
+`npm test` also runs `test-node/northwind-postgres.test.ts`, which loads the
+pinned `artifacts/hosting-imports/postgres.sql` (set `NORTHWIND_POSTGRES_SEED_SQL`;
+required when `CI` is set, SHA-256 checked) into PGlite and runs every one of the
+30 collections through the Neon route with real PostgreSQL semantics.
 
 Run the complete-seed Worker/D1 tests by setting `NORTHWIND_D1_SEED_SQL` to the
 `artifacts/hosting-imports/d1.sql` file from pinned Northwind source commit

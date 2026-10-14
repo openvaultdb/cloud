@@ -13,6 +13,8 @@
     "worker-configuration.d.ts",
     "src/**/*.ts",
     "test/**/*.ts",
-    "vitest.config.ts"
+    "test-node/**/*.ts",
+    "vitest.config.ts",
+    "vitest.node.config.ts"
   ]
 }

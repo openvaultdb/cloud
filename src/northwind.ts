@@ -6,7 +6,7 @@ import {
 } from "@dalgo/d1";
 import { jsonResponse } from "./http";
 import {
-  NORTHWIND_COLUMN_TYPES,
+  NORTHWIND_PG_TYPES,
   NORTHWIND_SCHEMA_VERSION,
   NORTHWIND_SEED_VERSION,
   NORTHWIND_TABLES,
@@ -38,8 +38,13 @@ const maxMembershipValues = 100;
 const maxRequestBytes = 1_048_576;
 const maxResponseBytes = 4_194_304;
 const neonQueryTimeoutMs = 15_000;
+const neonStatementTimeoutMs = 10_000;
+export const NORTHWIND_MAX_OFFSET = 10_000;
 const requestKeys = new Set(["version", "collection", "columns", "filters", "orders", "limit", "offset"]);
 const operators = new Set(["==", "!=", "<", "<=", ">", ">=", "in", "not-in"]);
+
+/** An unknown collection: 422 on both routes, like the D1 handler. */
+class UnsupportedCollectionError extends Error {}
 
 interface QueryDto extends D1QueryRequest {
   readonly columns?: readonly string[];
@@ -101,7 +106,7 @@ function readOnlyNorthwindConnection(connectionString: string): boolean {
   }
 }
 
-async function readRequestText(request: Request, maxBytes: number): Promise<string> {
+async function readRequestText(request: { readonly body: ReadableStream<Uint8Array> | null }, maxBytes: number): Promise<string> {
   if (request.body === null) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -166,9 +171,9 @@ function jsonScalar(value: unknown, label: string): string | number | null | Uin
 function validateQuery(value: unknown): ValidatedQuery {
   if (!plainObject(value) || Object.keys(value).some((key) => !requestKeys.has(key))) throw new TypeError("Request contains unsupported fields.");
   if (value.version !== 1 || typeof value.collection !== "string") throw new TypeError("Request version or collection is invalid.");
-  if (!Object.hasOwn(NORTHWIND_TABLES, value.collection)) throw new TypeError("Collection is not allowlisted.");
+  if (!Object.hasOwn(NORTHWIND_TABLES, value.collection)) throw new UnsupportedCollectionError("Collection is not allowlisted.");
   const table = NORTHWIND_TABLES[value.collection as keyof typeof NORTHWIND_TABLES];
-  if (table === undefined) throw new TypeError("Collection is not allowlisted.");
+  if (table === undefined) throw new UnsupportedCollectionError("Collection is not allowlisted.");
   const declared = new Set(Object.keys(table.columns));
   const columnsValue = value.columns;
   if (columnsValue !== undefined && (!Array.isArray(columnsValue) || columnsValue.length === 0 ||
@@ -200,7 +205,7 @@ function validateQuery(value: unknown): ValidatedQuery {
   const limit = value.limit === undefined ? maxQueryLimit : value.limit;
   const offset = value.offset === undefined ? 0 : value.offset;
   if (!safeInteger(limit, 1) || limit > maxQueryLimit) throw new TypeError(`Limit must be between 1 and ${String(maxQueryLimit)}.`);
-  if (!safeInteger(offset, 0)) throw new TypeError("Offset must be a non-negative safe integer.");
+  if (!safeInteger(offset, 0) || offset > NORTHWIND_MAX_OFFSET) throw new TypeError(`Offset must be between 0 and ${String(NORTHWIND_MAX_OFFSET)}.`);
   const columns = [...new Set([...(columnsValue as string[] | undefined ?? Object.keys(table.columns)), ...table.primaryKey])];
   return {
     dto: {
@@ -222,15 +227,54 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-function sqliteAffinityValue(value: string | number | null | Uint8Array, sourceType: string): string | number | null | Uint8Array {
-  if (value === null || value instanceof Uint8Array) return value;
-  const textAffinity = hasTextAffinity(sourceType);
-  return textAffinity ? String(value) : value;
+type PgType = "text" | "integer" | "bigint" | "numeric" | "double precision" | "bytea";
+const pgTypes: Readonly<Record<string, Readonly<Record<string, PgType>>>> = NORTHWIND_PG_TYPES;
+
+/** The real PostgreSQL type of a column; unknown columns are refused rather than guessed. */
+export function northwindPgType(table: string, column: string): PgType {
+  const type = pgTypes[table]?.[column];
+  if (type === undefined) throw new TypeError("Column has no PostgreSQL type.");
+  return type;
 }
 
-function hasTextAffinity(sourceType: string): boolean {
-  const type = sourceType.toUpperCase();
-  return type.includes("CHAR") || type.includes("CLOB") || type.includes("TEXT") || type.includes("DATE");
+/**
+ * Checks a filter value against the column's PostgreSQL type and returns the value to bind.
+ * A value that cannot be compared with the column is a client error (400), never a database error.
+ * Text columns accept numbers (bound as their decimal text); other types accept only their own kind.
+ */
+export function checkNorthwindValue(value: string | number | null | Uint8Array, type: PgType): string | number | null | Uint8Array {
+  if (value === null) return value;
+  switch (type) {
+    case "text":
+      if (value instanceof Uint8Array) throw new TypeError("Filter value does not match the column type.");
+      return String(value);
+    case "integer":
+    case "bigint":
+      if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError("Filter value does not match the column type.");
+      if (type === "integer" && (value > 2_147_483_647 || value < -2_147_483_648)) throw new TypeError("Filter value does not match the column type.");
+      return value;
+    case "numeric":
+    case "double precision":
+      if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Filter value does not match the column type.");
+      return value;
+    case "bytea":
+      if (!(value instanceof Uint8Array)) throw new TypeError("Filter value does not match the column type.");
+      return value;
+  }
+}
+
+/** Collation applies to text columns only: COLLATE on any other type is a PostgreSQL error. */
+export function northwindCollation(table: string, column: string): string {
+  return northwindPgType(table, column) === "text" ? ' COLLATE "C"' : "";
+}
+
+function checkQueryTypes(query: ValidatedQuery): void {
+  const resolve = (field: string): string => field === "__name__" ? (query.table.primaryKey[0] ?? "") : field;
+  for (const filter of query.dto.filters ?? []) {
+    const type = northwindPgType(query.tableName, resolve(filter.field));
+    const parts = filter.operator === "in" || filter.operator === "not-in" ? (filter.value as readonly unknown[]) : [filter.value];
+    for (const part of parts) checkNorthwindValue(part as string | number | null | Uint8Array, type);
+  }
 }
 
 function compilePostgresQuery(query: ValidatedQuery): { readonly statement: string; readonly values: readonly (string | number | Uint8Array | null)[] } {
@@ -245,8 +289,8 @@ function compilePostgresQuery(query: ValidatedQuery): { readonly statement: stri
   const predicates: string[] = [];
   const bind = (field: string, value: string | number | null | Uint8Array): string => {
     const column = field === "__name__" ? table.primaryKey[0] : field;
-    const sourceType = column === undefined ? "" : (northwindTypes[tableName]?.[column] ?? "");
-    values.push(sqliteAffinityValue(value, sourceType));
+    if (column === undefined) throw new TypeError("Document name filters require a single-column primary key.");
+    values.push(checkNorthwindValue(value, northwindPgType(tableName, column)));
     if (values.length > maxBoundValues) throw new TypeError("Query has too many bound values.");
     return `$${String(values.length)}`;
   };
@@ -255,8 +299,7 @@ function compilePostgresQuery(query: ValidatedQuery): { readonly statement: stri
     if (field === undefined) throw new TypeError("Document name filters require a single-column primary key.");
     const column = physicalColumns[field]?.column;
     if (column === undefined) throw new TypeError("Filter column is not allowlisted.");
-    const sourceType = northwindTypes[tableName]?.[field] ?? "";
-    const expression = `t.${quoteIdentifier(column)}${hasTextAffinity(sourceType) ? ' COLLATE "C"' : ""}`;
+    const expression = `t.${quoteIdentifier(column)}${northwindCollation(tableName, field)}`;
     if ((filter.operator === "==" || filter.operator === "!=") && filter.value === null) {
       predicates.push(`${expression} IS ${filter.operator === "!=" ? "NOT " : ""}NULL`);
       continue;
@@ -277,8 +320,7 @@ function compilePostgresQuery(query: ValidatedQuery): { readonly statement: stri
     const field = order.field === "__name__" ? table.primaryKey[0] : order.field;
     const column = field === undefined ? undefined : physicalColumns[field]?.column;
     if (column === undefined) throw new TypeError("Order column is not allowlisted.");
-    const sourceType = field === undefined ? "" : (northwindTypes[tableName]?.[field] ?? "");
-    const collation = hasTextAffinity(sourceType) ? ' COLLATE "C"' : "";
+    const collation = field === undefined ? "" : northwindCollation(tableName, field);
     const nulls = order.direction === "desc" ? "NULLS LAST" : "NULLS FIRST";
     return `t.${quoteIdentifier(column)}${collation} ${order.direction === "desc" ? "DESC" : "ASC"} ${nulls}`;
   }).join(", ")}`;
@@ -290,7 +332,7 @@ function compilePostgresQuery(query: ValidatedQuery): { readonly statement: stri
 
 function rowValue(value: unknown, field: string, tableName: string): unknown {
   if (value === null) return null;
-  const blobColumn = northwindTypes[tableName]?.[field]?.toUpperCase().includes("BLOB") ?? false;
+  const blobColumn = pgTypes[tableName]?.[field] === "bytea";
   if (blobColumn && value instanceof ArrayBuffer) {
     const bytes = new Uint8Array(value);
     let binary = "";
@@ -333,31 +375,80 @@ function safeRow(row: Readonly<Record<string, unknown>>, columns: readonly strin
   return output;
 }
 
-const northwindTypes: Readonly<Record<string, Readonly<Record<string, string>>>> = NORTHWIND_COLUMN_TYPES;
+/** The statements sent for one query: a server-side timeout, then the read, in one READ ONLY transaction. */
+export function northwindReadOnlyTransaction(
+  statement: string,
+  values: readonly (string | number | Uint8Array | null)[],
+): readonly { readonly sql: string; readonly params: readonly (string | number | Uint8Array | null)[] }[] {
+  return [
+    { sql: `SET LOCAL statement_timeout = ${String(neonStatementTimeoutMs)}`, params: [] },
+    { sql: statement, params: values },
+  ];
+}
 
 function createNeonQuery(connectionString: string): NorthwindNeonQuery {
   const sql = neon(connectionString);
   return async (statement, values, signal) => {
-    const rows = await sql.query(statement, [...values], { fetchOptions: { signal } });
+    const plan = northwindReadOnlyTransaction(statement, values);
+    const results = await sql.transaction(
+      (txn) => plan.map((step) => txn.query(step.sql, [...step.params])),
+      { readOnly: true, fetchOptions: { signal } },
+    );
+    const rows = results[results.length - 1];
     if (!Array.isArray(rows)) throw new TypeError("Neon returned an invalid result.");
     return rows as readonly Readonly<Record<string, unknown>>[];
   };
 }
 
-export function createNorthwindD1Handler(request: Request, env: NorthwindEnv): Promise<Response> {
-  if (!env.NORTHWIND_D1) return Promise.resolve(unavailable(request, "Northwind D1 is not configured."));
-  const handle = createD1ReadHandler(env.NORTHWIND_D1, {
-    tables: NORTHWIND_TABLES,
-    path: "/northwind/d1/v1/query",
-    metadataPath: "/northwind/d1/v1/metadata",
-    schemaVersion: NORTHWIND_SCHEMA_VERSION,
-    seedVersion: NORTHWIND_SEED_VERSION,
-    allowedOrigins: NORTHWIND_ALLOWED_ORIGINS,
-    maxQueryLimit,
-    maxRequestBytes,
-    maxResponseBytes,
-  });
-  return handle(request);
+const d1Handlers = new WeakMap<object, (request: Request) => Promise<Response>>();
+
+function d1Handler(binding: D1Binding): (request: Request) => Promise<Response> {
+  let handle = d1Handlers.get(binding);
+  if (handle === undefined) {
+    handle = createD1ReadHandler(binding, {
+      tables: NORTHWIND_TABLES,
+      path: "/northwind/d1/v1/query",
+      metadataPath: "/northwind/d1/v1/metadata",
+      schemaVersion: NORTHWIND_SCHEMA_VERSION,
+      seedVersion: NORTHWIND_SEED_VERSION,
+      allowedOrigins: NORTHWIND_ALLOWED_ORIGINS,
+      maxQueryLimit,
+      maxRequestBytes,
+      maxResponseBytes,
+    });
+    d1Handlers.set(binding, handle);
+  }
+  return handle;
+}
+
+/**
+ * Same request policy as the Neon route: a filter value that cannot be compared with its column,
+ * an unknown collection and an excessive offset are all 400, never an empty page.
+ */
+async function d1PreCheck(request: Request): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (request.method !== "POST" || url.pathname !== "/northwind/d1/v1/query" || hasVersionMismatch(request)) return undefined;
+  if (!/^application\/json(?:\s*;|$)/iu.test(request.headers.get("Content-Type") ?? "")) return undefined;
+  const length = request.headers.get("Content-Length");
+  if (length !== null && (!/^\d+$/u.test(length) || Number(length) > maxRequestBytes)) return undefined;
+  try {
+    const body = await readRequestText(request.clone(), maxRequestBytes);
+    checkQueryTypes(validateQuery(JSON.parse(body) as unknown));
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof SyntaxError) return dtoError(request, "invalid_request", 400);
+  }
+  return undefined;
+}
+
+export async function createNorthwindD1Handler(request: Request, env: NorthwindEnv): Promise<Response> {
+  if (!env.NORTHWIND_D1) return unavailable(request, "Northwind D1 is not configured.");
+  const refused = await d1PreCheck(request);
+  if (refused !== undefined) return refused;
+  const response = await d1Handler(env.NORTHWIND_D1)(request);
+  const result = new Response(response.body, response);
+  result.headers.set("Cache-Control", "no-store");
+  result.headers.set("X-Content-Type-Options", "nosniff");
+  return result;
 }
 
 export async function createNorthwindNeonHandler(
@@ -403,9 +494,11 @@ export async function createNorthwindNeonHandler(
   try {
     const body = await readRequestText(request, maxRequestBytes);
     query = validateQuery(JSON.parse(body) as unknown);
+    checkQueryTypes(query);
     compiled = compilePostgresQuery(query);
   } catch (error) {
     if (error instanceof RangeError) return dtoError(request, "request_too_large", 413);
+    if (error instanceof UnsupportedCollectionError) return dtoError(request, "unsupported_query", 422);
     return dtoError(request, "invalid_request", 400);
   }
 
@@ -419,7 +512,7 @@ export async function createNorthwindNeonHandler(
     return withCors(new Response(payload, { headers: { "Content-Type": "application/json; charset=utf-8" } }), cors);
   } catch {
     // Driver errors can contain connection details; return only a stable public error.
-    return dtoError(request, "query_failed", 503);
+    return dtoError(request, "query_failed", 500);
   } finally {
     clearTimeout(timeout);
   }

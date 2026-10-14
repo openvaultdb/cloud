@@ -10,8 +10,9 @@
     "dev": "wrangler dev --local",
     "postinstall": "node scripts/prepare-dalgo-core.mjs",
     "prepare:dependencies": "node scripts/prepare-dalgo-core.mjs",
+    "test:postgres": "vitest run -c vitest.node.config.ts",
     "test:deploy": "node --test scripts/deploy.test.mjs",
-    "test": "vitest run && npm run test:registry-search",
+    "test": "vitest run && npm run test:postgres && npm run test:registry-search",
     "test:registry-search": "node --test registry-search/test/*.node.mjs",
     "benchmark:registry-search": "node registry-search/benchmark.mjs",
     "deploy:registry-search:dry": "wrangler deploy --dry-run --config registry-search/wrangler.jsonc",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.2",
+    "@electric-sql/pglite": "^0.5.9",
     "@types/node": "^26.4.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",

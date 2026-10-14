@@ -235,6 +235,18 @@ describe("Northwind D1 and Neon read-only mirrors", () => {
     });
     expect(unknownField.status).toBe(400);
 
+    const wrongType = await call("/northwind/d1/v1/query", {
+      version: 1,
+      collection: "Orders",
+      filters: [{ field: "OrderID", operator: "==", value: "abc" }],
+    });
+    expect(wrongType.status).toBe(400);
+    const deepOffset = await call("/northwind/d1/v1/query", { version: 1, collection: "Categories", offset: 10_001 });
+    expect(deepOffset.status).toBe(400);
+    const okResponse = await call("/northwind/d1/v1/query", { version: 1, collection: "Categories", limit: 1 });
+    expect(okResponse.headers.get("Cache-Control")).toBe("no-store");
+    expect(okResponse.headers.get("X-Content-Type-Options")).toBe("nosniff");
+
     const missing = await fetchWorker(
       new Request(`${baseURL}/northwind/neon/v1/metadata`),
       env,
@@ -404,5 +416,17 @@ describe("Northwind D1 and Neon read-only mirrors", () => {
     const binaryBody = await binary.json() as { records: Record<string, unknown>[] };
     expect(binaryBody.records[0]?.CategoryName).toBe("Beverages");
     expect(binaryBody.records[0]?.Picture).toMatchObject({ $type: "blob", base64: expect.any(String) });
+  });
+  it("rate limits every Northwind request except preflight", async () => {
+    const calls: string[] = [];
+    const limited = { ...env, DEVICE_LOOKUP_LIMITER: { limit: async ({ key }: { key: string }) => { calls.push(key); return { success: false }; } } } as unknown as NorthwindEnv;
+    for (const pathname of ["/northwind/d1/v1/metadata", "/northwind/neon/v1/query"]) {
+      const response = await fetchWorker(new Request(`${baseURL}${pathname}`, { method: pathname.endsWith("query") ? "POST" : "GET" }), limited, {} as ExecutionContext);
+      expect(response.status).toBe(429);
+    }
+    expect(calls).toHaveLength(2);
+    const preflight = await fetchWorker(new Request(`${baseURL}/northwind/d1/v1/query`, { method: "OPTIONS", headers: { Origin: "https://demodb.dev" } }), limited, {} as ExecutionContext);
+    expect(preflight.status).toBe(204);
+    expect(calls).toHaveLength(2);
   });
 });
