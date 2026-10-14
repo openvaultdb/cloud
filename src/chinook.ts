@@ -9,6 +9,27 @@ const ecbOperatorTokenHeader = "X-OVDB-ECB-Operator-Token";
 const ianaProxySecretHeader = "X-OVDB-IANA-Proxy-Secret";
 const ianaOperatorTokenHeader = "X-OVDB-IANA-Operator-Token";
 
+// Cloud Run is --allow-unauthenticated; when OVDB_ORIGIN_SECRET is bound (a
+// Worker secret) every forwarded request carries it in the header named by
+// OVDB_ORIGIN_SECRET_HEADER (default X-OVDB-Origin-Secret), and the Go server
+// refuses requests without it once its own OVDB_ORIGIN_SECRET is set. Unbound,
+// nothing is added: the default behaviour is unchanged.
+export const DEFAULT_ORIGIN_SECRET_HEADER = "X-OVDB-Origin-Secret";
+const reservedSecretHeaders = new Set([ecbProxySecretHeader, ecbOperatorTokenHeader, ianaProxySecretHeader, ianaOperatorTokenHeader,
+  "X-OVDB-ECB-Public-Secret", "X-OVDB-ECB-Public-Admission", "X-OVDB-ECB-Public-Completion"].map((name) => name.toLowerCase()));
+type OriginSecretEnv = Env & { OVDB_ORIGIN_SECRET?: string; OVDB_ORIGIN_SECRET_HEADER?: string };
+
+/** undefined: not configured; null: configured but invalid (refuse rather than forward without it). */
+export function originSecretHeader(env: OriginSecretEnv): { name: string; value: string } | undefined | null {
+  if (!env.OVDB_ORIGIN_SECRET) return undefined;
+  const name = env.OVDB_ORIGIN_SECRET_HEADER || DEFAULT_ORIGIN_SECRET_HEADER;
+  if (!/^[A-Za-z0-9_-]{32,128}$/u.test(env.OVDB_ORIGIN_SECRET) || !/^X-[A-Za-z0-9-]{1,64}$/u.test(name) ||
+    reservedSecretHeaders.has(name.toLowerCase())) {
+    return null;
+  }
+  return { name, value: env.OVDB_ORIGIN_SECRET };
+}
+
 const pinHeaders = [
   "OVDB-Provider-Revision",
   "OVDB-Source-SHA256",
@@ -116,6 +137,9 @@ async function proxyWithPolicy(
     if (value !== null) headers.set(name, value);
   }
   if (trustedSecret) headers.set(trustedSecretHeader, trustedSecret);
+  const originSecret = originSecretHeader(env as OriginSecretEnv);
+  if (originSecret === null) return jsonResponse({ error: `${service} OVDB is not configured.` }, 503);
+  if (originSecret !== undefined) headers.set(originSecret.name, originSecret.value);
   if (request.signal.aborted) return jsonResponse({ error: `${service} OVDB request cancelled.` }, 503);
   const abort = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;

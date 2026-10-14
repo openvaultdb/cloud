@@ -217,7 +217,8 @@ describe("Northwind D1 and Neon read-only mirrors", () => {
       expect(nullBody.records.length).toBeGreaterThan(0);
       expect(nullBody.records.every((row) => row.Region === null)).toBe(true);
     } else {
-      expect(nullBody.records).toMatchObject([{ CategoryName: "Beverages", Description: null }]);
+      // Description is filtered on but not projected (the key column is always returned).
+      expect(nullBody.records).toEqual([{ CategoryID: 1, CategoryName: "Beverages" }]);
     }
   });
 
