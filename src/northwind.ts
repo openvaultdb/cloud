@@ -423,8 +423,12 @@ function d1Handler(binding: D1Binding): (request: Request) => Promise<Response> 
 
 /**
  * Same request policy as the Neon route: a filter value that cannot be compared with its column,
- * an unknown collection and an excessive offset are all 400, never an empty page.
+ * and an excessive offset are 400, never an empty page (an unknown collection stays 422, as in the D1 handler).
  */
+export function northwindRateLimited(request: Request): Response {
+  return dtoError(request, "rate_limited", 429, "Too many requests. Try again in one minute.");
+}
+
 async function d1PreCheck(request: Request): Promise<Response | undefined> {
   const url = new URL(request.url);
   if (request.method !== "POST" || url.pathname !== "/northwind/d1/v1/query" || hasVersionMismatch(request)) return undefined;

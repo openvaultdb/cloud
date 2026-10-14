@@ -1135,7 +1135,7 @@ export const NORTHWIND_EXPECTED_VIEW_ROWS = {
 export const NORTHWIND_D1_IMPORT_SHA256 = "fea7d05421f0297adc18c41196f22b498c669abf78c2392b50343091df8810d7";
 
 // Column types of the pinned northwind/postgres.sql import, read from information_schema.columns
-// (test/northwind-postgres.test.ts fails if this drifts). Collations and bound values follow these, not the SQLite types.
+// (test-node/northwind-postgres.test.ts fails if this drifts). Collations and bound values follow these, not the SQLite types.
 export const NORTHWIND_PG_TYPES = {
   "Alphabetical list of products": {
     "ProductID": "bigint",

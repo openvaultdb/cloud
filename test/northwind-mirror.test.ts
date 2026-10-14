@@ -241,6 +241,25 @@ describe("Northwind D1 and Neon read-only mirrors", () => {
       filters: [{ field: "OrderID", operator: "==", value: "abc" }],
     });
     expect(wrongType.status).toBe(400);
+    const neonWorker = createWorker(fetch, () => async () => []);
+    for (const [collection, field, value] of [
+      ["Orders", "OrderID", "abc"],
+      ["Categories", "Picture", 5],
+      ["Orders", "Freight", "x"],
+      ["Order Subtotals", "Subtotal", "x"],
+    ] as const) {
+      const body = { version: 1, collection, filters: [{ field, operator: "==", value }] };
+      const d1 = await call("/northwind/d1/v1/query", body);
+      const neon = await (neonWorker.fetch as unknown as typeof fetchWorker)(new Request(`${baseURL}/northwind/neon/v1/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }), { ...env, NORTHWIND_NEON_DATABASE_URL: "postgresql://northwind_reader:test@ep-local.us-west-2.aws.neon.tech/northwind" } as NorthwindEnv, {} as ExecutionContext) as Response;
+      expect(d1.status, `${collection}.${field}`).toBe(400);
+      expect(neon.status, `${collection}.${field}`).toBe(400);
+      const [d1Body, neonBody] = [await d1.json() as { error: { code: string } }, await neon.json() as { error: { code: string } }];
+      expect(d1Body.error.code).toBe(neonBody.error.code);
+    }
     const deepOffset = await call("/northwind/d1/v1/query", { version: 1, collection: "Categories", offset: 10_001 });
     expect(deepOffset.status).toBe(400);
     const okResponse = await call("/northwind/d1/v1/query", { version: 1, collection: "Categories", limit: 1 });
@@ -425,6 +444,14 @@ describe("Northwind D1 and Neon read-only mirrors", () => {
       expect(response.status).toBe(429);
     }
     expect(calls).toHaveLength(2);
+    const allowed = await fetchWorker(new Request(`${baseURL}/northwind/d1/v1/metadata`, { headers: { Origin: "https://demodb.dev" } }), limited, {} as ExecutionContext);
+    expect(allowed.status).toBe(429);
+    expect(allowed.headers.get("Access-Control-Allow-Origin")).toBe("https://demodb.dev");
+    expect(allowed.headers.get("Vary")).toBe("Origin");
+    const denied = await fetchWorker(new Request(`${baseURL}/northwind/d1/v1/metadata`, { headers: { Origin: "https://evil.example" } }), limited, {} as ExecutionContext);
+    expect(denied.status).toBe(429);
+    expect(denied.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    calls.length = 2;
     const preflight = await fetchWorker(new Request(`${baseURL}/northwind/d1/v1/query`, { method: "OPTIONS", headers: { Origin: "https://demodb.dev" } }), limited, {} as ExecutionContext);
     expect(preflight.status).toBe(204);
     expect(calls).toHaveLength(2);

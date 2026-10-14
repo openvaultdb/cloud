@@ -4,6 +4,7 @@ import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import {
   createNorthwindD1Handler,
   createNorthwindNeonHandler,
+  northwindRateLimited,
   type NorthwindEnv,
   type NorthwindNeonQueryFactory,
 } from "./northwind";
@@ -44,7 +45,7 @@ export function createWorker(
         }
         if (url.pathname.startsWith("/northwind/") && request.method !== "OPTIONS" &&
           !(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "northwind"))) {
-          return jsonResponse({ version: 1, error: { code: "rate_limited", message: "Too many requests. Try again in one minute." } }, 429);
+          return northwindRateLimited(request);
         }
         if (url.pathname.startsWith("/northwind/d1/")) {
           return await createNorthwindD1Handler(request, env as NorthwindEnv);
