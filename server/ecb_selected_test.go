@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -220,7 +219,7 @@ func changeECBAdmission(t *testing.T, path, old, replacement string) {
 }
 
 func TestSafeHTTPErrorLogDropsPanicMarker(t *testing.T) {
-	var diagnostics bytes.Buffer
+	var diagnostics lockedBuffer
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("synthetic-private-panic-marker")
 	}))
