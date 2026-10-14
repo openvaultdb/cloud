@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,12 +100,85 @@ func TestDemoPostgresInsecureTLSFlagIsExplicit(t *testing.T) {
 	}
 }
 
-func TestDemoPostgresNeonPoolerIsDetected(t *testing.T) {
-	if !demoPostgresNeonPooler("postgres://r:p@ep-cool-1-pooler.eu-central-1.aws.neon.tech/db?sslmode=verify-full") {
-		t.Error("pooled endpoint not detected")
+func TestDemoPostgresPoolerHostsAreRefused(t *testing.T) {
+	for host, want := range map[string]bool{
+		"ep-cool-1-pooler.eu-central-1.aws.neon.tech": true,
+		"EP-COOL-1-POOLER.eu-central-1.aws.neon.tech": true,
+		"ep-cool-1-pooler":                       true,
+		"db-pooler.internal.example.com":         true,
+		"my-pooler.example.com":                  true,
+		"pgbouncer.internal":                     true,
+		"db.PgBouncer.example.com":               true,
+		"ep-cool-1.eu-central-1.aws.neon.tech":   false,
+		"ep-pooler-1.eu-central-1.aws.neon.tech": false,
+		"127.0.0.1":                              false,
+		"localhost":                              false,
+	} {
+		if got := demoPostgresPoolerHost(host); got != want {
+			t.Errorf("demoPostgresPoolerHost(%q) = %v, want %v", host, got, want)
+		}
 	}
-	if demoPostgresNeonPooler("postgres://r:p@ep-cool-1.eu-central-1.aws.neon.tech/db?sslmode=verify-full") {
-		t.Error("direct endpoint reported as pooled")
+}
+
+func TestValidateDemoPostgresDSNRefusesPoolerEndpoints(t *testing.T) {
+	const tail = "sslmode=verify-full&connect_timeout=10"
+	for _, dsn := range []string{
+		"postgres://r:p@ep-cool-1-pooler.eu-central-1.aws.neon.tech/db?" + tail,
+		"postgresql://r:p@ep-cool-1-pooler.eu-central-1.aws.neon.tech:5432/db?" + tail,
+		"postgres://r:p@db-pooler.example.com/db?" + tail,
+		"postgres://r:p@pgbouncer.example.com/db?" + tail,
+		"postgres://r:p@db.example.com/db?host=ep-cool-1-pooler.eu-central-1.aws.neon.tech&" + tail, // ambiguous host: still refused
+		"host=ep-cool-1-pooler.eu-central-1.aws.neon.tech user=r dbname=db sslmode=verify-full connect_timeout=10",
+	} {
+		err := validateDemoPostgresDSNWithEnv(dsn, false, func(string) (string, bool) { return "", false })
+		if err == nil {
+			t.Errorf("pooler DSN accepted: %s", dsn)
+			continue
+		}
+		if code := demoPostgresReasonCode(err); code != "pooler_endpoint" && code != "dsn_rejected" {
+			t.Errorf("pooler DSN %s: reason %q (%v)", dsn, code, err)
+		}
+		if strings.Contains(err.Error(), "pooler.eu-central-1") {
+			t.Errorf("error discloses the host: %v", err)
+		}
+	}
+	direct := "postgres://r:p@ep-cool-1.eu-central-1.aws.neon.tech/db?" + tail
+	if err := validateDemoPostgresDSNWithEnv(direct, false, func(string) (string, bool) { return "", false }); err != nil {
+		t.Errorf("direct endpoint refused: %v", err)
+	}
+	err := validateDemoPostgresDSNWithEnv("postgres://r:p@ep-cool-1-pooler.eu-central-1.aws.neon.tech/db?"+tail, false, func(string) (string, bool) { return "", false })
+	if !errors.Is(err, errDemoPostgresPoolerEndpoint) || !strings.Contains(err.Error(), "direct endpoint") {
+		t.Errorf("pooler error = %v, want errDemoPostgresPoolerEndpoint naming the direct endpoint", err)
+	}
+}
+
+func TestDemoPostgresLibraryRoleRefusalMapsToRoleUnsafe(t *testing.T) {
+	refusal := errors.New(demoPostgresLibraryRoleRefusalText + ": may execute SECURITY DEFINER function chinook.f(); connect as a role with only SELECT on the exposed relations (and USAGE on their schemas)")
+	for _, err := range []error{refusal, fmt.Errorf("%w: %w", errDemoPostgresMountFailed, refusal)} {
+		if got := demoPostgresReasonCode(err); got != "role_unsafe" {
+			t.Errorf("reason of %v = %q, want role_unsafe", err, got)
+		}
+	}
+	if got := demoPostgresReasonCode(fmt.Errorf("%w: could not list PostgreSQL schemas", errDemoPostgresMountFailed)); got != "mount_failed" {
+		t.Errorf("unrelated mount failure = %q, want mount_failed", got)
+	}
+}
+
+// TestDemoPostgresLibraryRoleRefusalTextMatchesLibrary fails when the pinned
+// openvaultdb-go changes the text of its role refusal, which the library offers
+// no sentinel or error type for. The real-PostgreSQL test below also checks the
+// reason code end to end.
+func TestDemoPostgresLibraryRoleRefusalTextMatchesLibrary(t *testing.T) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/openvaultdb/openvaultdb-go").Output()
+	if err != nil {
+		t.Skipf("cannot locate the openvaultdb-go module: %v", err)
+	}
+	source, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), "pkg", "mount", "postgres.go"))
+	if err != nil {
+		t.Skipf("cannot read the library source: %v", err)
+	}
+	if !strings.Contains(string(source), demoPostgresLibraryRoleRefusalText+": %s") {
+		t.Fatalf("openvaultdb-go no longer returns %q: update demoPostgresLibraryRoleRefusalText and the role_unsafe mapping", demoPostgresLibraryRoleRefusalText)
 	}
 }
 
@@ -201,7 +276,8 @@ func TestDemoPostgresErrorsAreRedacted(t *testing.T) {
 
 func TestDemoPostgresReasonCodesAreStable(t *testing.T) {
 	for err, want := range map[error]string{
-		errDemoPostgresTLS: "tls_required",
+		errDemoPostgresTLS:                                          "tls_required",
+		errDemoPostgresPoolerEndpoint:                               "pooler_endpoint",
 		fmt.Errorf("wrap: %w", errDemoPostgresDSNAmbiguous):         "dsn_rejected",
 		errDemoPostgresPrivilegedGrant:                              "role_unsafe",
 		errDemoPostgresUnreachable:                                  "connection_failed",
@@ -482,6 +558,9 @@ func TestDemoPostgresLibraryHardeningAgainstRealPostgres(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "not read-only") || strings.Contains(err.Error(), dsn) {
 			t.Fatalf("library refusal = %v", err)
+		}
+		if code := demoPostgresReasonCode(fmt.Errorf("%w: %w", errDemoPostgresMountFailed, err)); code != "role_unsafe" {
+			t.Fatalf("status reason of the library refusal = %q, want role_unsafe", code)
 		}
 	})
 }

@@ -72,6 +72,7 @@ var (
 	errDemoPostgresInsecureEnv     = errors.New(mount.InsecureNativePostgresTransportEnv + " must not be set: it would let the library skip TLS verification")
 	errDemoPostgresTLS             = errors.New("DSN must set sslmode=verify-full")
 	errDemoPostgresInsecureHost    = errors.New(demoPostgresInsecureTLSEnv + " is honoured only for a single loopback host")
+	errDemoPostgresPoolerEndpoint  = errors.New("host is a connection-pooler endpoint (Neon -pooler or PgBouncer); use the direct endpoint, e.g. ep-xxx.<region>.aws.neon.tech without -pooler")
 	errDemoPostgresOptionsParam    = errors.New("DSN must not set the PostgreSQL options parameter")
 	errDemoPostgresRuntimeParam    = errors.New("DSN sets a session parameter other than statement_timeout, lock_timeout, idle_in_transaction_session_timeout or application_name")
 	errDemoPostgresConnectTimeout  = errors.New("DSN must set connect_timeout between 1 and 30 seconds")
@@ -134,6 +135,9 @@ func validateDemoPostgresDSNWithEnv(dsn string, allowInsecureLoopback bool, look
 	if len(hosts) != 1 || hosts[0] == "" || strings.HasPrefix(hosts[0], "/") || params["service"] != "" || params["servicefile"] != "" || params["passfile"] != "" {
 		return errDemoPostgresDSNAmbiguous
 	}
+	if demoPostgresPoolerHost(hosts[0]) {
+		return errDemoPostgresPoolerEndpoint
+	}
 	if _, set := params["options"]; set {
 		return errDemoPostgresOptionsParam
 	}
@@ -187,21 +191,16 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// demoPostgresNeonPooler reports whether the host is a Neon pooled endpoint
-// (…-pooler.…neon.tech). The pooler is not proven to keep the
-// default_transaction_read_only startup parameter, so it is warned about.
-func demoPostgresNeonPooler(dsn string) bool {
-	_, hosts, err := demoPostgresDSNParams(dsn)
-	if err != nil {
-		return false
-	}
-	for _, host := range hosts {
-		label, _, _ := strings.Cut(host, ".")
-		if strings.HasSuffix(label, "-pooler") {
-			return true
-		}
-	}
-	return false
+// demoPostgresPoolerHost reports whether the host names a connection pooler: a
+// Neon pooled endpoint (first label ending in -pooler, ep-xxx-pooler.<region>.aws.neon.tech),
+// any host containing "-pooler." or "pgbouncer". The mount sends startup
+// parameters (statement_timeout, default_transaction_read_only) that PgBouncer
+// rejects unless it is configured with ignore_startup_parameters, and that a
+// transaction-mode pooler may not keep, so a pooler fails closed.
+func demoPostgresPoolerHost(host string) bool {
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	label, _, _ := strings.Cut(host, ".")
+	return strings.HasSuffix(label, "-pooler") || strings.Contains(host, "-pooler.") || strings.Contains(host, "pgbouncer")
 }
 
 // demoPostgresDSNParams returns the explicit connection parameters and hosts of a
