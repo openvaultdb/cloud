@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
@@ -219,8 +220,27 @@ func changeECBAdmission(t *testing.T, path, old, replacement string) {
 	t.Setenv("OVDB_ECB_ADMISSION_SHA256", fmt.Sprintf("%x", sha256.Sum256(changed)))
 }
 
+// lockedBuffer lets the net/http server goroutine write its ErrorLog while the
+// test goroutine reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestSafeHTTPErrorLogDropsPanicMarker(t *testing.T) {
-	var diagnostics bytes.Buffer
+	var diagnostics lockedBuffer
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("synthetic-private-panic-marker")
 	}))
