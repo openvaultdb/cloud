@@ -79,6 +79,4 @@ jobs:
       - name: Deploy Worker, assets, and custom domain
         env:
           CHINOOK_RUN_ORIGIN: ${{ steps.receipt.outputs.origin }}
-          NORTHWIND_D1_DATABASE_ID: ${{ vars.NORTHWIND_D1_DATABASE_ID }}
-          NORTHWIND_NEON_DATABASE_URL: ${{ secrets.NORTHWIND_NEON_DATABASE_URL }}
         run: npm run deploy -- --var "CHINOOK_RUN_ORIGIN:${CHINOOK_RUN_ORIGIN}"
