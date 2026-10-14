@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
 	"github.com/openvaultdb/openvaultdb-go/pkg/schema"
 )
@@ -140,7 +141,7 @@ func (m *demoPostgresMounter) run(provider runtimeDatabase) {
 			at := time.Now().Add(delay)
 			next = &at
 		}
-		m.record(provider.ID, state, err, attempt, next)
+		m.record(provider.ID, state, err, attempt, next, m.getenv(provider.nativePostgres.dsnEnv))
 		if state != demoPostgresUnavailable {
 			return
 		}
@@ -158,17 +159,68 @@ func (m *demoPostgresMounter) run(provider runtimeDatabase) {
 	}
 }
 
+// Errors the mounter itself produces; each has a stable public reason code.
+var (
+	errDemoPostgresNotConfigured = errors.New("DSN secret is not set")
+	errDemoPostgresTimeout       = errors.New("mount did not finish in time")
+	errDemoPostgresStopping      = errors.New("server is stopping")
+	errDemoPostgresMountFailed   = errors.New("mount failed")
+	errDemoPostgresMountRejected = errors.New("mounted database was rejected")
+)
+
+// demoPostgresReasonCode maps a failure to the stable code the public status
+// route serves. Detailed text goes only to the (redacted) server log.
+func demoPostgresReasonCode(err error) string {
+	for _, c := range []struct {
+		err  error
+		code string
+	}{
+		{errDemoPostgresNotConfigured, "not_configured"},
+		{errDemoPostgresTLS, "tls_required"},
+		{errDemoPostgresInsecureHost, "tls_required"},
+		{errDemoPostgresDSNInvalid, "dsn_rejected"},
+		{errDemoPostgresDSNAmbiguous, "dsn_rejected"},
+		{errDemoPostgresEnv, "dsn_rejected"},
+		{errDemoPostgresOptionsParam, "dsn_rejected"},
+		{errDemoPostgresRuntimeParam, "dsn_rejected"},
+		{errDemoPostgresConnectTimeout, "dsn_rejected"},
+		{errDemoPostgresOwnerRole, "role_unsafe"},
+		{errDemoPostgresPrivilegedGrant, "role_unsafe"},
+		{errDemoPostgresRoleSwitched, "role_unsafe"},
+		{errDemoPostgresWritableRole, "role_unsafe"},
+		{errDemoPostgresStatementTime, "statement_timeout_required"},
+		{errDemoPostgresSchemaScope, "schema_scope"},
+		{errDemoPostgresUnreachable, "connection_failed"},
+		{errDemoPostgresTimeout, "timeout"},
+		{errDemoPostgresStopping, "stopping"},
+		{errDemoPostgresMountRejected, "mount_rejected"},
+	} {
+		if errors.Is(err, c.err) {
+			return c.code
+		}
+	}
+	return "mount_failed"
+}
+
 func (m *demoPostgresMounter) attempt(provider runtimeDatabase) (string, error) {
 	select {
 	case m.slots <- struct{}{}:
 	case <-m.ctx.Done():
-		return demoPostgresUnavailable, errors.New("server is stopping")
+		return demoPostgresUnavailable, errDemoPostgresStopping
 	}
-	defer func() { <-m.slots }()
+	// The slot is released when the attempt really ends. An abandoned mount keeps
+	// it until the late result arrives and is closed, so a hung source can never
+	// let more than Concurrency real mounts run at once.
+	releaseSlot := true
+	defer func() {
+		if releaseSlot {
+			<-m.slots
+		}
+	}()
 
 	dsn := m.getenv(provider.nativePostgres.dsnEnv)
 	if dsn == "" {
-		return demoPostgresNotConfigured, fmt.Errorf("%s is not set", provider.nativePostgres.dsnEnv)
+		return demoPostgresNotConfigured, fmt.Errorf("%w: %s", errDemoPostgresNotConfigured, provider.nativePostgres.dsnEnv)
 	}
 	if err := validateDemoPostgresDSN(dsn, demoPostgresTLSAllowedInsecurely()); err != nil {
 		return demoPostgresMisconfigured, err
@@ -194,19 +246,21 @@ func (m *demoPostgresMounter) attempt(provider runtimeDatabase) (string, error) 
 	select {
 	case mounted = <-done:
 	case <-timer.C:
-		go closeLateDemoPostgres(done)
-		return demoPostgresUnavailable, fmt.Errorf("mount did not finish within %s", m.timing.Attempt)
+		releaseSlot = false
+		m.closeLate(done)
+		return demoPostgresUnavailable, fmt.Errorf("%w (%s)", errDemoPostgresTimeout, m.timing.Attempt)
 	case <-m.ctx.Done():
-		go closeLateDemoPostgres(done)
-		return demoPostgresUnavailable, errors.New("server is stopping")
+		releaseSlot = false
+		m.closeLate(done)
+		return demoPostgresUnavailable, errDemoPostgresStopping
 	}
 	if mounted.err != nil {
-		return demoPostgresUnavailable, redactDemoPostgresError(mounted.err, dsn)
+		return demoPostgresUnavailable, fmt.Errorf("%w: %w", errDemoPostgresMountFailed, mounted.err)
 	}
 	db := mounted.db
 	if db.Manifest.Database.ID != provider.ID || !runtimeDatabaseIDPattern.MatchString(provider.ID) {
 		_ = db.Close()
-		return demoPostgresMisconfigured, errors.New("mounted database ID does not match its provider")
+		return demoPostgresMisconfigured, fmt.Errorf("%w: database ID does not match its provider", errDemoPostgresMountRejected)
 	}
 	if err := m.scope(db, provider); err != nil {
 		_ = db.Close()
@@ -216,11 +270,11 @@ func (m *demoPostgresMounter) attempt(provider runtimeDatabase) (string, error) 
 	defer m.mu.Unlock()
 	if m.ctx.Err() != nil {
 		_ = db.Close()
-		return demoPostgresUnavailable, errors.New("server is stopping")
+		return demoPostgresUnavailable, errDemoPostgresStopping
 	}
 	if err := m.target.Mount(db); err != nil {
 		_ = db.Close()
-		return demoPostgresMisconfigured, err
+		return demoPostgresMisconfigured, fmt.Errorf("%w: %w", errDemoPostgresMountRejected, err)
 	}
 	m.mounted[provider.ID] = true
 	return demoPostgresAvailable, nil
@@ -231,11 +285,18 @@ type demoPostgresMountResult struct {
 	err error
 }
 
-// closeLateDemoPostgres closes a mount that finished after its attempt was abandoned.
-func closeLateDemoPostgres(done <-chan demoPostgresMountResult) {
-	if late := <-done; late.db != nil {
-		_ = late.db.Close()
-	}
+// closeLate waits, tracked by stop(), for a mount whose attempt was abandoned,
+// closes what it produced, and only then frees the concurrency slot. Every DSN
+// sets connect_timeout and the library bounds catalogue discovery, so it ends.
+func (m *demoPostgresMounter) closeLate(done <-chan demoPostgresMountResult) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		if late := <-done; late.db != nil {
+			_ = late.db.Close()
+		}
+		<-m.slots
+	}()
 }
 
 // checkDemoPostgresMountedScope asserts that every discovered collection belongs to
@@ -254,35 +315,54 @@ func checkDemoPostgresMountedScope(db *core.Database, provider runtimeDatabase) 
 	return nil
 }
 
-// redactDemoPostgresError keeps library errors (which are designed not to disclose
-// the DSN) and, as a second guard, replaces the DSN and its password if they ever
-// appear.
-func redactDemoPostgresError(err error, dsn string) error {
-	message := err.Error()
-	if dsn != "" {
-		message = strings.ReplaceAll(message, dsn, "[dsn]")
-		if params, _, parseErr := demoPostgresDSNParams(dsn); parseErr == nil && len(params["password"]) >= 4 {
-			message = strings.ReplaceAll(message, params["password"], "[redacted]")
-		}
-		if i := strings.Index(dsn, "://"); i >= 0 {
-			if at := strings.Index(dsn[i+3:], "@"); at >= 0 {
-				if _, password, ok := strings.Cut(dsn[i+3:i+3+at], ":"); ok && len(password) >= 4 {
-					message = strings.ReplaceAll(message, password, "[redacted]")
-				}
-			}
+// redactDemoPostgresText removes the DSN and every connection detail it names
+// (password, host, port, database, user) from a message before it is logged.
+// Library and driver errors (pgconn.ConnectError) can name host, port, user and
+// database.
+func redactDemoPostgresText(message, dsn string) string {
+	if dsn == "" {
+		return message
+	}
+	message = strings.ReplaceAll(message, dsn, "[dsn]")
+	var secrets []string
+	if config, err := pgx.ParseConfig(dsn); err == nil {
+		secrets = append(secrets, config.Password, config.Host, config.User, config.Database)
+		if config.Port != 0 {
+			port := strconv.Itoa(int(config.Port))
+			message = strings.ReplaceAll(message, ":"+port, ":[port]")
+			message = strings.ReplaceAll(message, "port="+port, "port=[port]")
+			message = strings.ReplaceAll(message, "port "+port, "port [port]")
 		}
 	}
-	return errors.New(message)
+	if params, hosts, err := demoPostgresDSNParams(dsn); err == nil {
+		secrets = append(secrets, params["password"], params["user"], params["dbname"], params["hostaddr"])
+		secrets = append(secrets, hosts...)
+	}
+	if i := strings.Index(dsn, "://"); i >= 0 {
+		if at := strings.Index(dsn[i+3:], "@"); at >= 0 {
+			user, password, _ := strings.Cut(dsn[i+3:i+3+at], ":")
+			secrets = append(secrets, password, user)
+		}
+	}
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	for _, secret := range secrets {
+		if len(secret) >= 3 {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	return message
 }
 
-func (m *demoPostgresMounter) record(id, state string, err error, attempts int, next *time.Time) {
+func (m *demoPostgresMounter) record(id, state string, err error, attempts int, next *time.Time, dsn string) {
+	detail := ""
 	m.mu.Lock()
 	status := m.status[id]
 	wasPending := status.State == demoPostgresPending
 	status.State, status.Attempts, status.NextRetry = state, attempts, next
 	status.Reason = ""
 	if err != nil {
-		status.Reason = err.Error()
+		status.Reason = demoPostgresReasonCode(err)
+		detail = redactDemoPostgresText(err.Error(), dsn)
 	}
 	if wasPending {
 		m.pending--
@@ -295,13 +375,13 @@ func (m *demoPostgresMounter) record(id, state string, err error, attempts int, 
 	case demoPostgresAvailable:
 		log.Printf("native PostgreSQL %s: mounted (attempt %d)", id, attempts)
 	case demoPostgresNotConfigured:
-		log.Printf("native PostgreSQL %s: skipped, %s", id, status.Reason)
+		log.Printf("native PostgreSQL %s: skipped, %s", id, detail)
 	default:
 		retry := "not retried until restart"
 		if next != nil {
 			retry = "retry at " + next.UTC().Format(time.RFC3339)
 		}
-		log.Printf("native PostgreSQL %s: %s (attempt %d): %s; %s", id, state, attempts, status.Reason, retry)
+		log.Printf("native PostgreSQL %s: %s (attempt %d): %s: %s; %s", id, state, attempts, status.Reason, detail, retry)
 	}
 }
 

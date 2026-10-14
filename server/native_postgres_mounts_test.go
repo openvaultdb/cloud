@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -119,7 +120,7 @@ func serveGet(handler http.Handler, path string, headers ...string) *httptest.Re
 func TestDemoPostgresMountRetriesWithoutRestart(t *testing.T) {
 	logs := captureLog(t)
 	provider := testDemoPostgresProvider("chinook")
-	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader:private-marker-1234@ep-x.neon.tech/chinook?sslmode=verify-full")
+	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader:private-marker-1234@ep-x.neon.tech/chinook?sslmode=verify-full&connect_timeout=10")
 	target := server.New("test", nil)
 	m := newDemoPostgresMounter(target, []runtimeDatabase{provider}, fastDemoPostgresTiming())
 	var checks atomic.Int32
@@ -157,7 +158,7 @@ func TestDemoPostgresMountRetriesWithoutRestart(t *testing.T) {
 func TestDemoPostgresSlowMountIsAbandonedAndClosed(t *testing.T) {
 	captureLog(t)
 	provider := testDemoPostgresProvider("pubs")
-	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader@ep-x.neon.tech/pubs?sslmode=verify-full")
+	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader@ep-x.neon.tech/pubs?sslmode=verify-full&connect_timeout=10")
 	target := server.New("test", nil)
 	m := newDemoPostgresMounter(target, []runtimeDatabase{provider}, fastDemoPostgresTiming())
 	m.timing.FirstRetry, m.timing.MaxRetry = time.Hour, time.Hour
@@ -177,7 +178,7 @@ func TestDemoPostgresSlowMountIsAbandonedAndClosed(t *testing.T) {
 	m.start([]runtimeDatabase{provider})
 	t.Cleanup(func() { _ = m.stop() })
 	status := waitForDemoPostgresState(t, m, provider.ID, demoPostgresUnavailable)
-	if !strings.Contains(status.Reason, "did not finish") || status.NextRetry == nil {
+	if status.Reason != "timeout" || status.NextRetry == nil {
 		t.Fatalf("slow mount status = %+v", status)
 	}
 	close(release)
@@ -195,7 +196,7 @@ func TestDemoPostgresConfigurationRefusalsAreNotRetried(t *testing.T) {
 	captureLog(t)
 	t.Setenv(demoPostgresInsecureTLSEnv, "")
 	chinook, pubs := testDemoPostgresProvider("chinook"), testDemoPostgresProvider("pubs")
-	t.Setenv(chinook.nativePostgres.dsnEnv, "postgres://reader:pw@ep-x.neon.tech/chinook?sslmode=require")
+	t.Setenv(chinook.nativePostgres.dsnEnv, "postgres://reader:pw@ep-x.neon.tech/chinook?sslmode=require&connect_timeout=10")
 	t.Setenv(pubs.nativePostgres.dsnEnv, "")
 	target := server.New("test", nil)
 	m := newDemoPostgresMounter(target, []runtimeDatabase{chinook, pubs}, fastDemoPostgresTiming())
@@ -211,8 +212,8 @@ func TestDemoPostgresConfigurationRefusalsAreNotRetried(t *testing.T) {
 	time.Sleep(60 * time.Millisecond) // longer than the retry delay
 	statuses := m.snapshot()
 	if len(statuses) != 2 ||
-		statuses[0].ID != "chinook-postgresql" || statuses[0].State != demoPostgresMisconfigured || statuses[0].Attempts != 1 || statuses[0].NextRetry != nil || statuses[0].Reason != errDemoPostgresTLS.Error() ||
-		statuses[1].ID != "pubs-postgresql" || statuses[1].State != demoPostgresNotConfigured || statuses[1].Attempts != 1 {
+		statuses[0].ID != "chinook-postgresql" || statuses[0].State != demoPostgresMisconfigured || statuses[0].Attempts != 1 || statuses[0].NextRetry != nil || statuses[0].Reason != "tls_required" ||
+		statuses[1].ID != "pubs-postgresql" || statuses[1].State != demoPostgresNotConfigured || statuses[1].Attempts != 1 || statuses[1].Reason != "not_configured" {
 		t.Fatalf("statuses = %+v", statuses)
 	}
 }
@@ -270,6 +271,9 @@ func TestDemoPostgresBrokenSourceLeavesSQLiteServing(t *testing.T) {
 		if mount.ID == "chinook-postgresql" {
 			want = demoPostgresUnavailable
 		}
+		if mount.ID == "chinook-postgresql" && mount.Reason != "connection_failed" {
+			t.Errorf("public reason = %q, want the stable code connection_failed", mount.Reason)
+		}
 		if mount.State != want {
 			t.Errorf("%s state = %s (%s), want %s", mount.ID, mount.State, mount.Reason, want)
 		}
@@ -310,5 +314,128 @@ func TestDemoPostgresStatusRouteMethods(t *testing.T) {
 	}
 	if !errors.Is(context.Cause(m.ctx), context.Canceled) {
 		t.Fatal("stop did not cancel retries")
+	}
+}
+
+// TestDemoPostgresAbandonedMountKeepsItsSlot: with one slot, a mount abandoned
+// after its attempt timeout keeps the slot until it really ends, so the second
+// source cannot start a concurrent real mount; stop() waits for the late close.
+func TestDemoPostgresAbandonedMountKeepsItsSlot(t *testing.T) {
+	captureLog(t)
+	first, second := testDemoPostgresProvider("chinook"), testDemoPostgresProvider("pubs")
+	t.Setenv(first.nativePostgres.dsnEnv, "postgres://r@ep-x.neon.tech/chinook?sslmode=verify-full&connect_timeout=10")
+	t.Setenv(second.nativePostgres.dsnEnv, "postgres://r@ep-x.neon.tech/pubs?sslmode=verify-full&connect_timeout=10")
+	timing := fastDemoPostgresTiming()
+	timing.Concurrency, timing.FirstRetry, timing.MaxRetry = 1, time.Hour, time.Hour
+	m := newDemoPostgresMounter(server.New("test", nil), []runtimeDatabase{first, second}, timing)
+	m.check = func(context.Context, string, string) error { return nil }
+	m.scope = func(*core.Database, runtimeDatabase) error { return nil }
+	release := make(chan struct{})
+	var running, maxRunning atomic.Int32
+	var closedLate atomic.Bool
+	manifests := map[string]string{first.ID: sqliteTestManifest(t, first.ID), second.ID: sqliteTestManifest(t, second.ID)}
+	m.mount = func(p runtimeDatabase) (*core.Database, error) {
+		now := running.Add(1)
+		defer running.Add(-1)
+		for {
+			old := maxRunning.Load()
+			if now <= old || maxRunning.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		if p.ID == first.ID {
+			<-release // a hung dial
+			db, err := sqliteTestDatabase(manifests[p.ID])
+			if err == nil {
+				db.OnClose(func() error { closedLate.Store(true); return nil })
+			}
+			return db, err
+		}
+		return sqliteTestDatabase(manifests[p.ID])
+	}
+	m.start([]runtimeDatabase{first})
+	waitForDemoPostgresState(t, m, first.ID, demoPostgresUnavailable)
+	m.start([]runtimeDatabase{second}) // only now, so the abandoned mount surely holds the slot
+	time.Sleep(100 * time.Millisecond)
+	if state, _ := m.state(second.ID); state != demoPostgresPending {
+		t.Fatalf("second source ran while the abandoned mount still held the only slot: %s", state)
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- m.stop() }()
+	select {
+	case <-stopped:
+		t.Fatal("stop returned before the abandoned mount ended")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not return after the abandoned mount ended")
+	}
+	if !closedLate.Load() || maxRunning.Load() > 1 {
+		t.Fatalf("late mount closed=%v, concurrent real mounts=%d", closedLate.Load(), maxRunning.Load())
+	}
+}
+
+// TestDemoPostgresHungDialEndsWithConnectTimeout uses the real mount against a
+// listener that accepts TCP and never answers: the DSN's required connect_timeout
+// ends the abandoned mount, which then frees its slot.
+func TestDemoPostgresHungDialEndsWithConnectTimeout(t *testing.T) {
+	captureLog(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conns []net.Conn
+	var connsMu sync.Mutex
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connsMu.Lock()
+			conns = append(conns, conn)
+			connsMu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		connsMu.Lock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+		connsMu.Unlock()
+	})
+	t.Setenv(demoPostgresInsecureTLSEnv, "true")
+	provider := testDemoPostgresProvider("chinook")
+	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader@"+listener.Addr().String()+"/chinook?sslmode=disable&connect_timeout=1")
+	timing := fastDemoPostgresTiming()
+	timing.Concurrency, timing.FirstRetry, timing.MaxRetry = 1, time.Hour, time.Hour
+	m := newDemoPostgresMounter(server.New("test", nil), []runtimeDatabase{provider}, timing)
+	m.check = func(context.Context, string, string) error { return nil } // reach the real mount
+	m.start([]runtimeDatabase{provider})
+	status := waitForDemoPostgresState(t, m, provider.ID, demoPostgresUnavailable)
+	if status.Reason != "timeout" {
+		t.Fatalf("hung dial status = %+v", status)
+	}
+	select {
+	case m.slots <- struct{}{}:
+		t.Fatal("the slot was free while the hung mount was still dialling")
+	default:
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(m.slots) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("connect_timeout did not end the abandoned mount")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := m.stop(); err != nil {
+		t.Fatal(err)
 	}
 }

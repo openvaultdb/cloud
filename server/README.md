@@ -187,16 +187,24 @@ synchronously; each PostgreSQL edition is mounted in the background, at most two
 at a time, and independently of the others:
 
 - a DSN that is not bound is reported as `not_configured`;
-- a DSN refused by configuration (TLS mode, `options` parameter) is
-  `misconfigured` and is not retried until a restart with a fixed secret;
+- a DSN refused by configuration (TLS mode, repeated keys, `options`, missing
+  `connect_timeout`, `PG*` environment variables) is `misconfigured` and is not
+  retried until a restart with a fixed secret;
 - a failed connection, self-check or catalogue discovery, or an attempt that
   takes longer than 90 s, is `unavailable` and retried after 30 s, doubling to at
-  most 15 minutes, without a restart.
+  most 15 minutes, without a restart. An abandoned attempt keeps its
+  concurrency slot until the underlying mount really ends (bounded by the DSN's
+  `connect_timeout` and the library's 30 s discovery deadline) and is closed;
+  shutdown waits for it.
 
-Every outcome is logged as one line naming the database and the reason, never
-the DSN. `GET /v1/demodb/postgres-mounts` returns the state, reason, attempt
-count and next retry of each edition (the path avoids Cloud Run's reserved
-`…z` paths such as `/healthz`). While an edition is not mounted, requests to
+Every outcome is logged as one line naming the database and the reason, with
+the DSN and its host, port, database, user and password redacted.
+`GET /v1/demodb/postgres-mounts` returns, per edition, the state, a stable
+reason code (`not_configured`, `tls_required`, `dsn_rejected`, `role_unsafe`,
+`statement_timeout_required`, `schema_scope`, `connection_failed`, `timeout`,
+`mount_failed`, `mount_rejected`, `stopping`), the attempt count and the next
+retry; it never serves error text (the path avoids Cloud Run's reserved `…z`
+paths such as `/healthz`). While an edition is not mounted, requests to
 `/v1/databases/<id>…` get `503 database_unavailable` with `Retry-After`, and
 `postgres` is not advertised as a join engine until at least one edition is
 mounted.
@@ -205,14 +213,30 @@ mounted.
 
 Before mounting, the server refuses an edition unless:
 
-- its DSN sets `sslmode=verify-full` (or `verify-ca`) explicitly; `PGSSLMODE` is
-  not consulted. `OVDB_PG_INSECURE_TLS_FOR_TESTS=true` lifts this only when
-  every host in the DSN is a loopback address (the local real-PostgreSQL
+- its DSN names exactly one host, sets every key once (pgx keeps the first of a
+  repeated key, other parsers the last), uses no service file, sets
+  `sslmode=verify-full` (`verify-ca` and `require` are refused) and a
+  `connect_timeout` of 1-30 s, and sends no session parameter other than
+  `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` or
+  `application_name` (in particular no `options`, `search_path` or
+  `default_transaction_read_only=off`). The configuration pgx actually derives
+  is then checked too: TLS on, hostname verification on, no plaintext fallback;
+- no `PG*` connection environment variable (`PGSSLMODE`, `PGHOST`, `PGOPTIONS`,
+  `PGSERVICE`, ...) is set in the process, since pgx would apply it to anything
+  the DSN leaves out;
+- `OVDB_PG_INSECURE_TLS_FOR_TESTS=true` lifts only the TLS requirement, and only
+  when the single host is a loopback address (the local real-PostgreSQL
   harness); it has no effect on a Neon host and is never set by the deploy;
 - its role passes a live self-check: not `postgres`, not `neondb_owner` or any
-  `*_owner` role, no superuser/CREATEROLE/CREATEDB/REPLICATION/BYPASSRLS; does
-  not own and cannot INSERT/UPDATE/DELETE/TRUNCATE any relation or update any
-  sequence; cannot CREATE in the database or any schema;
+  `*_owner` role, no superuser/CREATEROLE/CREATEDB/REPLICATION/BYPASSRLS;
+  `session_user` equals `current_user`; not a member, with or without INHERIT
+  (a member can still `SET ROLE`), of any role that has those attributes, owns a
+  relation, schema or the database, or is one of `pg_write_all_data`,
+  `pg_read_all_data`, `pg_execute_server_program`, `pg_read_server_files`,
+  `pg_write_server_files`, `pg_database_owner`, `pg_signal_backend`,
+  `pg_create_subscription`, `pg_checkpoint`, `pg_maintain`; does not own and
+  cannot INSERT/UPDATE/DELETE/TRUNCATE any relation or update any sequence;
+  cannot CREATE in the database or any schema;
 - its session has a `statement_timeout` between 1 ms and 60 s (set it on the
   role with `ALTER ROLE … SET statement_timeout = '10s'`, or add
   `statement_timeout=10000` to the DSN query string);
@@ -226,12 +250,17 @@ For the six Neon secrets this means:
 1. Use six separate Neon databases, or six roles each granted `USAGE` and
    `SELECT` on one schema only. A role that can read two editions' schemas is
    refused for both.
-2. Use a dedicated reader role; never the owner role (`neondb_owner`).
+2. Use a dedicated reader role created with SQL (`CREATE ROLE chinook_reader
+   LOGIN PASSWORD …`, then `GRANT USAGE ON SCHEMA chinook` and `GRANT SELECT ON
+   ALL TABLES IN SCHEMA chinook`); never the owner role (`neondb_owner`). Roles
+   created in the Neon Console or API are made members of `neon_superuser`
+   (CREATEDB, CREATEROLE), so the self-check refuses them.
 3. Use Neon's **direct** endpoint (`ep-….neon.tech`), not the `-pooler`
    endpoint. Whether the pooler keeps the `default_transaction_read_only`
    startup parameter is **untested**; the server logs a warning for a pooler
    host. The role self-check above is what guarantees read-only access either way.
-4. Write `sslmode=verify-full` (and, optionally, `connect_timeout=10`) in each DSN.
+4. Write `sslmode=verify-full&connect_timeout=10` in each DSN, and add
+   `statement_timeout=10000` unless the role has its own.
 
 The library will take over part of this once the openvaultdb-go release with
 per-mount hardening options (`Required`, `RequireSafeRole`, `StatementTimeout`,
@@ -259,8 +288,11 @@ TLS, `OVDB_PG_INSECURE_TLS_FOR_TESTS=true`):
 ```sh
 export OVDB_PG_INSECURE_TLS_FOR_TESTS=true
 for db in chinook northwind pubs sakila adventureworks employees; do
-  export "OVDB_PG_$(echo $db | tr a-z A-Z)_DSN=postgres://demo_reader@127.0.0.1:55440/$db?sslmode=disable&statement_timeout=10000"
+  export "OVDB_PG_$(echo $db | tr a-z A-Z)_DSN=postgres://demo_reader@127.0.0.1:55440/$db?sslmode=disable&statement_timeout=10000&connect_timeout=10"
 done
+# optional: a superuser on the chinook database, for the privileged-membership
+# scenarios (they create and drop throwaway roles)
+export OVDB_PG_TEST_PRIVILEGED_DSN="postgres://postgres@127.0.0.1:55440/chinook?sslmode=disable&connect_timeout=10"
 go test -count=1 -run 'DemoPostgres|NativePostgres' -v .
 ```
 
