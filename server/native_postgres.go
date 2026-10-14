@@ -47,14 +47,15 @@ func appendConfiguredDemoPostgres(providers []runtimeDatabase) ([]runtimeDatabas
 		return providers, nil
 	}
 
+	// Every PostgreSQL mount is independently optional. A missing DSN is not a
+	// startup error: the mount is reported as not_configured by the status
+	// route and the SQLite inventory is served unchanged. Duplicate IDs remain
+	// a configuration error because they would shadow an existing database.
 	seen := make(map[string]struct{}, len(providers)+len(demoPostgresSources))
 	for _, provider := range providers {
 		seen[provider.ID] = struct{}{}
 	}
 	for _, source := range demoPostgresSources {
-		if value, exists := os.LookupEnv(source.dsnEnv); !exists || value == "" {
-			return nil, fmt.Errorf("native PostgreSQL is enabled but %s is not configured", source.dsnEnv)
-		}
 		id := source.databaseID + "-postgresql"
 		if _, exists := seen[id]; exists {
 			return nil, fmt.Errorf("native PostgreSQL database ID %q is already configured", id)
@@ -105,7 +106,7 @@ func demoPostgresMountOptions(provider runtimeDatabase) (mount.Options, error) {
 	if _, err := demoPostgresManifest(provider); err != nil {
 		return mount.Options{}, err
 	}
-	return mount.Options{
+	options := mount.Options{
 		// Strict schema mode never loads or observes inferred catalogues. Keep
 		// CatalogueDir unset so the temporary manifest directory is not retained
 		// as a path that core could later write.
@@ -113,7 +114,9 @@ func demoPostgresMountOptions(provider runtimeDatabase) (mount.Options, error) {
 			Schema: provider.nativePostgres.schemaName,
 			Name:   "_import_manifest",
 		}},
-	}, nil
+	}
+	applyLibraryMountHardening(&options)
+	return options, nil
 }
 
 func mountDemoPostgres(provider runtimeDatabase) (db *core.Database, resultErr error) {

@@ -66,8 +66,10 @@ import (
 //     grouping cannot hold more groups than the rows it reads.
 //   - MaxSourceBytes, Timeout and QueueWait are the library defaults, written out so
 //     that the discovery document and this comment state what is enforced.
-//   - JoinEngines starts with sqlite. Native PostgreSQL is advertised only when
-//     all six opt-in DemoDB sources have been configured and mounted.
+//   - JoinEngines starts with sqlite. With the DemoDB PostgreSQL opt-in on,
+//     postgres is listed too, but the library advertises it in discovery only
+//     while at least one native read-only PostgreSQL mount is actually mounted
+//     (each of the six mounts is optional and comes up in the background).
 //   - Snapshot slots 2, bytes 64 MiB: the largest pinned collection spools 57.8 MiB.
 //     A larger one is refused with 413 snapshot_too_large.
 //

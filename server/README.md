@@ -141,6 +141,16 @@ Chinook keeps its historical comma-separated composite identifiers. The live
 OVDB mount exposes physical tables; provider views remain represented in the
 published schema metadata and exports.
 
+## Origin secret
+
+When `OVDB_ORIGIN_SECRET` is set (32-128 characters of `A-Za-z0-9_-`), every
+request must carry it in the header named by `OVDB_ORIGIN_SECRET_HEADER`
+(default `X-OVDB-Origin-Secret`, must start with `X-`), or it is answered `403`;
+the header is removed before the request reaches the library. The Worker adds it
+from its own `OVDB_ORIGIN_SECRET` secret, so direct `*.run.app` calls cannot
+bypass the Worker's rate limits. Unset, nothing changes. Rollout order and the
+smoke-step caveat are in the [root README](../README.md#public-ovdb-routes-rate-limits-and-the-cloud-run-origin).
+
 ## Optional DemoDB PostgreSQL editions
 
 The runtime can additionally mount the six native DemoDB editions as
@@ -149,19 +159,142 @@ The runtime can additionally mount the six native DemoDB editions as
 Set `OVDB_DEMODB_POSTGRES_ENABLED=true` and bind each corresponding
 `OVDB_PG_CHINOOK_DSN`, `OVDB_PG_NORTHWIND_DSN`, `OVDB_PG_PUBS_DSN`,
 `OVDB_PG_SAKILA_DSN`, `OVDB_PG_ADVENTUREWORKS_DSN`, and
-`OVDB_PG_EMPLOYEES_DSN` from Secret Manager. Enabling the feature without all six
-DSNs fails startup; an unset or false feature flag leaves the SQLite-only
-inventory unchanged. DSNs are only read by the server and are not written into
-the image, inventory, discovery responses, or temporary manifests.
+`OVDB_PG_EMPLOYEES_DSN` from Secret Manager. An unset or false feature flag
+leaves the SQLite-only inventory unchanged. DSNs are only read by the server and
+are not written into the image, inventory, discovery responses, logs, or
+temporary manifests.
+
+### What enabling it exposes
+
+Turning `OVDB_DEMODB_POSTGRES_ENABLED` on publishes **full public DTQL** on every
+mounted edition, to anyone who can reach the service. The library's
+`OVDB_PREVIEW_POSTGRES_QUERIES` switch is not involved: a native read-only mount
+answers `core.CanQuery()` itself, and discovery (`/.well-known/openvaultdb`)
+then lists `postgres` among the join engines. Callers get filters, ordering,
+offsets, equality joins across up to 8 sources, grouping with aggregates and
+`HAVING`, and `EXISTS`/`IN` subqueries, under the limits in
+[Limits and the instance memory](#limits-and-the-instance-memory). A document over
+one database without a subquery (single-source reads, joins, grouping) is
+compiled to SQL and runs inside PostgreSQL; a document with a subquery runs in the
+server's in-memory engine. Writes are refused, and the legacy `/query` route
+answers 501 for these mounts. `TestNativePostgresMountExposesFullPublicDTQL`
+checks exactly this against a real database.
+
+### Each mount is optional
+
+Startup never waits for or fails on PostgreSQL. The SQLite databases are mounted
+synchronously; each PostgreSQL edition is mounted in the background, at most two
+at a time, and independently of the others:
+
+- a DSN that is not bound is reported as `not_configured`;
+- a DSN refused by configuration (TLS mode, repeated keys, `options`, missing
+  `connect_timeout`, `PG*` environment variables) is `misconfigured` and is not
+  retried until a restart with a fixed secret;
+- a failed connection, self-check or catalogue discovery, or an attempt that
+  takes longer than 90 s, is `unavailable` and retried after 30 s, doubling to at
+  most 15 minutes, without a restart. An abandoned attempt keeps its
+  concurrency slot until the underlying mount really ends (bounded by the DSN's
+  `connect_timeout` and the library's 30 s discovery deadline) and is closed;
+  shutdown waits for it.
+
+Every outcome is logged as one line naming the database and the reason, with
+the DSN and its host, port, database, user and password redacted.
+`GET /v1/demodb/postgres-mounts` returns, per edition, the state, a stable
+reason code (`not_configured`, `tls_required`, `dsn_rejected`, `role_unsafe`,
+`statement_timeout_required`, `schema_scope`, `connection_failed`, `timeout`,
+`mount_failed`, `mount_rejected`, `stopping`), the attempt count and the next
+retry; it never serves error text (the path avoids Cloud Run's reserved `…z`
+paths such as `/healthz`). While an edition is not mounted, requests to
+`/v1/databases/<id>…` get `503 database_unavailable` with `Retry-After`, and
+`postgres` is not advertised as a join engine until at least one edition is
+mounted.
+
+### Mount hardening and operator requirements
+
+Before mounting, the server refuses an edition unless:
+
+- its DSN names exactly one host, sets every key once (pgx keeps the first of a
+  repeated key, other parsers the last), uses no service file, sets
+  `sslmode=verify-full` (`verify-ca` and `require` are refused) and a
+  `connect_timeout` of 1-30 s, and sends no session parameter other than
+  `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` or
+  `application_name` (in particular no `options`, `search_path` or
+  `default_transaction_read_only=off`). The configuration pgx actually derives
+  is then checked too: TLS on, hostname verification on, no plaintext fallback;
+- no `PG*` connection environment variable (`PGSSLMODE`, `PGHOST`, `PGOPTIONS`,
+  `PGSERVICE`, ...) is set in the process, since pgx would apply it to anything
+  the DSN leaves out;
+- `OVDB_PG_INSECURE_TLS_FOR_TESTS=true` lifts only the TLS requirement, and only
+  when the single host is a loopback address (the local real-PostgreSQL
+  harness); it has no effect on a Neon host and is never set by the deploy;
+- its role passes a live self-check: not `postgres`, not `neondb_owner` or any
+  `*_owner` role, no superuser/CREATEROLE/CREATEDB/REPLICATION/BYPASSRLS;
+  `session_user` equals `current_user`; not a member, with or without INHERIT
+  (a member can still `SET ROLE`), of any role that has those attributes, owns a
+  relation, schema or the database, or is one of `pg_write_all_data`,
+  `pg_read_all_data`, `pg_execute_server_program`, `pg_read_server_files`,
+  `pg_write_server_files`, `pg_database_owner`, `pg_signal_backend`,
+  `pg_create_subscription`, `pg_checkpoint`, `pg_maintain`; does not own and
+  cannot INSERT/UPDATE/DELETE/TRUNCATE any relation or update any sequence;
+  cannot CREATE in the database or any schema;
+- its session has a `statement_timeout` between 1 ms and 60 s (set it on the
+  role with `ALTER ROLE … SET statement_timeout = '10s'`, or add
+  `statement_timeout=10000` to the DSN query string);
+- the only schema in which the role can read any relation is the edition's own
+  (`chinook` for `chinook-postgresql`, and so on). After mounting, every
+  discovered collection is checked again to belong to that schema.
+
+The manifest also opens every session with `default_transaction_read_only=on`.
+For the six Neon secrets this means:
+
+1. Use six separate Neon databases, or six roles each granted `USAGE` and
+   `SELECT` on one schema only. A role that can read two editions' schemas is
+   refused for both.
+2. Use a dedicated reader role created with SQL (`CREATE ROLE chinook_reader
+   LOGIN PASSWORD …`, then `GRANT USAGE ON SCHEMA chinook` and `GRANT SELECT ON
+   ALL TABLES IN SCHEMA chinook`); never the owner role (`neondb_owner`). Roles
+   created in the Neon Console or API are made members of `neon_superuser`
+   (CREATEDB, CREATEROLE), so the self-check refuses them.
+3. Use Neon's **direct** endpoint (`ep-….neon.tech`), not the `-pooler`
+   endpoint. Whether the pooler keeps the `default_transaction_read_only`
+   startup parameter is **untested**; the server logs a warning for a pooler
+   host. The role self-check above is what guarantees read-only access either way.
+4. Write `sslmode=verify-full&connect_timeout=10` in each DSN, and add
+   `statement_timeout=10000` unless the role has its own.
+
+The library will take over part of this once the openvaultdb-go release with
+per-mount hardening options (`Required`, `RequireSafeRole`, `StatementTimeout`,
+`TLSVerify`) is pinned: the switch is `libraryEnforcesMountHardening` and the
+seam `applyLibraryMountHardening` in `native_postgres_guard.go`.
+
+### Collection IDs and the all-collections journey
 
 The runtime manifest for each mount is created temporarily and uses the
 library's native PostgreSQL collection IDs. The consumer excludes only the
-selected schema's `_import_manifest` relation. Each source role must retain its
-reviewed TLS-verified, read-only, selected-schema grants. Native PostgreSQL
-supports bounded relational DTQL reads and joins; the legacy `/query` route is
-not advertised for these mounts. The SQLite-only memory measurements below do
-not cover the six additional pools and schemas. Keep this opt-in disabled in
-production until the shipping-image and all-six live memory/query proof pass.
+selected schema's `_import_manifest` relation. The SQLite-only memory
+measurements below do not cover the additional pools and schemas. Keep this
+opt-in disabled in production until the shipping-image and all-six live
+memory/query proof pass.
+
+`TestDemoPostgresReadOnlyPublicJourney` reads **every** collection of every
+edition. With openvaultdb-go v0.24.1, 46 relations whose encoded collection ID is
+longer than 63 bytes (43 AdventureWorks relations and three Northwind views) are
+refused with `400 invalid_key`; they are listed in
+`knownLongNameCollectionFailures` keyed by that version. With any other pinned
+version the journey is strict. To run it against a real PostgreSQL 17 loaded
+from the DemoDB SQL files, set the six DSNs (and, for a loopback server without
+TLS, `OVDB_PG_INSECURE_TLS_FOR_TESTS=true`):
+
+```sh
+export OVDB_PG_INSECURE_TLS_FOR_TESTS=true
+for db in chinook northwind pubs sakila adventureworks employees; do
+  export "OVDB_PG_$(echo $db | tr a-z A-Z)_DSN=postgres://demo_reader@127.0.0.1:55440/$db?sslmode=disable&statement_timeout=10000&connect_timeout=10"
+done
+# optional: a superuser on the chinook database, for the privileged-membership
+# scenarios (they create and drop throwaway roles)
+export OVDB_PG_TEST_PRIVILEGED_DSN="postgres://postgres@127.0.0.1:55440/chinook?sslmode=disable&connect_timeout=10"
+go test -count=1 -run 'DemoPostgres|NativePostgres' -v .
+```
 
 The default legacy adapter reserves a native column named `id` (case-insensitively), because the
 read-only record adapter uses that name for serving identity. A source table
@@ -247,9 +380,13 @@ and the join engines this server enforces. It also states the library's fixed
 ceiling of 100,000 groups; with a budget of 40,000 source rows a grouping cannot
 reach more groups than the rows it reads, so 40,000 is the effective ceiling.
 
-Structured queries on PostgreSQL stay off: neither the server code nor the deploy
-workflow sets the library's preview switch, and `TestPostgresPreviewStaysOff` fails
-if either does.
+Neither the server code nor the deploy workflow sets the library's
+`OVDB_PREVIEW_POSTGRES_QUERIES` preview switch, and
+`TestServiceNeverSetsLibraryPostgresPreviewSwitch` fails if either does. That
+switch only governs ordinary PostgreSQL manifests; it does **not** keep
+PostgreSQL queries off. The native read-only DemoDB editions serve full public
+DTQL as soon as `OVDB_DEMODB_POSTGRES_ENABLED` is on (see
+[What enabling it exposes](#what-enabling-it-exposes)).
 
 ## Add a database
 

@@ -1,6 +1,7 @@
 import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
+import { canonicalOVDBPath, isOVDBPublicPath, limitOVDBPublicRequest, looksLikeOVDBPath, type OVDBLimitEnv } from "./ovdb-limits";
 import {
   createNorthwindD1Handler,
   createNorthwindNeonHandler,
@@ -58,8 +59,17 @@ export function createWorker(
             ? authorizationServerMetadata(env)
             : methodNotAllowed("GET");
         }
-        if (url.pathname === "/.well-known/openvaultdb" || url.pathname === "/ovdb" || url.pathname.startsWith("/ovdb/") || url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
-          return proxyChinook(request, env, upstreamFetch);
+        const ovdbPath = canonicalOVDBPath(url.pathname);
+        if (ovdbPath !== null && isOVDBPublicPath(ovdbPath)) {
+          // Classify and forward the same canonical path (see canonicalOVDBPath).
+          const limited = await limitOVDBPublicRequest(request, env as OVDBLimitEnv, ovdbPath);
+          if (limited !== undefined) return limited;
+          const forwarded = new URL(url);
+          forwarded.pathname = ovdbPath;
+          return proxyChinook(new Request(forwarded, request), env, upstreamFetch);
+        }
+        if (ovdbPath === null && looksLikeOVDBPath(url.pathname)) {
+          return jsonResponse({ error: { code: "invalid_path", message: "Request path is not in canonical form." } }, 400);
         }
         if (url.pathname === "/oauth/device/code") {
           if (request.method !== "POST") return methodNotAllowed("POST");
