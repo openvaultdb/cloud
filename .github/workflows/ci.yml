@@ -29,6 +29,19 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Check out pinned Northwind D1 import
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: demo-db/northwind
+          ref: 64961074fc09801cf489ba0d3632d14c463950e3
+          path: testdata/northwind
+          persist-credentials: false
+
+      - name: Verify pinned Northwind import checksum
+        run: |
+          printf '%s  %s\n' 'fea7d05421f0297adc18c41196f22b498c669abf78c2392b50343091df8810d7' 'testdata/northwind/artifacts/hosting-imports/d1.sql' | sha256sum --check --status
+          echo "NORTHWIND_D1_SEED_SQL=${GITHUB_WORKSPACE}/testdata/northwind/artifacts/hosting-imports/d1.sql" >> "${GITHUB_ENV}"
+
       - name: Install locked dependencies
         run: npm ci
 

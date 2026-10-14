@@ -4,15 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "npm run types && npm run typecheck && npm test && npm run deploy:dry",
-    "deploy": "wrangler deploy",
-    "deploy:dry": "wrangler deploy --dry-run",
+    "check": "npm run prepare:dependencies && npm run types && npm run typecheck && npm test && npm run test:deploy && npm run deploy:dry",
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:dry": "node scripts/prepare-dalgo-core.mjs && wrangler deploy --dry-run",
     "dev": "wrangler dev --local",
+    "postinstall": "node scripts/prepare-dalgo-core.mjs",
+    "prepare:dependencies": "node scripts/prepare-dalgo-core.mjs",
     "test": "vitest run",
+    "test:deploy": "node --test scripts/deploy.test.mjs",
     "typecheck": "tsc --noEmit",
     "types": "wrangler types"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@dalgo/core": "https://codeload.github.com/dal-go/dalgo-js/tar.gz/b863f32d2e92a0784e9633aa0eaa14d2d5528336",
+    "@dalgo/d1": "https://github.com/dal-go/dalgo-http-adapters/releases/download/d1-v0.2.0/dalgo-d1-0.2.0.tgz",
+    "@neondatabase/serverless": "1.2.0"
+  },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.1.2",
     "@types/node": "^26.4.0",

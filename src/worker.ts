@@ -1,6 +1,12 @@
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook } from "./chinook";
 import {
+  createNorthwindD1Handler,
+  createNorthwindNeonHandler,
+  type NorthwindEnv,
+  type NorthwindNeonQueryFactory,
+} from "./northwind";
+import {
   proxyCloudDatabase,
   proxyDeviceAuthorization,
   type DeviceAuthEnv,
@@ -9,11 +15,18 @@ import {
 
 export function createWorker(
   upstreamFetch: UpstreamFetch = fetch,
+  northwindNeonQueryFactory?: NorthwindNeonQueryFactory,
 ): ExportedHandler<Env> {
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        if (url.pathname.startsWith("/northwind/d1/")) {
+          return await createNorthwindD1Handler(request, env as NorthwindEnv);
+        }
+        if (url.pathname.startsWith("/northwind/neon/")) {
+          return await createNorthwindNeonHandler(request, env as NorthwindEnv, northwindNeonQueryFactory);
+        }
         if (url.pathname === "/.well-known/oauth-authorization-server") {
           return request.method === "GET"
             ? authorizationServerMetadata(env)
