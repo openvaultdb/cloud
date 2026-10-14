@@ -18,6 +18,7 @@ import (
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/manifest"
 	"github.com/openvaultdb/openvaultdb-go/pkg/schema"
+	"github.com/openvaultdb/openvaultdb-go/pkg/server/servertest"
 )
 
 func TestAppendConfiguredDemoPostgresIsOptInAndPerMount(t *testing.T) {
@@ -206,60 +207,12 @@ func openvaultdbGoVersion(t *testing.T) string {
 }
 
 // knownLongNameCollectionFailures lists, per pinned openvaultdb-go version, the
-// relations whose every read fails because the library checks the length of
-// the encoded native collection ID instead of the relation name. The sibling
-// openvaultdb-go fix removes them: once go.mod pins a version that is not a key
-// here, the all-collections journey is strict and any failure fails the test.
-var knownLongNameCollectionFailures = map[string]map[string]bool{
-	"v0.24.1": {
-		"adventureworks.HumanResources.Department":                        true,
-		"adventureworks.HumanResources.Employee":                          true,
-		"adventureworks.HumanResources.EmployeeDepartmentHistory":         true,
-		"adventureworks.HumanResources.EmployeePayHistory":                true,
-		"adventureworks.HumanResources.JobCandidate":                      true,
-		"adventureworks.HumanResources.vEmployee":                         true,
-		"adventureworks.HumanResources.vEmployeeDepartment":               true,
-		"adventureworks.HumanResources.vEmployeeDepartmentHistory":        true,
-		"adventureworks.Person.BusinessEntityAddress":                     true,
-		"adventureworks.Person.BusinessEntityContact":                     true,
-		"adventureworks.Person.vStateProvinceCountryRegion":               true,
-		"adventureworks.Production.BillOfMaterials":                       true,
-		"adventureworks.Production.Illustration":                          true,
-		"adventureworks.Production.ProductCategory":                       true,
-		"adventureworks.Production.ProductCostHistory":                    true,
-		"adventureworks.Production.ProductDescription":                    true,
-		"adventureworks.Production.ProductDocument":                       true,
-		"adventureworks.Production.ProductInventory":                      true,
-		"adventureworks.Production.ProductListPriceHistory":               true,
-		"adventureworks.Production.ProductModel":                          true,
-		"adventureworks.Production.ProductModelIllustration":              true,
-		"adventureworks.Production.ProductModelProductDescriptionCulture": true,
-		"adventureworks.Production.ProductPhoto":                          true,
-		"adventureworks.Production.ProductProductPhoto":                   true,
-		"adventureworks.Production.ProductReview":                         true,
-		"adventureworks.Production.ProductSubcategory":                    true,
-		"adventureworks.Production.TransactionHistory":                    true,
-		"adventureworks.Production.TransactionHistoryArchive":             true,
-		"adventureworks.Production.WorkOrderRouting":                      true,
-		"adventureworks.Production.vProductAndDescription":                true,
-		"adventureworks.Purchasing.ProductVendor":                         true,
-		"adventureworks.Purchasing.PurchaseOrderDetail":                   true,
-		"adventureworks.Purchasing.PurchaseOrderHeader":                   true,
-		"adventureworks.Purchasing.vVendorWithAddresses":                  true,
-		"adventureworks.Purchasing.vVendorWithContacts":                   true,
-		"adventureworks.Sales.CountryRegionCurrency":                      true,
-		"adventureworks.Sales.SalesOrderHeaderSalesReason":                true,
-		"adventureworks.Sales.SalesPersonQuotaHistory":                    true,
-		"adventureworks.Sales.SalesTerritoryHistory":                      true,
-		"adventureworks.Sales.SpecialOfferProduct":                        true,
-		"adventureworks.Sales.vIndividualCustomer":                        true,
-		"adventureworks.Sales.vStoreWithAddresses":                        true,
-		"adventureworks.Sales.vStoreWithContacts":                         true,
-		"northwind.Alphabetical list of products":                         true,
-		"northwind.Customer and Suppliers by City":                        true,
-		"northwind.Products Above Average Price":                          true,
-	},
-}
+// relations whose every read is known to fail. openvaultdb-go v0.24.1 refused 46
+// relations whose encoded collection ID is longer than 63 bytes (43
+// AdventureWorks relations and three Northwind views); v0.25.2 fixed it, so no
+// version is listed and the all-collections journey is strict. If an entry is
+// ever added, the journey still fails once a listed relation starts reading.
+var knownLongNameCollectionFailures = map[string]map[string]bool{}
 
 func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 	handler, mountedHeapBytes := demoPostgresJourneyHandler(t)
@@ -400,7 +353,7 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 	sort.Strings(names)
 	for _, name := range names {
 		if expectedFailures[name] {
-			t.Logf("expected failure with openvaultdb-go %s (long relation name): %s: %s", libraryVersion, name, failed[name])
+			t.Logf("expected failure with openvaultdb-go %s: %s: %s", libraryVersion, name, failed[name])
 			continue
 		}
 		t.Errorf("collection %s: %s", name, failed[name])
@@ -409,6 +362,27 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		if _, stillFails := failed[name]; !stillFails {
 			t.Errorf("collection %s is listed as a known failure for openvaultdb-go %s but now reads: remove it from knownLongNameCollectionFailures", name, libraryVersion)
 		}
+	}
+}
+
+// TestDemoPostgresEveryCollectionBattery runs the library's client-side battery
+// (servertest.RequireEveryCollection: bounded and streamed reads, ordering by
+// each field, equality filters on sampled values, offset pages, out-of-range
+// integer refusals) on every collection of all six editions, through this
+// service's own handler.
+func TestDemoPostgresEveryCollectionBattery(t *testing.T) {
+	handler, _ := demoPostgresJourneyHandler(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	for _, source := range demoPostgresSources {
+		t.Run(source.databaseID, func(t *testing.T) {
+			report := servertest.RequireEveryCollection(t, ctx, server.URL, source.databaseID+"-postgresql", servertest.Options{Client: server.Client()})
+			if report.Collections == 0 {
+				t.Fatalf("%s: the battery found no collections", source.databaseID)
+			}
+		})
 	}
 }
 
