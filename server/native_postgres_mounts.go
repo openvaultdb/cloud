@@ -168,6 +168,19 @@ var (
 	errDemoPostgresMountRejected = errors.New("mounted database was rejected")
 )
 
+// demoPostgresLibraryRoleRefusalText is the start of the error openvaultdb-go
+// v0.25.2 (pkg/mount refuseWritableRole) returns when RequireReadOnlyNativePostgresRole
+// refuses a role. The library exports no sentinel or error type for it (the
+// error is a plain fmt.Errorf), so it is matched by this narrow fixed prefix;
+// TestDemoPostgresLibraryRoleRefusalTextMatchesLibrary fails if the library
+// changes the text.
+const demoPostgresLibraryRoleRefusalText = "native read-only PostgreSQL mount refused: the role is not read-only"
+
+// demoPostgresLibraryRoleRefusal reports whether err carries the library's role refusal.
+func demoPostgresLibraryRoleRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), demoPostgresLibraryRoleRefusalText)
+}
+
 // demoPostgresReasonCode maps a failure to the stable code the public status
 // route serves. Detailed text goes only to the (redacted) server log.
 func demoPostgresReasonCode(err error) string {
@@ -179,6 +192,7 @@ func demoPostgresReasonCode(err error) string {
 		{errDemoPostgresTLS, "tls_required"},
 		{errDemoPostgresInsecureHost, "tls_required"},
 		{errDemoPostgresInsecureEnv, "tls_required"},
+		{errDemoPostgresPoolerEndpoint, "pooler_endpoint"},
 		{errDemoPostgresDSNInvalid, "dsn_rejected"},
 		{errDemoPostgresDSNAmbiguous, "dsn_rejected"},
 		{errDemoPostgresEnv, "dsn_rejected"},
@@ -198,6 +212,9 @@ func demoPostgresReasonCode(err error) string {
 		if errors.Is(err, c.err) {
 			return c.code
 		}
+	}
+	if demoPostgresLibraryRoleRefusal(err) {
+		return "role_unsafe"
 	}
 	return "mount_failed"
 }
@@ -224,9 +241,6 @@ func (m *demoPostgresMounter) attempt(provider runtimeDatabase) (string, error) 
 	}
 	if err := validateDemoPostgresDSN(dsn, demoPostgresTLSAllowedInsecurely()); err != nil {
 		return demoPostgresMisconfigured, err
-	}
-	if demoPostgresNeonPooler(dsn) {
-		log.Printf("native PostgreSQL %s: DSN uses a Neon -pooler endpoint; the read-only startup parameter is untested there, use the direct endpoint", provider.ID)
 	}
 	checkCtx, cancelCheck := context.WithTimeout(m.ctx, m.timing.SelfCheck)
 	err := m.check(checkCtx, dsn, provider.nativePostgres.schemaName)

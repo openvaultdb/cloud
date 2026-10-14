@@ -201,8 +201,9 @@ at a time, and independently of the others:
 Every outcome is logged as one line naming the database and the reason, with
 the DSN and its host, port, database, user and password redacted.
 `GET /v1/demodb/postgres-mounts` returns, per edition, the state, a stable
-reason code (`not_configured`, `tls_required`, `dsn_rejected`, `role_unsafe`,
-`schema_scope`, `connection_failed`, `timeout`,
+reason code (`not_configured`, `tls_required`, `dsn_rejected`, `role_unsafe`
+(the service's own role self-check or the library's refusal of a writable role),
+`schema_scope`, `pooler_endpoint`, `connection_failed`, `timeout`,
 `mount_failed`, `mount_rejected`, `stopping`), the attempt count and the next
 retry; it never serves error text (the path avoids Cloud Run's reserved `…z`
 paths such as `/healthz`). While an edition is not mounted, requests to
@@ -292,18 +293,43 @@ each edition and, unlike `mount.All`, retries a failed one with backoff.
 2. Use a dedicated reader role created with SQL (`CREATE ROLE chinook_reader
    LOGIN PASSWORD …`, then `GRANT USAGE ON SCHEMA chinook` and `GRANT SELECT ON
    ALL TABLES IN SCHEMA chinook`); never the owner role (`neondb_owner`) and
-   never a member of `neon_superuser`. Roles created in the Neon Console or API
-   are made members of `neon_superuser` (CREATEDB, CREATEROLE), so the
-   self-check refuses them. Grant nothing else: no sequence `USAGE`, no
-   `EXECUTE` on SECURITY DEFINER functions in the schema.
-3. Use Neon's **direct** endpoint (`ep-….neon.tech`), not the `-pooler`
-   endpoint. Whether the pooler keeps the `default_transaction_read_only`
-   startup parameter is **untested**; the server logs a warning for a pooler
-   host. The role checks above are what guarantee read-only access either way.
-4. Write `sslmode=verify-full&connect_timeout=10` in each DSN. A
-   `statement_timeout` in the DSN or on the role is no longer needed (the
-   library's 15 s overrides it).
-5. Never set `OVDB_NATIVE_POSTGRES_INSECURE_TRANSPORT`,
+   never a role created in the Neon Console or API: those are made members of
+   `neon_superuser` (CREATEDB, CREATEROLE), so the self-check refuses them.
+   Grant nothing else: no sequence `USAGE`, no `EXECUTE` on SECURITY DEFINER
+   functions.
+3. Before activation, list the SECURITY DEFINER functions the reader can
+   execute. The library refuses a role that may execute one in an exposed
+   schema, **including `public`**, and PostgreSQL grants `EXECUTE` to `PUBLIC`
+   by default, so a stray function there fails the mount (reason `role_unsafe`).
+   Run [`docs/list_security_definer_functions.sql`](docs/list_security_definer_functions.sql)
+   as an admin role on each database (no secrets in the file); it is this query:
+
+   ```sql
+   SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
+   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE p.prosecdef
+     AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_%'
+     AND has_function_privilege('chinook_reader', p.oid, 'EXECUTE');
+   ```
+
+   For every row, `REVOKE EXECUTE ON FUNCTION <schema>.<function>(<args>) FROM
+   PUBLIC;` (the script prints the statement), then re-run it until it returns
+   nothing. Also consider `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON
+   FUNCTIONS FROM PUBLIC` for the owner that creates functions.
+4. Use Neon's **direct** endpoint (`ep-….neon.tech`), never the `-pooler`
+   endpoint. PgBouncer rejects unknown startup parameters unless
+   `ignore_startup_parameters` is set, and the mount sends `statement_timeout`
+   and `default_transaction_read_only`; whether they survive the pooler is
+   untested, so the service **fails closed**: a host whose first label ends in
+   `-pooler`, or that contains `-pooler.` or `pgbouncer`, is refused with status
+   reason `pooler_endpoint` before any connection is made.
+5. As an extra backstop, `ALTER ROLE chinook_reader SET statement_timeout =
+   '15s'` (and likewise for each reader). It duplicates the library's startup
+   parameter harmlessly and also bounds any session that bypasses the mount.
+6. Write `sslmode=verify-full&connect_timeout=10` in each DSN. A
+   `statement_timeout` in the DSN is no longer needed (the library's 15 s
+   overrides it).
+7. Never set `OVDB_NATIVE_POSTGRES_INSECURE_TRANSPORT`,
    `OVDB_PG_INSECURE_TLS_FOR_TESTS` or any `PG*` variable on the service.
 
 ### Collection IDs and the all-collections journey
