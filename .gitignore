@@ -1,6 +1,7 @@
 node_modules/
 worker-configuration.d.ts
 .wrangler/
+.wrangler-northwind-deploy-*.json
 .dev.vars*
 !.dev.vars.example
 coverage/
