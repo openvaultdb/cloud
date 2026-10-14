@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,12 +14,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/manifest"
 	"github.com/openvaultdb/openvaultdb-go/pkg/schema"
 )
 
-func TestAppendConfiguredDemoPostgresIsOptInAndAllOrNothing(t *testing.T) {
+func TestAppendConfiguredDemoPostgresIsOptInAndPerMount(t *testing.T) {
 	base := []runtimeDatabase{{ID: "chinook"}}
 	got, err := appendConfiguredDemoPostgres(base)
 	if err != nil || len(got) != 1 || got[0].ID != "chinook" {
@@ -35,9 +37,15 @@ func TestAppendConfiguredDemoPostgresIsOptInAndAllOrNothing(t *testing.T) {
 		t.Setenv(source.dsnEnv, "")
 	}
 	t.Setenv(demoPostgresSources[0].dsnEnv, "postgres://reader:private-marker@example.invalid/chinook")
-	_, err = appendConfiguredDemoPostgres(base)
-	if err == nil || !strings.Contains(err.Error(), demoPostgresSources[1].dsnEnv) || strings.Contains(err.Error(), "private-marker") {
-		t.Fatalf("partial secret configuration error = %v", err)
+	// A partial configuration is not a startup error: every source is listed and
+	// the background mounter reports the unset ones as not_configured.
+	got, err = appendConfiguredDemoPostgres(base)
+	if err != nil || len(got) != 1+len(demoPostgresSources) || got[0].ID != "chinook" {
+		t.Fatalf("partial secret configuration = %#v, %v", got, err)
+	}
+	t.Setenv(demoPostgresEnabledEnv, "maybe")
+	if _, err := appendConfiguredDemoPostgres(base); err == nil || !strings.Contains(err.Error(), demoPostgresEnabledEnv) {
+		t.Fatalf("invalid opt-in value error = %v", err)
 	}
 }
 
@@ -133,7 +141,10 @@ func TestPostgreSQLRequestSupportsBodylessMethods(t *testing.T) {
 	}
 }
 
-func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
+// demoPostgresJourneyHandler mounts the six configured sources, waits for the
+// background mounter, and requires every source to be available.
+func demoPostgresJourneyHandler(t *testing.T) (http.Handler, uint64) {
+	t.Helper()
 	for _, source := range demoPostgresSources {
 		if os.Getenv(source.dsnEnv) == "" {
 			t.Skipf("set all six secret-backed %s values for the in-process PostgreSQL journey", source.dsnEnv)
@@ -152,6 +163,20 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = closeDatabases() })
+	pgHandler, ok := handler.(*demoPostgresHandler)
+	if !ok {
+		t.Fatalf("handler %T does not expose the PostgreSQL mounter", handler)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := pgHandler.mounter.waitSettled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range pgHandler.mounter.snapshot() {
+		if status.State != demoPostgresAvailable {
+			t.Fatalf("%s is %s: %s", status.ID, status.State, status.Reason)
+		}
+	}
 	runtime.GC()
 	var afterMount runtime.MemStats
 	runtime.ReadMemStats(&afterMount)
@@ -159,10 +184,93 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 	if afterMount.HeapAlloc > beforeMount.HeapAlloc {
 		mountedHeapBytes = afterMount.HeapAlloc - beforeMount.HeapAlloc
 	}
+	return handler, mountedHeapBytes
+}
+
+// openvaultdbGoVersion reads the pinned library version from go.mod
+// (debug.ReadBuildInfo is empty for a library's own tests).
+func openvaultdbGoVersion(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "github.com/openvaultdb/openvaultdb-go" {
+			return fields[1]
+		}
+	}
+	t.Fatal("go.mod does not pin github.com/openvaultdb/openvaultdb-go")
+	return ""
+}
+
+// knownLongNameCollectionFailures lists, per pinned openvaultdb-go version, the
+// relations whose every read fails because the library checks the length of
+// the encoded native collection ID instead of the relation name. The sibling
+// openvaultdb-go fix removes them: once go.mod pins a version that is not a key
+// here, the all-collections journey is strict and any failure fails the test.
+var knownLongNameCollectionFailures = map[string]map[string]bool{
+	"v0.24.1": {
+		"adventureworks.HumanResources.Department":                        true,
+		"adventureworks.HumanResources.Employee":                          true,
+		"adventureworks.HumanResources.EmployeeDepartmentHistory":         true,
+		"adventureworks.HumanResources.EmployeePayHistory":                true,
+		"adventureworks.HumanResources.JobCandidate":                      true,
+		"adventureworks.HumanResources.vEmployee":                         true,
+		"adventureworks.HumanResources.vEmployeeDepartment":               true,
+		"adventureworks.HumanResources.vEmployeeDepartmentHistory":        true,
+		"adventureworks.Person.BusinessEntityAddress":                     true,
+		"adventureworks.Person.BusinessEntityContact":                     true,
+		"adventureworks.Person.vStateProvinceCountryRegion":               true,
+		"adventureworks.Production.BillOfMaterials":                       true,
+		"adventureworks.Production.Illustration":                          true,
+		"adventureworks.Production.ProductCategory":                       true,
+		"adventureworks.Production.ProductCostHistory":                    true,
+		"adventureworks.Production.ProductDescription":                    true,
+		"adventureworks.Production.ProductDocument":                       true,
+		"adventureworks.Production.ProductInventory":                      true,
+		"adventureworks.Production.ProductListPriceHistory":               true,
+		"adventureworks.Production.ProductModel":                          true,
+		"adventureworks.Production.ProductModelIllustration":              true,
+		"adventureworks.Production.ProductModelProductDescriptionCulture": true,
+		"adventureworks.Production.ProductPhoto":                          true,
+		"adventureworks.Production.ProductProductPhoto":                   true,
+		"adventureworks.Production.ProductReview":                         true,
+		"adventureworks.Production.ProductSubcategory":                    true,
+		"adventureworks.Production.TransactionHistory":                    true,
+		"adventureworks.Production.TransactionHistoryArchive":             true,
+		"adventureworks.Production.WorkOrderRouting":                      true,
+		"adventureworks.Production.vProductAndDescription":                true,
+		"adventureworks.Purchasing.ProductVendor":                         true,
+		"adventureworks.Purchasing.PurchaseOrderDetail":                   true,
+		"adventureworks.Purchasing.PurchaseOrderHeader":                   true,
+		"adventureworks.Purchasing.vVendorWithAddresses":                  true,
+		"adventureworks.Purchasing.vVendorWithContacts":                   true,
+		"adventureworks.Sales.CountryRegionCurrency":                      true,
+		"adventureworks.Sales.SalesOrderHeaderSalesReason":                true,
+		"adventureworks.Sales.SalesPersonQuotaHistory":                    true,
+		"adventureworks.Sales.SalesTerritoryHistory":                      true,
+		"adventureworks.Sales.SpecialOfferProduct":                        true,
+		"adventureworks.Sales.vIndividualCustomer":                        true,
+		"adventureworks.Sales.vStoreWithAddresses":                        true,
+		"adventureworks.Sales.vStoreWithContacts":                         true,
+		"northwind.Alphabetical list of products":                         true,
+		"northwind.Customer and Suppliers by City":                        true,
+		"northwind.Products Above Average Price":                          true,
+	},
+}
+
+func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
+	handler, mountedHeapBytes := demoPostgresJourneyHandler(t)
 	t.Logf("six native PostgreSQL mounts, pools and discovered catalogs retain %d additional heap bytes", mountedHeapBytes)
 	if mountedHeapBytes > 64<<20 {
 		t.Fatalf("six native PostgreSQL mounts exceed the 64 MiB at-rest heap allowance: %d", mountedHeapBytes)
 	}
+	libraryVersion := openvaultdbGoVersion(t)
+	expectedFailures := knownLongNameCollectionFailures[libraryVersion]
+	failed := map[string]string{}
+	read := 0
 
 	for _, source := range demoPostgresSources {
 		id := source.databaseID + "-postgresql"
@@ -210,8 +318,9 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 			t.Fatalf("%s descriptor exposed internal provenance relation: %s", id, descriptorResponse.Body.String())
 		}
 
+		// Every collection is read, not only the first: the first-only read is why
+		// relations with long names were never caught.
 		var joinCollectionID, joinField string
-		readDone := false
 		for _, collectionID := range descriptor.Collections {
 			schemaName, tableName, decodeErr := schema.ParseNativePostgresCollectionID(collectionID)
 			if decodeErr != nil || schemaName != source.databaseID || tableName == "_import_manifest" {
@@ -226,28 +335,29 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 				fieldNames = append(fieldNames, fieldName)
 			}
 			sort.Strings(fieldNames)
-			if !readDone && len(fieldNames) > 0 {
-				query := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: %s}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(fieldNames[0]))
-				response := postgreSQLStreamRequest(t, handler, dtqlPath, query, "https://datatug.app")
-				if response.Code != http.StatusOK {
-					t.Fatalf("%s read by returned collection ID %q: %d %s", id, collectionID, response.Code, response.Body.String())
-				}
-				if got := response.Header().Get("Content-Type"); got != "application/vnd.openvaultdb.query-stream+json" {
-					t.Fatalf("%s opted-in DTQL Content-Type = %q", id, got)
-				}
-				if got := strings.Join(response.Header().Values("Vary"), ", "); !strings.Contains(got, "Accept") {
-					t.Fatalf("%s opted-in DTQL Vary = %q, want Accept", id, got)
-				}
-				if response.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app" {
-					t.Fatalf("%s DTQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
-				}
-				var streamed struct {
-					Complete bool `json:"complete"`
-				}
-				if err := json.Unmarshal(response.Body.Bytes(), &streamed); err != nil || !streamed.Complete {
-					t.Fatalf("%s DTQL stream did not complete: %v body=%s", id, err, response.Body.String())
-				}
-				readDone = true
+			if len(fieldNames) == 0 {
+				failed[schemaName+"."+tableName] = "no fields in the descriptor"
+				continue
+			}
+			read++
+			query := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: %s}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(fieldNames[0]))
+			response := postgreSQLStreamRequest(t, handler, dtqlPath, query, "https://datatug.app")
+			var streamed struct {
+				Complete bool `json:"complete"`
+			}
+			switch {
+			case response.Code != http.StatusOK:
+				failed[schemaName+"."+tableName] = fmt.Sprintf("%d %s", response.Code, strings.TrimSpace(response.Body.String()))
+				continue
+			case response.Header().Get("Content-Type") != "application/vnd.openvaultdb.query-stream+json":
+				t.Fatalf("%s opted-in DTQL Content-Type = %q", id, response.Header().Get("Content-Type"))
+			case !strings.Contains(strings.Join(response.Header().Values("Vary"), ", "), "Accept"):
+				t.Fatalf("%s opted-in DTQL Vary = %q, want Accept", id, response.Header().Values("Vary"))
+			case response.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app":
+				t.Fatalf("%s DTQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
+			case json.Unmarshal(response.Body.Bytes(), &streamed) != nil || !streamed.Complete:
+				failed[schemaName+"."+tableName] = "stream did not complete: " + strings.TrimSpace(response.Body.String())
+				continue
 			}
 			if joinCollectionID != "" {
 				continue
@@ -279,6 +389,25 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		legacyQuery := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/query", `{"collection":"`+descriptor.Collections[0]+`"}`)
 		if legacyQuery.Code != http.StatusNotImplemented {
 			t.Fatalf("%s legacy query capability = %d %s, want 501", id, legacyQuery.Code, legacyQuery.Body.String())
+		}
+	}
+
+	t.Logf("read every collection: %d reads, %d failed", read, len(failed))
+	names := make([]string, 0, len(failed))
+	for name := range failed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if expectedFailures[name] {
+			t.Logf("expected failure with openvaultdb-go %s (long relation name): %s: %s", libraryVersion, name, failed[name])
+			continue
+		}
+		t.Errorf("collection %s: %s", name, failed[name])
+	}
+	for name := range expectedFailures {
+		if _, stillFails := failed[name]; !stillFails {
+			t.Errorf("collection %s is listed as a known failure for openvaultdb-go %s but now reads: remove it from knownLongNameCollectionFailures", name, libraryVersion)
 		}
 	}
 }
@@ -340,4 +469,86 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestNativePostgresMountExposesFullPublicDTQL states, by behaviour, what turning
+// on OVDB_DEMODB_POSTGRES_ENABLED publishes. The library's preview switch is not
+// involved: a native read-only mount answers core.CanQuery() itself, so discovery
+// adds postgres to the join engines, and the public gets full DTQL (filters,
+// ordering, equality joins, grouping with HAVING, subqueries). Single-source reads
+// and joins run inside PostgreSQL; a document with a subquery runs in the
+// server's in-memory engine. Writes and the legacy /query route stay refused.
+func TestNativePostgresMountExposesFullPublicDTQL(t *testing.T) {
+	if os.Getenv("OVDB_PG_CHINOOK_DSN") == "" {
+		t.Skip("set OVDB_PG_CHINOOK_DSN to a read-only role on a loaded chinook schema")
+	}
+	t.Setenv(demoPostgresEnabledEnv, "true")
+	for _, source := range demoPostgresSources[1:] {
+		t.Setenv(source.dsnEnv, "")
+	}
+	providers, err := appendConfiguredDemoPostgres(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, closeDatabases, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = closeDatabases() })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	mounter := handler.(*demoPostgresHandler).mounter
+	if err := mounter.waitSettled(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := mounter.state("chinook-postgresql"); state != demoPostgresAvailable {
+		t.Fatalf("chinook-postgresql is %s: %+v", state, mounter.snapshot())
+	}
+	assertCloudQueryDiscovery(t, handler, true)
+
+	const db = "chinook-postgresql"
+	for _, c := range []struct {
+		name, doc, route string
+		minRows          int
+	}{
+		{"filter and order", "from: {schema: chinook, name: Album}\nwhere: {op: '==', left: {field: ArtistId}, right: {value: 90}}\norderBy: [{field: Title, desc: true}]\ncolumns: [{field: Title}]\n", "database", 2},
+		{"equality join", "from:\n  schema: chinook\n  name: Album\n  alias: a\n  joins:\n    - type: inner\n      from: {schema: chinook, name: Artist, alias: r}\n      on: [{left: {field: ArtistId, source: a}, op: '==', right: {field: ArtistId, source: r}}]\ncolumns: [{field: Title, source: a}, {field: Name, source: r}]\nlimit: 5\n", "database", 5},
+		{"grouping with HAVING", "from: {schema: chinook, name: Album}\ngroupBy: [{field: ArtistId}]\nhaving: {op: '>=', left: {aggregate: {function: count, args: [{star: true}]}}, right: {value: 5}}\ncolumns: [{field: ArtistId}, {aggregate: {function: count, args: [{star: true}]}, as: albums}]\n", "database", 1},
+		{"IN subquery", "from: {schema: chinook, name: Artist, alias: r}\nwhere:\n  op: In\n  left: {field: ArtistId, source: r}\n  right:\n    query:\n      from: {schema: chinook, name: Album, alias: a}\n      where: {op: '==', left: {field: AlbumId, source: a}, right: {value: 1}}\n      columns: [{field: ArtistId, source: a}]\ncolumns: [{field: Name, source: r}]\n", "in-memory", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+db+"/dtql", c.doc)
+			if response.Code != http.StatusOK {
+				t.Fatalf("%d %s", response.Code, response.Body.String())
+			}
+			var answer struct {
+				Records   []json.RawMessage `json:"records"`
+				Execution struct {
+					Route string `json:"route"`
+				} `json:"execution"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if len(answer.Records) < c.minRows || answer.Execution.Route != c.route {
+				t.Fatalf("rows=%d route=%q, want >=%d rows on route %q: %s", len(answer.Records), answer.Execution.Route, c.minRows, c.route, response.Body.String())
+			}
+		})
+	}
+	albumID, err := schema.NativePostgresCollectionID("chinook", "Album")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range []struct{ method, path, body string }{
+		{http.MethodPut, "/v1/databases/" + db + "/records/" + albumID + "/1", `{"Title":"x"}`},
+		{http.MethodPost, "/v1/databases/" + db + "/batch", `{"ops":[{"op":"delete","key":"` + albumID + `/1"}]}`},
+	} {
+		request := httptest.NewRequest(write.method, write.path, strings.NewReader(write.body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code < 400 || response.Code >= 500 {
+			t.Errorf("%s %s = %d %s, want a 4xx refusal", write.method, write.path, response.Code, response.Body.String())
+		}
+	}
 }

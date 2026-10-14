@@ -1,3 +1,4 @@
+import { originSecretHeader } from "./chinook";
 import type { UpstreamFetch } from "./proxy";
 export const ECB_PUBLIC_PATH = "/ecb-public/v1/databases/ecb/dtql";
 const goPath = "/v1/databases/ecb/dtql";
@@ -17,6 +18,8 @@ type PublicEnv = Env & {
     ECB_ENABLED?: string;
     ECB_PROXY_SECRET?: string;
     CHINOOK_RUN_ORIGIN?: string;
+    OVDB_ORIGIN_SECRET?: string;
+    OVDB_ORIGIN_SECRET_HEADER?: string;
 };
 const admissionKeys = ["format", "decision", "approvedBy", "approvedAt", "expiresAt", "costOwner", "hostConfigSHA256", "publisherManifestSHA256", "decoderModuleVersion", "decoderSHA256", "rightsDigest", "requestProfile", "workerPath", "goPath", "directoryOrigin", "backendOrigin", "audience", "paidAccess", "maxReads", "maxRows", "maxConcurrent", "executionsPerMinute"];
 const hex = (raw: ArrayBuffer): string => [...new Uint8Array(raw)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -118,9 +121,14 @@ export function createECBPublicProxy(upstreamFetch: UpstreamFetch) {
                         throw new Error("cancelled");
                     if (!limit.success || active)
                         return response(429, origin);
+                    const originSecret = originSecretHeader(env);
+                    if (originSecret === null)
+                        return response(503, origin);
                     active = true;
                     occupied = true;
                     const headers = new Headers({ "Content-Type": contentType, Accept: "application/json", Origin: origin, "OVDB-Execution-ID": id, [secretHeader]: env.ECB_PUBLIC_PROXY_SECRET, [admissionHeader]: digest });
+                    if (originSecret !== undefined)
+                        headers.set(originSecret.name, originSecret.value);
                     const pending = upstreamFetch(new URL(goPath, backend), { method: "POST", headers, body, redirect: "manual", cache: "no-store", signal: abort.signal });
                     // Dispose a late response even when a fake/upstream ignores AbortSignal.
                     void pending.then((upstream) => { if (abort.signal.aborted)

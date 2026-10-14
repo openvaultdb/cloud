@@ -566,9 +566,14 @@ func wireRead(t *testing.T, handler http.Handler, database, collection string) w
 	return result
 }
 
-func TestPostgresPreviewStaysOff(t *testing.T) {
-	// The switch is read by the library when a mount opens: if this service
-	// never names it, PostgreSQL queries stay off whatever the environment says.
+// TestServiceNeverSetsLibraryPostgresPreviewSwitch checks only that this service's
+// code, Dockerfile and workflows never name the library's preview switch for
+// structured queries on ordinary (writable or manifest-declared) PostgreSQL
+// mounts. It does NOT mean PostgreSQL queries stay off: the native read-only
+// DemoDB mounts enabled by OVDB_DEMODB_POSTGRES_ENABLED answer core.CanQuery()
+// themselves and serve full public DTQL whatever this switch says; see
+// TestNativePostgresMountExposesFullPublicDTQL for what that exposes.
+func TestServiceNeverSetsLibraryPostgresPreviewSwitch(t *testing.T) {
 	needle := core.PreviewPostgresQueriesEnv
 	roots := []string{"*.go", "Dockerfile", filepath.Join("..", ".github", "workflows", "*")}
 	var files []string

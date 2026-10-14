@@ -33,6 +33,24 @@
         "limit": 60,
         "period": 60
       }
+    },
+    // Public OVDB query routes forwarded to Cloud Run; see src/ovdb-limits.ts.
+    {
+      "name": "OVDB_QUERY_LIMITER",
+      "namespace_id": "17033",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    // Every other public OVDB route forwarded to Cloud Run; see src/ovdb-limits.ts.
+    {
+      "name": "OVDB_READ_LIMITER",
+      "namespace_id": "17034",
+      "simple": {
+        "limit": 300,
+        "period": 60
+      }
     }
   ],
   "vars": {

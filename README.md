@@ -44,6 +44,49 @@ surface that presents them. A Space may be used through `sneat.work`,
 evaluated by the OpenVaultDB control plane and are not embedded into the
 long-lived device token.
 
+## Public OVDB routes: rate limits and the Cloud Run origin
+
+The Worker forwards `/v1/*`, `/ovdb/*` and `/.well-known/openvaultdb` to the
+Cloud Run service in [`server/`](server/). Two per-IP rate-limit bindings guard
+them, separate from the Northwind/OAuth bucket (`src/ovdb-limits.ts`,
+`wrangler.jsonc`):
+
+| Binding | Routes | Limit per IP |
+| --- | --- | --- |
+| `OVDB_QUERY_LIMITER` (namespace 17033) | `/v1/dtql`, `/v1/databases/{db}/dtql`, `/query`, `/batch`, `/read` | 60 requests / 60 s |
+| `OVDB_READ_LIMITER` (namespace 17034) | every other forwarded OVDB route | 300 requests / 60 s |
+
+The service runs at most two instances of two concurrent requests with a 10 s
+query timeout, so 60 queries a minute (1/s sustained) from one address is
+already a large share; DataTug issues one or two queries per view. Preflight
+`OPTIONS` is never counted. A limited request gets
+`429 {"error":{"code":"rate_limited",…}}` with `Retry-After: 60`,
+`Cache-Control: no-store`, `Vary: Origin`, and `Access-Control-Allow-Origin`
+for the DemoDB/DataTug/Chinook origins the service itself allows, so browser
+clients can read it. A missing binding fails open (the previous behaviour).
+Cloudflare's limiter counts per location and is eventually consistent: these
+are abuse ceilings, not quotas.
+
+Cloud Run is deployed `--allow-unauthenticated`, so its `*.run.app` URL would
+bypass these limits. To close that, bind the same random value (32-128
+characters of `A-Za-z0-9_-`) in two places:
+
+1. Worker secret `OVDB_ORIGIN_SECRET` (`wrangler secret put OVDB_ORIGIN_SECRET`);
+   optionally the var `OVDB_ORIGIN_SECRET_HEADER` (default `X-OVDB-Origin-Secret`).
+   The Worker then adds that header to every request it forwards to Cloud Run,
+   including the ECB/IANA operator routes and the public ECB route.
+2. Cloud Run env `OVDB_ORIGIN_SECRET` from Secret Manager (and the same
+   `OVDB_ORIGIN_SECRET_HEADER` if changed). The Go server then answers `403` to
+   any request without the exact header, and strips it before the library sees it.
+
+Deploy the Worker secret first, then the Cloud Run secret; while only the Worker
+has it, Cloud Run ignores the header. When neither is set nothing changes. Once
+Cloud Run enforces it, the opt-in `OVDB_CLOUD_RUN_SMOKE_ENABLED` smoke step in
+`.github/workflows/deploy-chinook-cloudrun.yml`, which calls `*.run.app`
+directly, must send the header too (or be pointed at the Worker). An invalid
+value refuses to start the Go server and makes the Worker answer 503 rather than
+forward without it. Nothing in this repository sets either secret.
+
 ## Local development
 
 ```sh

@@ -33,6 +33,10 @@ func main() {
 			log.Printf("close sample databases: %v", err)
 		}
 	}()
+	handler, err = withOriginSecret(handler, os.Getenv)
+	if err != nil {
+		log.Fatalf("origin secret: %v", err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -85,8 +89,21 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 	databases := make(map[string]*core.Database, len(providers))
 	corsOrigins := make(map[string]struct{})
 	profiles := map[string]server.ReadProfile{}
+	var nativePostgresProviders []runtimeDatabase
 	for _, provider := range providers {
 		id, manifest := provider.ID, provider.Manifest
+		if provider.nativePostgres != nil {
+			// Native PostgreSQL mounts never block or fail startup: each is
+			// mounted in the background by demoPostgresMounter below.
+			if _, err := demoPostgresManifest(provider); err != nil {
+				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+			}
+			nativePostgresProviders = append(nativePostgresProviders, provider)
+			for _, origin := range provider.CORSOrigins {
+				corsOrigins[origin] = struct{}{}
+			}
+			continue
+		}
 		if provider.ReadProfile != "" || provider.ServingAdapter != "" || provider.PublisherManifest != nil || provider.PublicDescriptor != nil {
 			if err := validateRuntimeMode(provider, 2); err != nil {
 				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
@@ -107,8 +124,6 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 				database, err = mountSelectedSnapshot(provider)
 			}
 			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
-		} else if provider.nativePostgres != nil {
-			database, err = mountDemoPostgres(provider)
 		} else {
 			database, err = mount.File(manifest)
 		}
@@ -144,13 +159,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 		}
 	}
-	hasNativePostgres := false
-	for _, provider := range providers {
-		if provider.nativePostgres != nil {
-			hasNativePostgres = true
-			break
-		}
-	}
+	hasNativePostgres := len(nativePostgresProviders) > 0
 	options := append(cloudServerOptions(hasNativePostgres),
 		server.WithReadOnly(true),
 		server.WithDatabaseReadProfiles(profiles),
@@ -161,8 +170,22 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 	if err != nil {
 		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 	}
-	handler := checked.Handler()
-	return handler, func() error { return closeMountedDatabases(databases) }, nil
+	if !hasNativePostgres {
+		return checked.Handler(), func() error { return closeMountedDatabases(databases) }, nil
+	}
+	mounter := newDemoPostgresMounter(checked, nativePostgresProviders, defaultDemoPostgresMountTiming())
+	mounter.start(nativePostgresProviders)
+	handler := &demoPostgresHandler{Handler: mounter.wrap(checked.Handler()), mounter: mounter}
+	return handler, func() error {
+		return errors.Join(mounter.stop(), closeMountedDatabases(databases))
+	}, nil
+}
+
+// demoPostgresHandler exposes the background mounter to tests that must wait for
+// the optional native PostgreSQL mounts to settle.
+type demoPostgresHandler struct {
+	http.Handler
+	mounter *demoPostgresMounter
 }
 
 func closeMountedDatabases(databases map[string]*core.Database) error {

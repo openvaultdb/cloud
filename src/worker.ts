@@ -1,6 +1,7 @@
 import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
+import { isOVDBPublicPath, limitOVDBPublicRequest, type OVDBLimitEnv } from "./ovdb-limits";
 import {
   createNorthwindD1Handler,
   createNorthwindNeonHandler,
@@ -58,7 +59,9 @@ export function createWorker(
             ? authorizationServerMetadata(env)
             : methodNotAllowed("GET");
         }
-        if (url.pathname === "/.well-known/openvaultdb" || url.pathname === "/ovdb" || url.pathname.startsWith("/ovdb/") || url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
+        if (isOVDBPublicPath(url.pathname)) {
+          const limited = await limitOVDBPublicRequest(request, env as OVDBLimitEnv, url.pathname);
+          if (limited !== undefined) return limited;
           return proxyChinook(request, env, upstreamFetch);
         }
         if (url.pathname === "/oauth/device/code") {
