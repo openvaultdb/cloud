@@ -439,3 +439,58 @@ func TestDemoPostgresHungDialEndsWithConnectTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDemoPostgresAttemptBudgetComesFromTheEnvironment(t *testing.T) {
+	env := func(value string) func(string) string {
+		return func(key string) string {
+			if key != demoPostgresAttemptTimeoutEnv {
+				t.Errorf("read %s", key)
+			}
+			return value
+		}
+	}
+	timing, err := demoPostgresMountTimingFromEnv(env(""))
+	if err != nil || timing != defaultDemoPostgresMountTiming() || timing.Attempt != 90*time.Second || timing.Discovery != 60*time.Second {
+		t.Fatalf("default timing = %+v, %v", timing, err)
+	}
+	timing, err = demoPostgresMountTimingFromEnv(env(" 3m "))
+	if err != nil || timing.Attempt != 3*time.Minute || timing.Discovery != 150*time.Second || timing.SelfCheck != 20*time.Second || timing.Concurrency != 2 {
+		t.Fatalf("configured timing = %+v, %v", timing, err)
+	}
+	for _, value := range []string{"90", "soon", "59s", "10m1s", "-2m"} {
+		if _, err := demoPostgresMountTimingFromEnv(env(value)); !errors.Is(err, errDemoPostgresAttemptTimeout) || !strings.Contains(err.Error(), demoPostgresAttemptTimeoutEnv+" must be a duration between 1m0s and 10m0s") {
+			t.Errorf("%q: err = %v", value, err)
+		}
+	}
+	for _, value := range []string{"1m", "10m"} {
+		if _, err := demoPostgresMountTimingFromEnv(env(value)); err != nil {
+			t.Errorf("%q: err = %v", value, err)
+		}
+	}
+}
+
+func TestDemoPostgresMountOptionsCarryTheDiscoveryDeadline(t *testing.T) {
+	provider := runtimeDatabase{ID: "chinook-postgresql", nativePostgres: &nativePostgresMountConfig{schemaName: "chinook", dsnEnv: "OVDB_PG_CHINOOK_DSN"}}
+	options, err := demoPostgresMountOptionsWithin(provider, 150*time.Second)
+	if err != nil || options.NativePostgresDiscoveryTimeout != 150*time.Second || !options.RequireReadOnlyNativePostgresRole {
+		t.Fatalf("options = %+v, %v", options, err)
+	}
+	if _, err := demoPostgresMountOptionsWithin(runtimeDatabase{ID: "x"}, time.Minute); err == nil {
+		t.Fatal("an invalid provider was given mount options")
+	}
+}
+
+func TestHandlerRefusesAnInvalidAttemptBudget(t *testing.T) {
+	t.Setenv(demoPostgresAttemptTimeoutEnv, "forever")
+	t.Setenv(demoPostgresEnabledEnv, "true")
+	for _, source := range demoPostgresSources {
+		t.Setenv(source.dsnEnv, "")
+	}
+	providers, err := appendConfiguredDemoPostgres([]runtimeDatabase{{ID: "chinook", Manifest: sqliteTestManifest(t, "chinook"), CORSOrigins: legacyCORSOrigins("chinook")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := newHandlerWithProviders(providers); !errors.Is(err, errDemoPostgresAttemptTimeout) {
+		t.Fatalf("err = %v", err)
+	}
+}
