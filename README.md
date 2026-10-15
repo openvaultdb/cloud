@@ -4,7 +4,7 @@ The public Chinook OVDB service is implemented in [`server/`](server/). Its Go
 handler serves generic OVDB pages and a read-only SQLite API on Cloud Run;
 this Worker proxies the public paths after `CHINOOK_RUN_ORIGIN` is configured.
 See the server README for local acceptance and the required Go library release
-(openvaultdb-go v0.25.3; its native PostgreSQL mounts require verified TLS for
+(openvaultdb-go v0.25.5; its native PostgreSQL mounts require verified TLS for
 remote hosts, and the optional DemoDB PostgreSQL editions additionally require
 `sslmode=verify-full`, as described under
 [Mount hardening and operator requirements](server/README.md#mount-hardening-and-operator-requirements)).

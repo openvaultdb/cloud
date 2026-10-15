@@ -345,7 +345,7 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		}
 		keyedRead := postgreSQLRequest(t, handler, http.MethodGet, "/v1/databases/"+id+"/records/"+descriptor.Collections[0]+"/1", "")
 		if keyedRead.Code != http.StatusNotImplemented || !strings.Contains(keyedRead.Body.String(), "operation_unsupported") {
-			t.Fatalf("%s keyed record read = %d %s, want 501 operation_unsupported (openvaultdb-go v0.25.3; v0.25.2 answered 500 internal)", id, keyedRead.Code, keyedRead.Body.String())
+			t.Fatalf("%s keyed record read = %d %s, want 501 operation_unsupported (openvaultdb-go v0.25.5; v0.25.2 answered 500 internal)", id, keyedRead.Code, keyedRead.Body.String())
 		}
 	}
 

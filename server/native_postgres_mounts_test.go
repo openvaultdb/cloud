@@ -494,3 +494,27 @@ func TestHandlerRefusesAnInvalidAttemptBudget(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestDemoPostgresEnvOverrideReachesTheLibraryMount(t *testing.T) {
+	provider := testDemoPostgresProvider("chinook")
+	t.Setenv(provider.nativePostgres.dsnEnv, "postgres://reader:private-marker-1234@ep-x.neon.tech/chinook?sslmode=verify-full&connect_timeout=10")
+	timing, err := demoPostgresMountTimingFromEnv(func(string) string { return "1m" })
+	if err != nil || timing.Discovery != 30*time.Second {
+		t.Fatalf("timing = %+v, %v", timing, err)
+	}
+	var got []time.Duration
+	previous := mountFileWithOptions
+	mountFileWithOptions = func(_ string, options mount.Options) (*core.Database, error) {
+		got = append(got, options.NativePostgresDiscoveryTimeout)
+		return nil, errors.New("stub")
+	}
+	t.Cleanup(func() { mountFileWithOptions = previous })
+	m := newDemoPostgresMounter(server.New("test", nil), []runtimeDatabase{provider}, timing)
+	t.Cleanup(func() { _ = m.stop() })
+	if _, err := m.mount(provider); err == nil || err.Error() != "stub" {
+		t.Fatalf("mount err = %v", err)
+	}
+	if len(got) != 1 || got[0] != 30*time.Second {
+		t.Fatalf("library discovery deadline = %v, want the overridden 30s (default is 60s)", got)
+	}
+}
