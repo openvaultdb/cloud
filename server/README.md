@@ -200,7 +200,12 @@ at a time, and independently of the others:
   the revision from starting), is `unavailable` and retried after 30 s, doubling
   to at most 15 minutes, without a restart. The library's catalogue deadline is
   the budget less 30 s (the longest `connect_timeout` a DSN may set): 60 s by
-  default. A catalogue that does not finish in time is reported as `timeout`, not
+  default. Since v0.25.4 the library discovers a PostgreSQL schema in two batched
+  queries instead of one per relation, so the default 60 s is ample (the
+  AdventureWorks mount went from about 12 s to about 0.7 s at 100 ms round-trip
+  time); an override of `1m` leaves discovery 30 s. The override is validated
+  only when native PostgreSQL is enabled and at least one source is configured.
+  A catalogue that does not finish in time is reported as `timeout`, not
   `mount_failed`. An abandoned attempt keeps its concurrency slot until the
   underlying mount really ends (bounded by the DSN's `connect_timeout` and the
   library's discovery deadline) and is closed; shutdown waits for it.
@@ -220,11 +225,11 @@ mounted.
 
 ### Mount hardening and operator requirements
 
-The service pins openvaultdb-go **v0.25.3**; v0.25.2 was the first release whose native
+The service pins openvaultdb-go **v0.25.5**; v0.25.2 was the first release whose native
 read-only PostgreSQL mount hardens itself. Two independent layers now guard
 every edition, and an edition is mounted only when both accept it.
 
-**The library (openvaultdb-go v0.25.3), set in `applyLibraryMountHardening`
+**The library (openvaultdb-go v0.25.5), set in `applyLibraryMountHardening`
 in `native_postgres_guard.go`:**
 
 - **BREAKING in v0.25.2:** a mount to a remote host requires verified TLS

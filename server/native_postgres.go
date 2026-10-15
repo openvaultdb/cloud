@@ -131,6 +131,10 @@ func mountDemoPostgres(provider runtimeDatabase) (*core.Database, error) {
 	return mountDemoPostgresWithin(provider, defaultDemoPostgresMountTiming().Discovery)
 }
 
+// mountFileWithOptions is the library mount call; a test replaces it to observe
+// the options the service hands over.
+var mountFileWithOptions = mount.FileWithOptions
+
 // mountDemoPostgresWithin mounts one source with the library's catalogue
 // deadline set to discovery.
 func mountDemoPostgresWithin(provider runtimeDatabase, discovery time.Duration) (db *core.Database, resultErr error) {
@@ -160,7 +164,7 @@ func mountDemoPostgresWithin(provider runtimeDatabase, discovery time.Duration) 
 	if err != nil {
 		return nil, err
 	}
-	db, err = mount.FileWithOptions(manifestPath, options)
+	db, err = mountFileWithOptions(manifestPath, options)
 	if err != nil {
 		return nil, err
 	}
