@@ -195,11 +195,15 @@ at a time, and independently of the others:
   `OVDB_NATIVE_POSTGRES_INSECURE_TRANSPORT`) is `misconfigured` and is not
   retried until a restart with a fixed secret;
 - a failed connection, self-check or catalogue discovery, or an attempt that
-  takes longer than 90 s, is `unavailable` and retried after 30 s, doubling to at
-  most 15 minutes, without a restart. An abandoned attempt keeps its
-  concurrency slot until the underlying mount really ends (bounded by the DSN's
-  `connect_timeout` and the library's 30 s discovery deadline) and is closed;
-  shutdown waits for it.
+  takes longer than its budget (90 s; `OVDB_DEMO_POSTGRES_ATTEMPT_TIMEOUT`, a Go
+  duration from `1m` to `10m`, overrides it, and a value outside that range stops
+  the revision from starting), is `unavailable` and retried after 30 s, doubling
+  to at most 15 minutes, without a restart. The library's catalogue deadline is
+  the budget less 30 s (the longest `connect_timeout` a DSN may set): 60 s by
+  default. A catalogue that does not finish in time is reported as `timeout`, not
+  `mount_failed`. An abandoned attempt keeps its concurrency slot until the
+  underlying mount really ends (bounded by the DSN's `connect_timeout` and the
+  library's discovery deadline) and is closed; shutdown waits for it.
 
 Every outcome is logged as one line naming the database and the reason, with
 the DSN and its host, port, database, user and password redacted.
@@ -241,7 +245,8 @@ in `native_postgres_guard.go`:**
   owns any schema, relation or function, may write an exposed relation, may
   create in an exposed schema or `public`, may use or update a sequence there, or
   may execute a SECURITY DEFINER function there;
-- catalogue discovery is bounded at 30 s (`NativePostgresDiscoveryTimeout`).
+- catalogue discovery is bounded by `NativePostgresDiscoveryTimeout` (the
+  attempt budget less 30 s, see above).
 
 **This service, before it lets the library connect (`checkDemoPostgresSource`):**
 

@@ -32,24 +32,61 @@ const (
 	demoPostgresNotConfigured = "not_configured" // DSN secret not bound
 )
 
-// demoPostgresMountTiming bounds one attempt and spaces retries. The library's own
-// catalogue discovery deadline is 30 s; the self-check and connection open add to it.
+// demoPostgresMountTiming bounds one attempt and spaces retries. Attempt bounds
+// the library mount (connection open plus catalogue read); Discovery is the
+// library's own catalogue deadline inside it (Attempt less the longest connection
+// open a DSN may ask for), so a slow catalogue fails with the library's specific
+// timeout error before the attempt is abandoned.
 type demoPostgresMountTiming struct {
 	SelfCheck   time.Duration
 	Attempt     time.Duration
+	Discovery   time.Duration
 	FirstRetry  time.Duration
 	MaxRetry    time.Duration
 	Concurrency int
 }
 
+// demoPostgresAttemptTimeoutEnv overrides the attempt budget, as a Go duration
+// between demoPostgresMinAttempt and demoPostgresMaxAttempt (for example "3m").
+// The discovery deadline follows it. A source that needs more than the default
+// (a large catalogue far from the database) is given more without a release.
+const demoPostgresAttemptTimeoutEnv = "OVDB_DEMO_POSTGRES_ATTEMPT_TIMEOUT"
+
+const (
+	demoPostgresDefaultAttempt = 90 * time.Second
+	demoPostgresMinAttempt     = demoPostgresMaxConnectTimeout + demoPostgresMinDiscoveryTimeout
+	demoPostgresMaxAttempt     = 10 * time.Minute
+)
+
+var errDemoPostgresAttemptTimeout = fmt.Errorf("%s must be a duration between %s and %s", demoPostgresAttemptTimeoutEnv, demoPostgresMinAttempt, demoPostgresMaxAttempt)
+
 func defaultDemoPostgresMountTiming() demoPostgresMountTiming {
 	return demoPostgresMountTiming{
 		SelfCheck:   20 * time.Second,
-		Attempt:     90 * time.Second,
+		Attempt:     demoPostgresDefaultAttempt,
+		Discovery:   demoPostgresDefaultAttempt - demoPostgresMaxConnectTimeout,
 		FirstRetry:  30 * time.Second,
 		MaxRetry:    15 * time.Minute,
 		Concurrency: 2,
 	}
+}
+
+// demoPostgresMountTimingFromEnv is the default timing with the attempt budget
+// of demoPostgresAttemptTimeoutEnv, when it is set. A value that is not a
+// duration within the bounds is a configuration error: the revision does not
+// start, so the one serving keeps serving.
+func demoPostgresMountTimingFromEnv(getenv func(string) string) (demoPostgresMountTiming, error) {
+	timing := defaultDemoPostgresMountTiming()
+	value := strings.TrimSpace(getenv(demoPostgresAttemptTimeoutEnv))
+	if value == "" {
+		return timing, nil
+	}
+	attempt, err := time.ParseDuration(value)
+	if err != nil || attempt < demoPostgresMinAttempt || attempt > demoPostgresMaxAttempt {
+		return timing, errDemoPostgresAttemptTimeout
+	}
+	timing.Attempt, timing.Discovery = attempt, attempt-demoPostgresMaxConnectTimeout
+	return timing, nil
 }
 
 // demoPostgresMountTarget is the part of server.Server the mounter needs.
@@ -95,9 +132,11 @@ func newDemoPostgresMounter(target demoPostgresMountTarget, providers []runtimeD
 		timing.Concurrency = 1
 	}
 	m := &demoPostgresMounter{
-		target:  target,
-		timing:  timing,
-		mount:   mountDemoPostgres,
+		target: target,
+		timing: timing,
+		mount: func(provider runtimeDatabase) (*core.Database, error) {
+			return mountDemoPostgresWithin(provider, timing.Discovery)
+		},
 		check:   checkDemoPostgresSource,
 		scope:   checkDemoPostgresMountedScope,
 		getenv:  os.Getenv,
@@ -184,6 +223,11 @@ func demoPostgresLibraryRoleRefusal(err error) bool {
 // demoPostgresReasonCode maps a failure to the stable code the public status
 // route serves. Detailed text goes only to the (redacted) server log.
 func demoPostgresReasonCode(err error) string {
+	// The library's refusal is judged before the deadline: a refusal is the
+	// verdict of a finished check, whatever the clock said afterwards.
+	if demoPostgresLibraryRoleRefusal(err) {
+		return "role_unsafe"
+	}
 	for _, c := range []struct {
 		err  error
 		code string
@@ -206,15 +250,15 @@ func demoPostgresReasonCode(err error) string {
 		{errDemoPostgresSchemaScope, "schema_scope"},
 		{errDemoPostgresUnreachable, "connection_failed"},
 		{errDemoPostgresTimeout, "timeout"},
+		// The library's catalogue deadline ended (openvaultdb-go wraps
+		// context.DeadlineExceeded in mount.ErrNativePostgresDiscoveryTimeout).
+		{context.DeadlineExceeded, "timeout"},
 		{errDemoPostgresStopping, "stopping"},
 		{errDemoPostgresMountRejected, "mount_rejected"},
 	} {
 		if errors.Is(err, c.err) {
 			return c.code
 		}
-	}
-	if demoPostgresLibraryRoleRefusal(err) {
-		return "role_unsafe"
 	}
 	return "mount_failed"
 }

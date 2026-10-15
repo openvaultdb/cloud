@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openvaultdb/openvaultdb-go/pkg/core"
 	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
@@ -103,6 +104,12 @@ func manifestEnvName(name string) bool {
 }
 
 func demoPostgresMountOptions(provider runtimeDatabase) (mount.Options, error) {
+	return demoPostgresMountOptionsWithin(provider, defaultDemoPostgresMountTiming().Discovery)
+}
+
+// demoPostgresMountOptionsWithin is demoPostgresMountOptions with the library's
+// catalogue deadline set to discovery.
+func demoPostgresMountOptionsWithin(provider runtimeDatabase, discovery time.Duration) (mount.Options, error) {
 	if _, err := demoPostgresManifest(provider); err != nil {
 		return mount.Options{}, err
 	}
@@ -116,10 +123,17 @@ func demoPostgresMountOptions(provider runtimeDatabase) (mount.Options, error) {
 		}},
 	}
 	applyLibraryMountHardening(&options)
+	options.NativePostgresDiscoveryTimeout = discovery
 	return options, nil
 }
 
-func mountDemoPostgres(provider runtimeDatabase) (db *core.Database, resultErr error) {
+func mountDemoPostgres(provider runtimeDatabase) (*core.Database, error) {
+	return mountDemoPostgresWithin(provider, defaultDemoPostgresMountTiming().Discovery)
+}
+
+// mountDemoPostgresWithin mounts one source with the library's catalogue
+// deadline set to discovery.
+func mountDemoPostgresWithin(provider runtimeDatabase, discovery time.Duration) (db *core.Database, resultErr error) {
 	contents, err := demoPostgresManifest(provider)
 	if err != nil {
 		return nil, err
@@ -142,7 +156,7 @@ func mountDemoPostgres(provider runtimeDatabase) (db *core.Database, resultErr e
 	if err := os.WriteFile(manifestPath, contents, 0o600); err != nil {
 		return nil, errors.New("write temporary native PostgreSQL manifest")
 	}
-	options, err := demoPostgresMountOptions(provider)
+	options, err := demoPostgresMountOptionsWithin(provider, discovery)
 	if err != nil {
 		return nil, err
 	}

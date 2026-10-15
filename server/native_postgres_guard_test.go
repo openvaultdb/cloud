@@ -283,8 +283,12 @@ func TestDemoPostgresReasonCodesAreStable(t *testing.T) {
 		errDemoPostgresUnreachable:                                  "connection_failed",
 		fmt.Errorf("%w (90s)", errDemoPostgresTimeout):              "timeout",
 		fmt.Errorf("%w: dial 10.1.2.3", errDemoPostgresMountFailed): "mount_failed",
-		errors.New("unclassified 10.1.2.3:5432"):                    "mount_failed",
-		demoPostgresScopeError("chinook-postgresql", "chinook"):     "schema_scope",
+		// The library's catalogue deadline (openvaultdb-go wraps context.DeadlineExceeded).
+		fmt.Errorf("%w: m.yaml: discovery did not finish in time (60s, %w): could not describe", errDemoPostgresMountFailed, context.DeadlineExceeded): "timeout",
+		// A finished role refusal stays a refusal even when the deadline also passed.
+		fmt.Errorf("%w: %s: x (%w)", errDemoPostgresMountFailed, demoPostgresLibraryRoleRefusalText, context.DeadlineExceeded): "role_unsafe",
+		errors.New("unclassified 10.1.2.3:5432"):                "mount_failed",
+		demoPostgresScopeError("chinook-postgresql", "chinook"): "schema_scope",
 	} {
 		if got := demoPostgresReasonCode(err); got != want {
 			t.Errorf("reason code of %v = %q, want %q", err, got, want)
@@ -295,7 +299,7 @@ func TestDemoPostgresReasonCodesAreStable(t *testing.T) {
 func TestLibraryMountHardeningOptionsAreSet(t *testing.T) {
 	options := mount.Options{CatalogueDir: "kept"}
 	applyLibraryMountHardening(&options)
-	if options.CatalogueDir != "kept" || !options.RequireReadOnlyNativePostgresRole || options.NativePostgresStatementTimeout != 15*time.Second || options.NativePostgresDiscoveryTimeout != 30*time.Second || options.AllowInsecureNativePostgresTransport {
+	if options.CatalogueDir != "kept" || !options.RequireReadOnlyNativePostgresRole || options.NativePostgresStatementTimeout != 15*time.Second || options.NativePostgresDiscoveryTimeout != 60*time.Second || options.AllowInsecureNativePostgresTransport {
 		t.Fatalf("library hardening options = %+v", options)
 	}
 	options.AllowInsecureNativePostgresTransport = true

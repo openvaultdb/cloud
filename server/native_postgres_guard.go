@@ -31,9 +31,9 @@ const demoPostgresMaxConnectTimeout = 30 * time.Second
 // wins over the DSN and over a role default.
 const demoPostgresStatementTimeout = 15 * time.Second
 
-// demoPostgresDiscoveryTimeout bounds the library's catalogue read of one mount;
-// defaultDemoPostgresMountTiming's Attempt leaves room for it.
-const demoPostgresDiscoveryTimeout = 30 * time.Second
+// demoPostgresMinDiscoveryTimeout is the shortest catalogue deadline a configured
+// attempt budget may leave the library (see demoPostgresMountTimingFromEnv).
+const demoPostgresMinDiscoveryTimeout = 30 * time.Second
 
 // applyLibraryMountHardening sets the library's per-mount hardening options
 // (openvaultdb-go v0.25.2):
@@ -58,7 +58,7 @@ const demoPostgresDiscoveryTimeout = 30 * time.Second
 func applyLibraryMountHardening(options *mount.Options) {
 	options.RequireReadOnlyNativePostgresRole = true
 	options.NativePostgresStatementTimeout = demoPostgresStatementTimeout
-	options.NativePostgresDiscoveryTimeout = demoPostgresDiscoveryTimeout
+	options.NativePostgresDiscoveryTimeout = defaultDemoPostgresMountTiming().Discovery
 	options.AllowInsecureNativePostgresTransport = false
 }
 
