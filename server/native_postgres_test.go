@@ -343,6 +343,10 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		if legacyQuery.Code != http.StatusNotImplemented {
 			t.Fatalf("%s legacy query capability = %d %s, want 501", id, legacyQuery.Code, legacyQuery.Body.String())
 		}
+		keyedRead := postgreSQLRequest(t, handler, http.MethodGet, "/v1/databases/"+id+"/records/"+descriptor.Collections[0]+"/1", "")
+		if keyedRead.Code != http.StatusNotImplemented || !strings.Contains(keyedRead.Body.String(), "operation_unsupported") {
+			t.Fatalf("%s keyed record read = %d %s, want 501 operation_unsupported (openvaultdb-go v0.25.3; v0.25.2 answered 500 internal)", id, keyedRead.Code, keyedRead.Body.String())
+		}
 	}
 
 	t.Logf("read every collection: %d reads, %d failed", read, len(failed))
@@ -512,6 +516,10 @@ func TestNativePostgresMountExposesFullPublicDTQL(t *testing.T) {
 	albumID, err := schema.NativePostgresCollectionID("chinook", "Album")
 	if err != nil {
 		t.Fatal(err)
+	}
+	keyedRead := postgreSQLRequest(t, handler, http.MethodGet, "/v1/databases/"+db+"/records/"+albumID+"/1", "")
+	if keyedRead.Code != http.StatusNotImplemented || !strings.Contains(keyedRead.Body.String(), "operation_unsupported") {
+		t.Errorf("GET keyed record = %d %s, want 501 operation_unsupported, not 500", keyedRead.Code, keyedRead.Body.String())
 	}
 	for _, write := range []struct{ method, path, body string }{
 		{http.MethodPut, "/v1/databases/" + db + "/records/" + albumID + "/1", `{"Title":"x"}`},
