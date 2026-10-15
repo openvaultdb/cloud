@@ -177,7 +177,10 @@ offsets, equality joins across up to 8 sources, grouping with aggregates and
 one database without a subquery (single-source reads, joins, grouping) is
 compiled to SQL and runs inside PostgreSQL; a document with a subquery runs in the
 server's in-memory engine. Writes are refused, and the legacy `/query` route
-answers 501 for these mounts. `TestNativePostgresMountExposesFullPublicDTQL`
+answers 501 for these mounts, and so do keyed record reads and writes
+(`GET /v1/databases/<id>/records/<collectionId>/<id>` answers
+`501 operation_unsupported`, not `500 internal`; fixed in v0.25.3).
+`TestNativePostgresMountExposesFullPublicDTQL`
 checks exactly this against a real database.
 
 ### Each mount is optional
@@ -213,11 +216,11 @@ mounted.
 
 ### Mount hardening and operator requirements
 
-The service pins openvaultdb-go **v0.25.2**, the first release whose native
+The service pins openvaultdb-go **v0.25.3**; v0.25.2 was the first release whose native
 read-only PostgreSQL mount hardens itself. Two independent layers now guard
 every edition, and an edition is mounted only when both accept it.
 
-**The library (openvaultdb-go v0.25.2), set in `applyLibraryMountHardening`
+**The library (openvaultdb-go v0.25.3), set in `applyLibraryMountHardening`
 in `native_postgres_guard.go`:**
 
 - **BREAKING in v0.25.2:** a mount to a remote host requires verified TLS
