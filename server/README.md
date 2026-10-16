@@ -200,7 +200,7 @@ at a time, and independently of the others:
   the revision from starting), is `unavailable` and retried after 30 s, doubling
   to at most 15 minutes, without a restart. The library's catalogue deadline is
   the budget less 30 s (the longest `connect_timeout` a DSN may set): 60 s by
-  default. Since v0.25.4 the library discovers a PostgreSQL schema in two batched
+  default. Since v0.25.5 the library discovers a PostgreSQL schema in two batched
   queries instead of one per relation, so the default 60 s is ample (the
   AdventureWorks mount went from about 12 s to about 0.7 s at 100 ms round-trip
   time); an override of `1m` leaves discovery 30 s. The override is validated

@@ -53,7 +53,13 @@ long-lived device token.
 The Worker forwards `/v1/*`, `/ovdb/*` and `/.well-known/openvaultdb` to the
 Cloud Run service in [`server/`](server/). Two per-IP rate-limit bindings guard
 them, separate from the Northwind/OAuth bucket (`src/ovdb-limits.ts`,
-`wrangler.jsonc`):
+`wrangler.jsonc`).
+
+> **Not live until the Worker deploys.** The limits below are the intended
+> behaviour of this code. They apply only once the Worker deploys successfully
+> and `OVDB_ORIGIN_SECRET` is bound; until then the public OVDB routes are not
+> served through this Worker's limiter and the numbers below are not in force.
+> Check the latest Worker deploy run before relying on them.
 
 | Binding | Routes | Limit per client |
 | --- | --- | --- |
