@@ -106,6 +106,40 @@ directly, must send the header too (or be pointed at the Worker). An invalid
 value refuses to start the Go server and makes the Worker answer 503 rather than
 forward without it. Nothing in this repository sets either secret.
 
+## DemoDB OVDB API: `ovdb.demodb.dev`
+
+`https://ovdb.demodb.dev/v1` is a Custom Domain of this Worker
+([`src/demodb.ts`](src/demodb.ts)). It replaces `https://demodb.dev/ovdb/v1`,
+which used to cost two Worker invocations per call (`demodb-websites` re-fetched
+`cloud.openvaultdb.com`); demodb.dev now redirects there with a 308.
+
+- `GET /v1`: the DemoDB server index; `GET /v1/databases/{id}`: the database
+  index with `endpoints.dtql` pointing at this host;
+  `/v1/databases/{id}/{dtql,query,read,inferred-schema,records/...}`: forwarded
+  to Cloud Run through the same per-IP limits and origin secret as
+  `cloud.openvaultdb.com`, keyed on the real client address.
+- Only the DemoDB databases in [`src/demodb-ovdb.json`](src/demodb-ovdb.json)
+  are served; any other id, and every non-`/v1` path, is `404`. None of the
+  `cloud.openvaultdb.com` routes (OAuth, devices, Northwind, ECB, IANA, pages)
+  exist on this host.
+- Read-only: CORS `*`, `204` preflights allowing `OVDB-Page-Size`,
+  `OVDB-Page-Token`, `OVDB-Page-Close`; writes `403` with `Allow`, other methods
+  `405`, query bodies over 1 MiB `413`.
+
+`src/demodb-ovdb.json` is a build-time copy of demo-db/websites
+`src/data/generated/ovdb.json` (after its `npm run prepare:databases`). When the
+DemoDB database set changes, refresh and check it:
+
+```sh
+node scripts/demodb-ovdb.mjs write ../demo-db/websites/src/data/generated/ovdb.json
+node scripts/demodb-ovdb.mjs check ../demo-db/websites/src/data/generated/ovdb.json
+```
+
+`test/demodb.test.ts` replays every path, method and backend outcome through
+both the former chain (a verbatim copy of the demodb-websites handlers in
+`test/fixtures/`) and this host, and requires identical responses and Cloud Run
+requests apart from the advertised host.
+
 ## Local development
 
 ```sh
