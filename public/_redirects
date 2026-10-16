@@ -1,0 +1,3 @@
+# Static redirects for asset-served paths (the Worker never runs for these; see
+# run_worker_first in wrangler.jsonc). Query strings are preserved.
+/ /device/ 302

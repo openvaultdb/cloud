@@ -1,6 +1,6 @@
 import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
 import { DEMODB_HOST, handleDemoDB } from "./demodb";
-import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
+import { jsonResponse, methodNotAllowed } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import { canonicalOVDBPath, isOVDBPublicPath, limitOVDBPublicRequest, looksLikeOVDBPath, type OVDBLimitEnv } from "./ovdb-limits";
 import {
@@ -60,11 +60,6 @@ export function createWorker(
         }
         if (url.pathname.startsWith("/northwind/neon/")) {
           return await createNorthwindNeonHandler(request, env as NorthwindEnv, northwindNeonQueryFactory);
-        }
-        if (url.pathname === "/.well-known/oauth-authorization-server") {
-          return request.method === "GET"
-            ? authorizationServerMetadata(env)
-            : methodNotAllowed("GET");
         }
         const ovdbResponse = await forwardPublicOVDB(request, env, upstreamFetch);
         if (ovdbResponse !== undefined) return ovdbResponse;
@@ -207,19 +202,9 @@ export function createWorker(
         if (request.method !== "GET" && request.method !== "HEAD") {
           return jsonResponse({ error: "Not found." }, 404);
         }
-        if (url.pathname === "/") {
-          url.pathname = "/device";
-          return Response.redirect(url.toString(), 302);
-        }
-        if (url.pathname === "/device") {
-          url.pathname = "/device/";
-          return Response.redirect(url.toString(), 302);
-        }
-        if (url.pathname === "/devices") {
-          url.pathname = "/devices/";
-          return Response.redirect(url.toString(), 302);
-        }
-        return withAssetSecurityHeaders(await env.ASSETS.fetch(request));
+        // Only a non-navigation miss outside run_worker_first reaches this
+        // line; the asset layer applies public/_headers and _redirects.
+        return await env.ASSETS.fetch(request);
       } catch (error) {
         if (url.pathname.startsWith("/iana/")) {
           console.error("iana_worker_internal_error");
@@ -263,19 +248,6 @@ async function forwardPublicOVDB(request: Request, env: Env, upstreamFetch: Upst
     return jsonResponse({ error: { code: "invalid_path", message: "Request path is not in canonical form." } }, 400);
   }
   return undefined;
-}
-
-function authorizationServerMetadata(env: Env): Response {
-  const grantType = "urn:ietf:params:oauth:grant-type:device_code";
-  return jsonResponse({
-    issuer: env.PUBLIC_ORIGIN,
-    device_authorization_endpoint: `${env.PUBLIC_ORIGIN}/oauth/device/code`,
-    token_endpoint: `${env.PUBLIC_ORIGIN}/oauth/token`,
-    revocation_endpoint: `${env.PUBLIC_ORIGIN}/oauth/revoke`,
-    grant_types_supported: [grantType],
-    token_endpoint_auth_methods_supported: ["none"],
-    scopes_supported: ["account:read", "databases:read"],
-  });
 }
 
 function allowedDatabaseListSearch(url: URL): string {

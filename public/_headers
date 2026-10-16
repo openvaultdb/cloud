@@ -1,0 +1,18 @@
+# Headers for every asset-served response (the Worker never runs for these; see
+# run_worker_first in wrangler.jsonc). Worker responses set their own headers.
+/*
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; connect-src 'self' https://www.gstatic.com https://*.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://auth.sneat.co; frame-src https://auth.sneat.co; img-src 'self' data:; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
+
+# RFC 8414 OAuth device-flow discovery metadata (static JSON, no extension).
+/.well-known/oauth-authorization-server
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: no-store
+  Pragma: no-cache
+
+# ovdb.demodb.dev is an API host; the cloud.openvaultdb.com pages it also
+# serves from this asset bundle must not be indexed there.
+https://ovdb.demodb.dev/*
+  X-Robots-Tag: noindex

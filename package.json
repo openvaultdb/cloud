@@ -11,7 +11,7 @@
     "postinstall": "node scripts/prepare-dalgo-core.mjs",
     "prepare:dependencies": "node scripts/prepare-dalgo-core.mjs",
     "test:postgres": "vitest run -c vitest.node.config.ts",
-    "test:deploy": "node --test scripts/deploy.test.mjs",
+    "test:deploy": "node --test scripts/deploy.test.mjs scripts/static-routing.test.mjs",
     "test:demodb-ovdb": "node --test scripts/demodb-ovdb.test.mjs",
     "test": "vitest run && npm run test:postgres && npm run test:registry-search && npm run test:demodb-ovdb",
     "test:registry-search": "node --test registry-search/test/*.node.mjs",
