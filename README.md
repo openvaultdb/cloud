@@ -32,10 +32,29 @@ tokens default to one year and every API use checks current revocation state.
 Cloudflare rate-limit bindings protect public code creation, lookup, and
 polling endpoints.
 
-The Worker contains no authorization business state. It serves `/device`,
-publishes the stable OAuth paths used by the CLI, and proxies them to the OVDB
-backend with a dedicated shared secret. The backend rejects direct calls that
-do not carry that secret, preventing callers from bypassing the edge limits.
+The Worker contains no authorization business state. It publishes the stable
+OAuth paths used by the CLI and proxies them to the OVDB backend (the Sneat Go
+Cloud Run service `sneat-app`, called directly at its `run.app` origin,
+`SNEAT_API_ORIGIN`) with a dedicated shared secret. The backend rejects direct
+calls that do not carry that secret, preventing callers from bypassing the edge
+limits.
+
+## Static assets and `run_worker_first`
+
+Everything under [`public/`](public/) is served as a static asset without
+running the Worker: the `/device/` and `/devices/` pages, their scripts and
+styles, the `404.html` page and the RFC 8414 discovery metadata at
+`/.well-known/oauth-authorization-server` (a static JSON file naming
+`https://cloud.openvaultdb.com`). Their headers live in
+[`public/_headers`](public/_headers) (CSP, `X-Frame-Options: DENY`,
+`Referrer-Policy`, `nosniff`; the metadata's JSON type and `no-store`) and the
+`/` → `/device/` 302 in [`public/_redirects`](public/_redirects); `/device` and
+`/devices` get the asset layer's trailing-slash 307. `wrangler.jsonc` lists in
+`assets.run_worker_first` only the paths that need code: `/v1`, `/ovdb`,
+`/.well-known/openvaultdb` (rate limits and Cloud Run forwarding), `/oauth/*`
+and `/api/*` (device flow, secret injection), `/northwind/*` (database queries),
+and the ECB/IANA query routes. When a path is added to the Worker, add it there
+too (`scripts/static-routing.test.mjs` checks the list), or it will never run.
 
 OpenVaultDB Cloud uses the verified `sneat-eur3-1` Firebase UID directly as the
 Sneat Co. `userID`; it does not create a second OpenVaultDB account identifier.
@@ -119,9 +138,12 @@ which used to cost two Worker invocations per call (`demodb-websites` re-fetched
   to Cloud Run through the same per-IP limits and origin secret as
   `cloud.openvaultdb.com`, keyed on the real client address.
 - Only the DemoDB databases in [`src/demodb-ovdb.json`](src/demodb-ovdb.json)
-  are served; any other id, and every non-`/v1` path, is `404`. None of the
-  `cloud.openvaultdb.com` routes (OAuth, devices, Northwind, ECB, IANA, pages)
-  exist on this host.
+  are served; any other id, and every other Worker path, is `404`. None of the
+  `cloud.openvaultdb.com` code routes (OAuth, devices, Northwind, ECB, IANA)
+  exist on this host. The static asset bundle is shared, though: `/device/`,
+  `/devices/` and their files are served here as on `cloud.openvaultdb.com`
+  (with `X-Robots-Tag: noindex`), because `run_worker_first` matches paths, not
+  hosts. They cannot do anything on this host: their `/api/*` calls 404.
 - Read-only: CORS `*`, `204` preflights allowing `OVDB-Page-Size`,
   `OVDB-Page-Token`, `OVDB-Page-Close`; writes `403` with `Allow`, other methods
   `405`, query bodies over 1 MiB `413`.

@@ -64,23 +64,3 @@ export function bearerToken(request: Request): string {
   const match = /^Bearer ([^\s]+)$/iu.exec(authorization);
   return match?.[1] ?? "";
 }
-
-export function withAssetSecurityHeaders(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set("Referrer-Policy", "no-referrer");
-  headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("X-Frame-Options", "DENY");
-  headers.set(
-    "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; " +
-      "connect-src 'self' https://www.gstatic.com https://*.googleapis.com https://securetoken.googleapis.com " +
-      "https://identitytoolkit.googleapis.com https://auth.sneat.co; " +
-      "frame-src https://auth.sneat.co; img-src 'self' data:; " +
-      "style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
-  );
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}

@@ -19,9 +19,30 @@
   "assets": {
     "binding": "ASSETS",
     "directory": "./public",
-    // Every path runs the Worker first: the pages need its security headers, and
-    // ovdb.demodb.dev (same Worker) must never serve these assets.
-    "run_worker_first": true,
+    // Only the paths that need code run the Worker first; everything else
+    // (/device/, /devices/, scripts, styles, OAuth discovery metadata) is a free
+    // static asset whose headers and redirects live in public/_headers and
+    // public/_redirects. ovdb.demodb.dev shares this list: on that host the
+    // Worker serves only /v1 and 404s the rest, but the static pages are served
+    // there too (marked noindex in public/_headers). See README "Static assets".
+    "run_worker_first": [
+      // Public OVDB API, rate-limited and forwarded to Cloud Run (ovdb-limits.ts).
+      "/v1",
+      "/v1/*",
+      "/ovdb",
+      "/ovdb/*",
+      "/.well-known/openvaultdb",
+      // Device OAuth flow and device/database management, proxied to Sneat Go.
+      "/oauth/*",
+      "/api/*",
+      // Northwind read-only mirrors (Neon/D1 queries in the Worker).
+      "/northwind/*",
+      // ECB and IANA operator query routes and the public ECB route.
+      "/iana/v1/databases/iana-http-status/dtql",
+      "/ecb/v1/databases/ecb/dtql",
+      "/ecb-public",
+      "/ecb-public/*"
+    ],
     "not_found_handling": "404-page"
   },
   "ratelimits": [
@@ -70,8 +91,11 @@
     }
   ],
   "vars": {
-    "PUBLIC_ORIGIN": "https://cloud.openvaultdb.com",
-    "SNEAT_API_ORIGIN": "https://api.sneat.cloud"
+    // Cloud Run service sneat-app (europe-west3), called directly rather than
+    // through api.sneat.cloud: that host is the sneat-api-proxy Worker, which
+    // only rewrites Host for this traffic, so going through it cost a second
+    // Worker invocation per call. X-OVDB-Proxy-Secret is sent by this Worker.
+    "SNEAT_API_ORIGIN": "https://sneat-app-354fvnqbaa-ey.a.run.app"
   },
   "observability": {
     "enabled": true,

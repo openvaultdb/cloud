@@ -64,22 +64,20 @@ beforeEach(() => {
 });
 
 describe("OpenVaultDB Cloud device authorization facade", () => {
-  it("serves the approval page with browser security headers", async () => {
-    const redirect = await call("/device");
-    expect(redirect.status).toBe(302);
-    expect(redirect.headers.get("Location")).toBe(`${baseURL}/device/`);
-
+  // The pages, their redirects and headers, and the OAuth discovery metadata are
+  // static assets (public/_redirects, public/_headers; see
+  // scripts/static-routing.test.mjs). The Worker only reaches them on a
+  // non-navigation miss outside run_worker_first, through the ASSETS binding.
+  it("defers asset paths to the ASSETS binding, which applies public/_headers", async () => {
     const page = await call("/device/");
     expect(page.status).toBe(200);
     const contentSecurityPolicy = page.headers.get("Content-Security-Policy");
     expect(contentSecurityPolicy).toContain(
       "script-src 'self' https://www.gstatic.com https://apis.google.com",
     );
-    expect(contentSecurityPolicy).toContain(
-      "connect-src 'self' https://www.gstatic.com https://*.googleapis.com",
-    );
     expect(contentSecurityPolicy).toContain("frame-src https://auth.sneat.co");
     expect(contentSecurityPolicy).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("X-Frame-Options")).toBe("DENY");
     const pageHTML = await page.text();
     expect(pageHTML).toContain("Connect your command line");
     expect(pageHTML).toContain("OpenVaultDB is a Sneat Co. product");
@@ -89,24 +87,26 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(pageHTML).not.toContain("Continue with GitHub");
     expect(pageHTML).toContain("View authorized devices");
 
-    const devicesRedirect = await call("/devices");
-    expect(devicesRedirect.status).toBe(302);
-    expect(devicesRedirect.headers.get("Location")).toBe(`${baseURL}/devices/`);
     const devicesPage = await call("/devices/");
     expect(devicesPage.status).toBe(200);
     expect(await devicesPage.text()).toContain("Authorized devices");
   });
 
-  it("publishes stable OAuth discovery metadata", async () => {
+  it("serves the OAuth discovery metadata as a static asset", async () => {
     const response = await call("/.well-known/oauth-authorization-server");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    expect(response.headers.get("Content-Type")).toBe("application/json; charset=utf-8");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
       issuer: baseURL,
       device_authorization_endpoint: `${baseURL}/oauth/device/code`,
       token_endpoint: `${baseURL}/oauth/token`,
       revocation_endpoint: `${baseURL}/oauth/revoke`,
+      grant_types_supported: ["urn:ietf:params:oauth:grant-type:device_code"],
+      token_endpoint_auth_methods_supported: ["none"],
       scopes_supported: ["account:read", "databases:read"],
     });
+    expect(upstreamRequests).toHaveLength(0);
   });
 
   it("maps public paths to authenticated backend requests", async () => {
@@ -122,7 +122,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     await expect(start.json()).resolves.toMatchObject({ user_code: "BCDF-GHJK" });
     expect(upstreamRequests).toHaveLength(1);
     const upstreamStart = upstreamRequests[0];
-    expect(upstreamStart.url).toBe("https://api.sneat.cloud/v0/ovdb/device_auth/code");
+    expect(upstreamStart.url).toBe("https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/device_auth/code");
     expect(upstreamStart.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
     expect(upstreamStart.headers.get("Origin")).toBeNull();
     const startBody = new URLSearchParams(
@@ -228,7 +228,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(upstreamRequests).toHaveLength(1);
     const upstream = upstreamRequests[0];
     expect(upstream.url).toBe(
-      "https://api.sneat.cloud/v0/ovdb/cloud/databases?space=personal&pageSize=100&pageToken=next",
+      "https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/cloud/databases?space=personal&pageSize=100&pageToken=next",
     );
     expect(upstream.headers.get("Authorization")).toBe("Bearer cloud-access-token");
     expect(upstream.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
@@ -242,7 +242,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     await expect(response.json()).resolves.toMatchObject({ database: { id: "db_test-42" } });
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0].url).toBe(
-      "https://api.sneat.cloud/v0/ovdb/cloud/database?id=db_test-42",
+      "https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/cloud/database?id=db_test-42",
     );
   });
 
