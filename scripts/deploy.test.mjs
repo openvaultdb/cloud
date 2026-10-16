@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { prepareDeploymentConfig, runDeployment, transferNeonSecret } from "./deploy.mjs";
+import { DeploymentError, describeFailure, parseJSONC, prepareDeploymentConfig, runDeployment, transferNeonSecret } from "./deploy.mjs";
 import { prepareDalgoCore } from "./prepare-dalgo-core.mjs";
 
 const baseConfig = { name: "worker", vars: { KEEP: "yes" } };
@@ -101,7 +101,7 @@ test("deployment strips secret from config and process environment and cleans it
         deployment = { command, args, options, generated, contents, mode: details.mode & 0o777 };
         throw new Error("intentional simulated deploy failure");
       },
-    }), /intentional simulated deploy failure/u);
+    }), (error) => error instanceof DeploymentError && error.step === "wrangler-deploy" && !error.message.includes(readerURL));
 
     assert.equal(secretTransfer.value, readerURL);
     assert.equal(secretTransfer.args.includes(readerURL), false);
@@ -112,6 +112,55 @@ test("deployment strips secret from config and process environment and cleans it
     assert.equal(Object.hasOwn(deployment.options.env, "NORTHWIND_NEON_DATABASE_URL"), false);
     assert.equal(deployment.contents.includes('"database_name":"demodb-northwind"'), true);
     assert.equal((await readdir(root)).some((name) => name.startsWith(".wrangler-northwind-deploy-")), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the real wrangler.jsonc parses as JSONC and deploys with no Northwind inputs", async () => {
+  const real = parseJSONC(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+  assert.equal(real.name, "openvaultdb-cloud");
+  const { config, neonURL } = prepareDeploymentConfig(real, { NORTHWIND_D1_DATABASE_ID: "", NORTHWIND_NEON_DATABASE_URL: "" });
+  assert.equal(neonURL, "");
+  assert.equal(Object.hasOwn(config, "d1_databases"), false);
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "northwind-deploy-empty-"));
+  try {
+    await writeFile(path.join(root, "wrangler.jsonc"), await readFile(new URL("../wrangler.jsonc", import.meta.url)));
+    let deployment;
+    await runDeployment({ NORTHWIND_D1_DATABASE_ID: "", NORTHWIND_NEON_DATABASE_URL: "" }, {
+      root,
+      wrangler: "/fake/wrangler",
+      deployArgs: ["--var", "CHINOOK_RUN_ORIGIN:https://x.run.app"],
+      spawnCommand() { throw new Error("no secret transfer expected"); },
+      async runCommand(command, args) {
+        deployment = { args, contents: JSON.parse(await readFile(args[args.indexOf("--config") + 1], "utf8")) };
+      },
+    });
+    assert.deepEqual(deployment.args.slice(-2), ["--var", "CHINOOK_RUN_ORIGIN:https://x.run.app"]);
+    assert.equal(deployment.contents.ratelimits.length, real.ratelimits.length);
+    assert.equal(Object.hasOwn(deployment.contents, "d1_databases"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parseJSONC keeps comment-like text inside strings and tolerates trailing commas", () => {
+  assert.deepEqual(parseJSONC('{"a": "http://x//y /* z */", /* c */ "b": [1,2,], // t\n}'), { a: "http://x//y /* z */", b: [1, 2] });
+  assert.throws(() => parseJSONC("{ /* open"));
+});
+
+test("failures name a step and never echo env-derived text", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "northwind-deploy-bad-"));
+  try {
+    await writeFile(path.join(root, "wrangler.jsonc"), "{ not json");
+    await assert.rejects(runDeployment({}, { root }), (e) => e.step === "read-config");
+    await writeFile(path.join(root, "wrangler.jsonc"), "{}");
+    const secretURL = "postgresql://admin:hunter2@db.example.test/northwind";
+    await assert.rejects(runDeployment({ NORTHWIND_NEON_DATABASE_URL: secretURL }, { root }), (e) => e.step === "validate-inputs" && !describeFailure(e).includes("hunter2"));
+    const failed = describeFailure(new Error(secretURL));
+    assert.equal(failed.includes("hunter2"), false);
+    assert.match(failed, /step "unexpected"/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
