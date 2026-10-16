@@ -4,30 +4,20 @@ import { jsonResponse, methodNotAllowed } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import { canonicalOVDBPath, isOVDBPublicPath, limitOVDBPublicRequest, looksLikeOVDBPath, type OVDBLimitEnv } from "./ovdb-limits";
 import {
-  createNorthwindD1Handler,
-  createNorthwindNeonHandler,
-  northwindRateLimited,
-  type NorthwindEnv,
-  type NorthwindNeonQueryFactory,
-} from "./northwind";
-import {
   proxyCloudDatabase,
   proxyDeviceAuthorization,
   type DeviceAuthEnv,
   type UpstreamFetch,
 } from "./proxy";
 
-export function createWorker(
-  upstreamFetch: UpstreamFetch = fetch,
-  northwindNeonQueryFactory?: NorthwindNeonQueryFactory,
-): ExportedHandler<Env> {
+export function createWorker(upstreamFetch: UpstreamFetch = fetch): ExportedHandler<Env> {
   const publicECB = createECBPublicProxy(upstreamFetch);
   return {
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
         // ovdb.demodb.dev serves only the DemoDB OVDB API; no cloud.openvaultdb.com
-        // route (OAuth, devices, Northwind, ECB, IANA, assets) is reachable there.
+        // route (OAuth, devices, ECB, IANA, assets) is reachable there.
         if (url.hostname === DEMODB_HOST) {
           return await handleDemoDB(request, async (backendRequest) =>
             (await forwardPublicOVDB(backendRequest, env, upstreamFetch)) ?? jsonResponse({ error: "Not found." }, 404));
@@ -50,16 +40,6 @@ export function createWorker(
             return jsonResponse({ error: "ECB query request refused." }, 405);
           }
           return proxyECB(request, env, upstreamFetch);
-        }
-        if (url.pathname.startsWith("/northwind/") && request.method !== "OPTIONS" &&
-          !(await allowRequest(env.DEVICE_LOOKUP_LIMITER, request, "northwind"))) {
-          return northwindRateLimited(request);
-        }
-        if (url.pathname.startsWith("/northwind/d1/")) {
-          return await createNorthwindD1Handler(request, env as NorthwindEnv);
-        }
-        if (url.pathname.startsWith("/northwind/neon/")) {
-          return await createNorthwindNeonHandler(request, env as NorthwindEnv, northwindNeonQueryFactory);
         }
         const ovdbResponse = await forwardPublicOVDB(request, env, upstreamFetch);
         if (ovdbResponse !== undefined) return ovdbResponse;

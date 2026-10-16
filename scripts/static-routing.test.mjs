@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { parseJSONC } from "./deploy.mjs";
+import { parseJSONC } from "./jsonc.mjs";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const config = parseJSONC(await read("wrangler.jsonc"));
@@ -26,13 +26,14 @@ test("run_worker_first is an array of the dynamic paths only", () => {
     "/oauth/device/code", "/oauth/token", "/oauth/userinfo", "/oauth/revoke",
     "/api/device-authorization", "/api/device-authorization/decision", "/api/devices", "/api/devices/revoke",
     "/api/databases", "/api/databases/db_1",
-    "/northwind/d1/v1/metadata", "/northwind/neon/v1/query",
     "/iana/v1/databases/iana-http-status/dtql", "/ecb/v1/databases/ecb/dtql",
     "/ecb-public", "/ecb-public/v1/databases/ecb/dtql",
   ]) assert.ok(runsWorkerFirst(dynamic), dynamic);
   for (const asset of [
     "/", "/device", "/device/", "/devices", "/devices/", "/device.js", "/devices.js", "/styles.css",
     "/firebase-auth.js", "/404.html", "/.well-known/oauth-authorization-server", "/missing",
+    // The retired Northwind D1/Neon mirrors are static 404s now.
+    "/northwind/d1/v1/metadata", "/northwind/neon/v1/query",
   ]) assert.ok(!runsWorkerFirst(asset), asset);
 });
 
