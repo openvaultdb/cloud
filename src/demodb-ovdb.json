@@ -1,0 +1,62 @@
+{
+  "server": {
+    "format": "ovdb-server/draft-1",
+    "id": "https://demodb.dev/ovdb",
+    "title": "DemoDB OpenVaultDB server",
+    "description": "A shared, read-only OpenVaultDB server for the curated DemoDB sample databases.",
+    "homepage": "https://demodb.dev/ovdb/",
+    "apiUrl": "https://demodb.dev/ovdb/v1",
+    "databases": [
+      {
+        "id": "https://demodb.dev/chinook/",
+        "localId": "chinook",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/chinook/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/chinook/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/chinook"
+      },
+      {
+        "id": "https://demodb.dev/northwind/",
+        "localId": "northwind",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/northwind/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/northwind/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/northwind"
+      },
+      {
+        "id": "https://demodb.dev/pubs/",
+        "localId": "pubs",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/pubs/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/pubs/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/pubs"
+      },
+      {
+        "id": "https://demodb.dev/sakila/",
+        "localId": "sakila",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/sakila/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/sakila/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/sakila"
+      },
+      {
+        "id": "https://demodb.dev/adventureworks/",
+        "localId": "adventureworks",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/adventureworks/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/adventureworks/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/adventureworks"
+      },
+      {
+        "id": "https://demodb.dev/employees/",
+        "localId": "employees",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/employees/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/employees/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/employees"
+      }
+    ]
+  },
+  "query": {
+    "chinook": true,
+    "northwind": true,
+    "pubs": true,
+    "sakila": true,
+    "adventureworks": true,
+    "employees": true
+  }
+}
