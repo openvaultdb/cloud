@@ -293,6 +293,8 @@ type actualWork struct {
 	name, path, body string
 	want             int
 	expectedRows     int
+	countField       string
+	expectedCount    int64
 	noSourceRights   bool
 	accept           string
 	errorCode, route string
@@ -343,7 +345,17 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	result := actualRequest(handler, http.MethodPost, work.path, work.body, headers, ctx)
 	entry := map[string]any{"name": work.name, "status": result.Code, "response_bytes": result.Body.Len(), "seconds": time.Since(started).Seconds()}
 	if result.Code != work.want {
-		return entry, fmt.Errorf("%s status %d want %d: %.1000s", work.name, result.Code, work.want, result.Body.String())
+		var failure struct {
+			Error struct {
+				Code   string `json:"code"`
+				Budget struct {
+					Name string `json:"name"`
+				} `json:"budget"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(result.Body.Bytes(), &failure)
+		entry["error_code"], entry["budget_name"] = failure.Error.Code, failure.Error.Budget.Name
+		return entry, fmt.Errorf("%s status %d want %d code=%q budget=%q", work.name, result.Code, work.want, failure.Error.Code, failure.Error.Budget.Name)
 	}
 	var document struct {
 		Records  []json.RawMessage `json:"records"`
@@ -359,7 +371,7 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 		} `json:"execution"`
 	}
 	if err := json.Unmarshal(result.Body.Bytes(), &document); err != nil {
-		return entry, err
+		return entry, fmt.Errorf("%s response envelope is invalid JSON", work.name)
 	}
 	if work.accept != "" {
 		if result.Header().Get("Content-Type") != work.accept || !strings.Contains(strings.Join(result.Header().Values("Vary"), ", "), "Accept") {
@@ -389,6 +401,16 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 	if work.expectedRows > 0 && len(document.Records) != work.expectedRows {
 		return entry, fmt.Errorf("%s returned %d rows, want %d", work.name, len(document.Records), work.expectedRows)
 	}
+	if work.countField != "" {
+		if len(document.Records) != 1 {
+			return entry, fmt.Errorf("%s returned %d count records, want one", work.name, len(document.Records))
+		}
+		count, ok := actualRecordCount(document.Records[0], work.countField)
+		if !ok || count != work.expectedCount {
+			return entry, fmt.Errorf("%s exact count %d is invalid or differs from expected %d", work.name, count, work.expectedCount)
+		}
+		entry["native_count_field"], entry["native_count"] = work.countField, count
+	}
 	if work.noSourceRights {
 		var payload map[string]json.RawMessage
 		if err := json.Unmarshal(result.Body.Bytes(), &payload); err != nil {
@@ -413,6 +435,28 @@ func actualExecute(handler http.Handler, work actualWork) (map[string]any, error
 		return entry, fmt.Errorf("%s wrong route %s", work.name, document.Execution.Route)
 	}
 	return entry, nil
+}
+
+func TestCloudActualExecuteFailureDiagnosticIsSafe(t *testing.T) {
+	const privateMarker = "provider-secret-marker-should-not-escape"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"error":{"code":"invalid_dtql","budget":{"name":"query_rows"},"message":%q}}`, privateMarker)
+	})
+	entry, err := actualExecute(handler, actualWork{
+		name: "safe-failure", path: "/v1/databases/chinook-postgresql/dtql",
+		body: "from: {schema: chinook, name: Artist}\nlimit: 4000\n", want: http.StatusOK,
+	})
+	if err == nil {
+		t.Fatal("actualExecute accepted a non-success response")
+	}
+	if strings.Contains(err.Error(), privateMarker) || strings.Contains(fmt.Sprint(entry), privateMarker) {
+		t.Fatal("actualExecute exposed raw provider response content")
+	}
+	if entry["status"] != http.StatusBadRequest || entry["error_code"] != "invalid_dtql" || entry["budget_name"] != "query_rows" {
+		t.Fatalf("safe failure receipt = %#v", entry)
+	}
 }
 
 func TestCloudActualExecuteRequiresAnExplicitIncompleteBudgetFooter(t *testing.T) {
@@ -762,23 +806,28 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		}
 		workloads = append(workloads, entry)
 	}
-	for _, table := range []struct {
-		name string
-		rows int
-	}{{"Artist", 275}, {"Album", 347}, {"Track", 3503}} {
+	for _, workload := range nativePostgresCapacityWorkloads() {
 		work := actualWork{
-			name:           "chinook-postgresql-full-" + strings.ToLower(table.name),
+			name:           "chinook-postgresql-" + workload.name,
 			path:           "/v1/databases/chinook-postgresql/dtql",
-			body:           fmt.Sprintf("from: {schema: %s, name: %s}\nlimit: 4000\n", strconv.Quote("chinook"), strconv.Quote(table.name)),
+			body:           workload.query,
 			want:           http.StatusOK,
-			expectedRows:   table.rows,
+			expectedRows:   workload.expectedRows,
+			countField:     workload.countField,
+			expectedCount:  workload.expectedCount,
 			noSourceRights: true,
+			route:          workload.route,
 		}
 		entry, queryErr := actualExecute(handler, work)
-		if queryErr != nil {
-			t.Fatalf("bounded full-table PostgreSQL read failed for Chinook %s", table.name)
-		}
 		workloads = append(workloads, entry)
+		receipt["native_workloads"] = workloads
+		if queryErr != nil {
+			receipt["failed_workload"] = map[string]any{
+				"name": entry["name"], "status": entry["status"],
+				"error_code": entry["error_code"], "budget_name": entry["budget_name"],
+			}
+			t.Fatalf("bounded PostgreSQL capacity workload failed: %v", queryErr)
+		}
 	}
 	concurrentWorks := []actualWork{
 		{
