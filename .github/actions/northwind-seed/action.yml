@@ -1,0 +1,25 @@
+name: Pinned Northwind seed
+description: >-
+  Check out the pinned demo-db/northwind import, verify the D1 and PostgreSQL
+  seed checksums and export NORTHWIND_D1_SEED_SQL / NORTHWIND_POSTGRES_SEED_SQL.
+  Shared by Cloud Worker CI and Deploy OpenVaultDB Cloud so `npm run check`
+  runs the same complete-seed suites in both. Fails closed on any mismatch.
+runs:
+  using: composite
+  steps:
+    - name: Check out pinned Northwind import
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      with:
+        repository: demo-db/northwind
+        ref: 64961074fc09801cf489ba0d3632d14c463950e3
+        path: testdata/northwind
+        persist-credentials: false
+
+    - name: Verify pinned Northwind import checksums
+      shell: bash
+      run: |
+        set -euo pipefail
+        printf '%s  %s\n' 'fea7d05421f0297adc18c41196f22b498c669abf78c2392b50343091df8810d7' 'testdata/northwind/artifacts/hosting-imports/d1.sql' | sha256sum --check --status
+        echo "NORTHWIND_D1_SEED_SQL=${GITHUB_WORKSPACE}/testdata/northwind/artifacts/hosting-imports/d1.sql" >> "${GITHUB_ENV}"
+        printf '%s  %s\n' 'b6efe271401eba9d4738a2bbea294cc205dd6e02f47864bd3f21e195310afbee' 'testdata/northwind/artifacts/hosting-imports/postgres.sql' | sha256sum --check --status
+        echo "NORTHWIND_POSTGRES_SEED_SQL=${GITHUB_WORKSPACE}/testdata/northwind/artifacts/hosting-imports/postgres.sql" >> "${GITHUB_ENV}"
