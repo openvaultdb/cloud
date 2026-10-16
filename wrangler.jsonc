@@ -9,11 +9,18 @@
     {
       "pattern": "cloud.openvaultdb.com",
       "custom_domain": true
+    },
+    // DemoDB OVDB API (https://ovdb.demodb.dev/v1); see src/demodb.ts.
+    {
+      "pattern": "ovdb.demodb.dev",
+      "custom_domain": true
     }
   ],
   "assets": {
     "binding": "ASSETS",
     "directory": "./public",
+    // Every path runs the Worker first: the pages need its security headers, and
+    // ovdb.demodb.dev (same Worker) must never serve these assets.
     "run_worker_first": true,
     "not_found_handling": "404-page"
   },
