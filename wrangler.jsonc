@@ -35,8 +35,6 @@
       // Device OAuth flow and device/database management, proxied to Sneat Go.
       "/oauth/*",
       "/api/*",
-      // Northwind read-only mirrors (Neon/D1 queries in the Worker).
-      "/northwind/*",
       // ECB and IANA operator query routes and the public ECB route.
       "/iana/v1/databases/iana-http-status/dtql",
       "/ecb/v1/databases/ecb/dtql",

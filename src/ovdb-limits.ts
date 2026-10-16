@@ -3,7 +3,7 @@ import { jsonResponse } from "./http";
 /**
  * Per-IP limits for the public OVDB routes the Worker forwards to Cloud Run
  * (`/v1/*`, `/ovdb/*`, `/.well-known/openvaultdb`). They are separate buckets
- * from the Northwind/OAuth `DEVICE_LOOKUP_LIMITER`, so DemoDB traffic cannot
+ * from the OAuth/device `DEVICE_LOOKUP_LIMITER`, so DemoDB traffic cannot
  * exhaust device-authorization polling and vice versa.
  *
  * - `OVDB_QUERY_LIMITER`: 60 requests per 60 s per IP for query routes

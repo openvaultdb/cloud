@@ -64,9 +64,6 @@ jobs:
           REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
           test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
-      - name: Pinned Northwind seed
-        uses: ./.github/actions/northwind-seed
-
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # actions/setup-node v6
         with:
@@ -82,6 +79,4 @@ jobs:
       - name: Deploy Worker, assets, and custom domain
         env:
           CHINOOK_RUN_ORIGIN: ${{ steps.receipt.outputs.origin }}
-          NORTHWIND_D1_DATABASE_ID: ${{ vars.NORTHWIND_D1_DATABASE_ID }}
-          NORTHWIND_NEON_DATABASE_URL: ${{ secrets.NORTHWIND_NEON_DATABASE_URL }}
         run: npm run deploy -- --var "CHINOOK_RUN_ORIGIN:${CHINOOK_RUN_ORIGIN}"

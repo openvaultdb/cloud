@@ -29,9 +29,6 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Pinned Northwind seed
-        uses: ./.github/actions/northwind-seed
-
       - name: Install locked dependencies
         run: npm ci
 
