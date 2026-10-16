@@ -292,6 +292,20 @@ describe("ovdb.demodb.dev/v1 behaviour", () => {
     expect(wrong.status).toBe(502);
   });
 
+  it("still serves Northwind through the standard /v1 API after the custom /northwind/* Worker paths were dropped", async () => {
+    expect(demodbOVDB.server.databases.some((database) => database.localId === "northwind")).toBe(true);
+    const { oneHop, cloudRun } = harness();
+    const descriptor = await oneHop(request("/v1/databases/northwind", "GET"));
+    expect(descriptor.status).toBe(200);
+    expect(await descriptor.json()).toEqual({ id: "northwind", title: "northwind", endpoints: { dtql: `${apiHost}/v1/databases/northwind/dtql` } });
+    const query = await oneHop(request("/v1/databases/northwind/dtql", "POST"));
+    expect(query.status).toBe(200);
+    expect(cloudRun.map(({ method, url }) => [method, new URL(url).pathname])).toEqual([
+      ["GET", "/v1/databases/northwind"],
+      ["POST", "/v1/databases/northwind/dtql"],
+    ]);
+  });
+
   it("never reaches cloud.openvaultdb.com's own routes under the ovdb.demodb.dev host", async () => {
     const { oneHop, cloudRun } = harness();
     for (const path of ["/", "/oauth/token", "/ovdb/v1/databases/chinook/dtql", "/ovdb/dbs/chinook", "/device/", "/devices/", "/styles.css",
