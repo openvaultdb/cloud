@@ -64,6 +64,9 @@ jobs:
           REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
           test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
+      - name: Pinned Northwind seed
+        uses: ./.github/actions/northwind-seed
+
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # actions/setup-node v6
         with:
