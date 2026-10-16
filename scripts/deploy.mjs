@@ -16,6 +16,72 @@ function run(command, args, options = {}) {
   });
 }
 
+/** A failure whose message is fixed text (never derived from env, URLs, or child output), so it is safe to print. */
+export class DeploymentError extends Error {
+  constructor(step, message) {
+    super(message);
+    this.name = "DeploymentError";
+    this.step = step;
+  }
+}
+
+/**
+ * Parses JSONC (wrangler.jsonc): strips // and /* *\/ comments outside strings and trailing commas.
+ * JSON.parse alone rejects the comments the Worker config carries.
+ */
+export function parseJSONC(text) {
+  // Pass 1: drop comments. Pass 2: drop trailing commas. Both passes track string
+  // literals, so text inside a string (including ",}" or "//") is never altered.
+  let noComments = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      noComments += c;
+      if (c === "\\") noComments += text[++i] ?? "";
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+      noComments += c;
+    } else if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      noComments += "\n";
+    } else if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      if (end < 0) throw new Error("unterminated comment");
+      i = end + 1;
+      noComments += " ";
+    } else {
+      noComments += c;
+    }
+  }
+  let out = "";
+  inString = false;
+  for (let i = 0; i < noComments.length; i++) {
+    const c = noComments[i];
+    if (inString) {
+      out += c;
+      if (c === "\\") out += noComments[++i] ?? "";
+      else if (c === '"') inString = false;
+    } else if (c === '"') {
+      inString = true;
+      out += c;
+    } else if (c === ",") {
+      let j = i + 1;
+      while (j < noComments.length && /\s/u.test(noComments[j])) j++;
+      if (noComments[j] !== "}" && noComments[j] !== "]") out += c;
+    } else {
+      out += c;
+    }
+  }
+  return JSON.parse(out);
+}
+
+export function describeFailure(error) {
+  if (error instanceof DeploymentError) return `Cloud deployment failed at step "${error.step}": ${error.message}`;
+  return "Cloud deployment failed at step \"unexpected\": an unexpected error occurred; its details are withheld because they might contain runtime credentials.";
+}
+
 function validateNeonURL(value) {
   try {
     const url = new URL(value);
@@ -65,8 +131,26 @@ export async function runDeployment(environment, options = {}) {
   const wrangler = options.wrangler ?? path.join(root, "node_modules", ".bin", "wrangler");
   const spawnCommand = options.spawnCommand ?? spawn;
   const runCommand = options.runCommand ?? run;
-  const { config, neonURL } = prepareDeploymentConfig(JSON.parse(await readFile(configFile, "utf8")), environment);
-  if (neonURL) await transferNeonSecret(neonURL, { spawnCommand, wrangler, cwd: root, environment });
+  let baseConfig;
+  try {
+    baseConfig = parseJSONC(await readFile(configFile, "utf8"));
+  } catch {
+    throw new DeploymentError("read-config", "wrangler.jsonc could not be read or parsed as JSONC.");
+  }
+  let prepared;
+  try {
+    prepared = prepareDeploymentConfig(baseConfig, environment);
+  } catch (error) {
+    throw new DeploymentError("validate-inputs", error instanceof Error ? error.message : "Deployment inputs are invalid.");
+  }
+  const { config, neonURL } = prepared;
+  if (neonURL) {
+    try {
+      await transferNeonSecret(neonURL, { spawnCommand, wrangler, cwd: root, environment });
+    } catch {
+      throw new DeploymentError("neon-secret", "wrangler secret put NORTHWIND_NEON_DATABASE_URL failed (check the Cloudflare token's Workers Scripts edit permission).");
+    }
+  }
 
   const generatedConfig = path.join(root, configName(randomUUID()));
   let created = false;
@@ -75,11 +159,15 @@ export async function runDeployment(environment, options = {}) {
     created = true;
     const deployEnvironment = { ...environment };
     delete deployEnvironment.NORTHWIND_NEON_DATABASE_URL;
-    await runCommand(wrangler, ["deploy", "--config", generatedConfig, ...process.argv.slice(2)], {
-      cwd: root,
-      env: deployEnvironment,
-      stdio: "inherit",
-    });
+    try {
+      await runCommand(wrangler, ["deploy", "--config", generatedConfig, ...(options.deployArgs ?? process.argv.slice(2))], {
+        cwd: root,
+        env: deployEnvironment,
+        stdio: "inherit",
+      });
+    } catch {
+      throw new DeploymentError("wrangler-deploy", "wrangler deploy exited with an error; see the wrangler output above (it is printed by wrangler itself).");
+    }
   } finally {
     if (created) await rm(generatedConfig, { force: true });
   }
@@ -87,10 +175,14 @@ export async function runDeployment(environment, options = {}) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    await prepareDalgoCore();
+    try {
+      await prepareDalgoCore();
+    } catch {
+      throw new DeploymentError("prepare-dalgo-core", "the pinned @dalgo/core package could not be prepared (run npm ci).");
+    }
     await runDeployment(process.env);
-  } catch {
-    process.stderr.write("Cloud deployment failed; inspect the deployment workflow without printing runtime credentials.\n");
+  } catch (error) {
+    process.stderr.write(`${describeFailure(error)}\n`);
     process.exitCode = 1;
   }
 }
