@@ -1,4 +1,5 @@
 import { createECBPublicProxy, ECB_PUBLIC_PATH } from "./ecb-public";
+import { DEMODB_HOST, handleDemoDB } from "./demodb";
 import { jsonResponse, methodNotAllowed, withAssetSecurityHeaders } from "./http";
 import { proxyChinook, proxyECB, proxyIANA } from "./chinook";
 import { canonicalOVDBPath, isOVDBPublicPath, limitOVDBPublicRequest, looksLikeOVDBPath, type OVDBLimitEnv } from "./ovdb-limits";
@@ -25,6 +26,12 @@ export function createWorker(
     async fetch(request, env): Promise<Response> {
       const url = new URL(request.url);
       try {
+        // ovdb.demodb.dev serves only the DemoDB OVDB API; no cloud.openvaultdb.com
+        // route (OAuth, devices, Northwind, ECB, IANA, assets) is reachable there.
+        if (url.hostname === DEMODB_HOST) {
+          return await handleDemoDB(request, async (backendRequest) =>
+            (await forwardPublicOVDB(backendRequest, env, upstreamFetch)) ?? jsonResponse({ error: "Not found." }, 404));
+        }
         if (url.pathname === ECB_PUBLIC_PATH || url.pathname === "/ecb-public" || url.pathname.startsWith("/ecb-public/")) return publicECB(request, env);
         if (url.pathname === "/iana/v1/databases/iana-http-status/dtql") {
           if ((env as Env & { IANA_ENABLED?: string }).IANA_ENABLED !== "true") {
@@ -59,18 +66,8 @@ export function createWorker(
             ? authorizationServerMetadata(env)
             : methodNotAllowed("GET");
         }
-        const ovdbPath = canonicalOVDBPath(url.pathname);
-        if (ovdbPath !== null && isOVDBPublicPath(ovdbPath)) {
-          // Classify and forward the same canonical path (see canonicalOVDBPath).
-          const limited = await limitOVDBPublicRequest(request, env as OVDBLimitEnv, ovdbPath);
-          if (limited !== undefined) return limited;
-          const forwarded = new URL(url);
-          forwarded.pathname = ovdbPath;
-          return proxyChinook(new Request(forwarded, request), env, upstreamFetch);
-        }
-        if (ovdbPath === null && looksLikeOVDBPath(url.pathname)) {
-          return jsonResponse({ error: { code: "invalid_path", message: "Request path is not in canonical form." } }, 400);
-        }
+        const ovdbResponse = await forwardPublicOVDB(request, env, upstreamFetch);
+        if (ovdbResponse !== undefined) return ovdbResponse;
         if (url.pathname === "/oauth/device/code") {
           if (request.method !== "POST") return methodNotAllowed("POST");
           if (!(await allowRequest(env.DEVICE_START_LIMITER, request, "start"))) {
@@ -244,6 +241,28 @@ export function createWorker(
       }
     },
   };
+}
+
+/**
+ * The public OVDB pipeline shared by cloud.openvaultdb.com and the demodb.dev
+ * gateway: canonicalise the path, apply the per-IP limit, forward to Cloud Run.
+ * Returns undefined when the path is not a public OVDB route.
+ */
+async function forwardPublicOVDB(request: Request, env: Env, upstreamFetch: UpstreamFetch): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  const ovdbPath = canonicalOVDBPath(url.pathname);
+  if (ovdbPath !== null && isOVDBPublicPath(ovdbPath)) {
+    // Classify and forward the same canonical path (see canonicalOVDBPath).
+    const limited = await limitOVDBPublicRequest(request, env as OVDBLimitEnv, ovdbPath);
+    if (limited !== undefined) return limited;
+    const forwarded = new URL(url);
+    forwarded.pathname = ovdbPath;
+    return proxyChinook(new Request(forwarded, request), env, upstreamFetch);
+  }
+  if (ovdbPath === null && looksLikeOVDBPath(url.pathname)) {
+    return jsonResponse({ error: { code: "invalid_path", message: "Request path is not in canonical form." } }, 400);
+  }
+  return undefined;
 }
 
 function authorizationServerMetadata(env: Env): Response {
