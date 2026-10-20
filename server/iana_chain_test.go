@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -33,7 +32,7 @@ func TestIANASelectedCrossRuntimeChain(t *testing.T) {
 	})
 	configureSyntheticIANA(t, syntheticIANAMount(t, transport))
 	t.Setenv("OVDB_IANA_ENABLED", "true")
-	var goSlog, httpErrors bytes.Buffer
+	var goSlog, httpErrors lockedBuffer
 	previousDiagnostic := selectedIANADiagnostic
 	selectedIANADiagnostic = &goSlog
 	t.Cleanup(func() { selectedIANADiagnostic = previousDiagnostic })

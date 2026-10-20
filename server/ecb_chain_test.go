@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -33,7 +32,7 @@ func TestECBSelectedCrossRuntimeChain(t *testing.T) {
 	})
 	configureSyntheticECB(t, syntheticECBMountWithTransport(t, transport))
 	t.Setenv("OVDB_ECB_ENABLED", "true")
-	var goSlog, httpErrors bytes.Buffer
+	var goSlog, httpErrors lockedBuffer
 	previousDiagnostic := selectedECBDiagnostic
 	selectedECBDiagnostic = &goSlog
 	t.Cleanup(func() { selectedECBDiagnostic = previousDiagnostic })
