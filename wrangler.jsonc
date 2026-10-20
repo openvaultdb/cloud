@@ -89,11 +89,11 @@
     }
   ],
   "vars": {
-    // Cloud Run service sneat-app (europe-west3), called directly rather than
+    // Cloud Run service sneat-app (europe-west1, Belgium), called directly rather than
     // through api.sneat.cloud: that host is the sneat-api-proxy Worker, which
     // only rewrites Host for this traffic, so going through it cost a second
     // Worker invocation per call. X-OVDB-Proxy-Secret is sent by this Worker.
-    "SNEAT_API_ORIGIN": "https://sneat-app-354fvnqbaa-ey.a.run.app"
+    "SNEAT_API_ORIGIN": "https://sneat-app-354fvnqbaa-ew.a.run.app"
   },
   "observability": {
     "enabled": true,

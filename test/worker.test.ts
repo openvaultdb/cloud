@@ -122,7 +122,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     await expect(start.json()).resolves.toMatchObject({ user_code: "BCDF-GHJK" });
     expect(upstreamRequests).toHaveLength(1);
     const upstreamStart = upstreamRequests[0];
-    expect(upstreamStart.url).toBe("https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/device_auth/code");
+    expect(upstreamStart.url).toBe("https://sneat-app-354fvnqbaa-ew.a.run.app/v0/ovdb/device_auth/code");
     expect(upstreamStart.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
     expect(upstreamStart.headers.get("Origin")).toBeNull();
     const startBody = new URLSearchParams(
@@ -228,7 +228,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     expect(upstreamRequests).toHaveLength(1);
     const upstream = upstreamRequests[0];
     expect(upstream.url).toBe(
-      "https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/cloud/databases?space=personal&pageSize=100&pageToken=next",
+      "https://sneat-app-354fvnqbaa-ew.a.run.app/v0/ovdb/cloud/databases?space=personal&pageSize=100&pageToken=next",
     );
     expect(upstream.headers.get("Authorization")).toBe("Bearer cloud-access-token");
     expect(upstream.headers.get(PROXY_SECRET_HEADER)).toBe("test-proxy-secret");
@@ -242,7 +242,7 @@ describe("OpenVaultDB Cloud device authorization facade", () => {
     await expect(response.json()).resolves.toMatchObject({ database: { id: "db_test-42" } });
     expect(upstreamRequests).toHaveLength(1);
     expect(upstreamRequests[0].url).toBe(
-      "https://sneat-app-354fvnqbaa-ey.a.run.app/v0/ovdb/cloud/database?id=db_test-42",
+      "https://sneat-app-354fvnqbaa-ew.a.run.app/v0/ovdb/cloud/database?id=db_test-42",
     );
   });
 
