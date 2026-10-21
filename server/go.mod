@@ -42,7 +42,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.20 // indirect
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
-	github.com/ingitdb/dalgo2ingitdb v0.7.1 // indirect
+	github.com/ingitdb/dalgo2ingitdb v0.7.2 // indirect
 	github.com/ingitdb/dalgo2ingitdb4github v0.2.3 // indirect
 	github.com/ingitdb/ingitdb-go/ingitdb v0.9.0 // indirect
 	github.com/ingr-io/ingr-go v0.0.2 // indirect

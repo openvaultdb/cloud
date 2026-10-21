@@ -5,9 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -62,6 +66,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 		}
 	})
 
+	assertNativeCollectionDiscovery(t, handler)
 	profile := selectedRequest(handler, "GET", "/v1/databases/shipping-logs", "")
 	if profile.Code != 200 {
 		t.Fatalf("native profile: %d %s", profile.Code, profile.Body.String())
@@ -213,5 +218,102 @@ func TestLoadRuntimeInventoryRejectsUnsafeAndDuplicateProviderIDs(t *testing.T) 
 	unsafe.ID = "sample"
 	if _, err := loadRuntimeInventory(write([]runtimeDatabase{unsafe, duplicate})); err == nil || !strings.Contains(err.Error(), "repeats database ID") {
 		t.Fatalf("duplicate provider ID was accepted: %v", err)
+	}
+}
+
+// The native root map is the public identity boundary, not its physical directories.
+func assertNativeCollectionDiscovery(t *testing.T, handler http.Handler) {
+	t.Helper()
+	expected := []string{"baseline", "recovery11045example", "recovery11062example"}
+	for _, prefix := range []string{"/v1/databases/", "/ovdb/dbs/"} {
+		profile := selectedRequest(handler, "GET", prefix+"shipping-logs", "")
+		if profile.Code != http.StatusOK {
+			t.Fatalf("native profile %s: %d %s", prefix, profile.Code, profile.Body.String())
+		}
+		if prefix == "/v1/databases/" {
+			var data struct {
+				Collections []string `json:"collections"`
+			}
+			if err := json.Unmarshal(profile.Body.Bytes(), &data); err != nil {
+				t.Fatal(err)
+			}
+			sort.Strings(data.Collections)
+			if !reflect.DeepEqual(data.Collections, expected) {
+				t.Fatalf("native public collection IDs: %v want %v", data.Collections, expected)
+			}
+		}
+
+	}
+}
+
+func TestActualNativeCollectionDiscoveryAndReads(t *testing.T) {
+	inventory := os.Getenv("SAMPLE_DATABASES_INVENTORY")
+	if inventory == "" {
+		t.Skip("set SAMPLE_DATABASES_INVENTORY to checksum-verified original native fixtures")
+	}
+	providers, err := loadRuntimeInventory(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native []runtimeDatabase
+	for _, provider := range providers {
+		if provider.ID == "shipping-logs" {
+			native = append(native, provider)
+		}
+	}
+	if len(native) != 1 {
+		t.Fatal("actual inventory must include exactly one shipping-logs provider")
+	}
+	handler, closeDBs, err := newHandlerWithProviders(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDBs()
+	assertNativeCollectionDiscovery(t, handler)
+	for collection, key := range map[string]string{"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1"} {
+		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 100\n")
+		if query.Code != http.StatusOK {
+			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())
+		}
+		// Native mounts have no immutable-query cache policy; real ServeHTTP must refuse storage.
+		getQuery := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/dtql?q="+url.QueryEscape("from: {name: "+collection+"}\nlimit: 100\n"), "")
+		if getQuery.Code != http.StatusOK || getQuery.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("native GET cache contract %s: %d %q", collection, getQuery.Code, getQuery.Header().Get("Cache-Control"))
+		}
+		t.Logf("native %s actual GET Cache-Control: %s", collection, getQuery.Header().Get("Cache-Control"))
+		var rows struct {
+			Records []struct {
+				Key  string         `json:"key"`
+				Data map[string]any `json:"data"`
+			} `json:"records"`
+		}
+		if err := json.Unmarshal(query.Body.Bytes(), &rows); err != nil {
+			t.Fatal(err)
+		}
+		var expected map[string]any
+		for _, record := range rows.Records {
+			if !strings.HasPrefix(record.Key, collection+"/") {
+				t.Fatalf("cross-collection key %q", record.Key)
+			}
+			if record.Data["event_id"] == key {
+				expected = record.Data
+			}
+		}
+		if expected == nil {
+			t.Fatalf("original event %s absent from %s", key, collection)
+		}
+		keyed := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/records/"+collection+"/"+key, "")
+		var record struct {
+			Data map[string]any `json:"data"`
+		}
+		if keyed.Code != http.StatusOK {
+			t.Fatalf("native keyed %s: %d %s", key, keyed.Code, keyed.Body.String())
+		}
+		if err := json.Unmarshal(keyed.Body.Bytes(), &record); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(record.Data, expected) {
+			t.Fatalf("native keyed event %s differs from query", key)
+		}
 	}
 }

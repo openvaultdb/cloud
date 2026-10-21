@@ -39,6 +39,17 @@ def require_status(origin: str, path: str, expected: int = 200, **kwargs):
     return headers, body
 
 
+def require_query_cache_control(database, cache_control):
+    if database.get("storageEngine") == "ingitdb":
+        if cache_control.strip().lower() != "no-store":
+            raise RuntimeError(f"{database['id']} native GET query is not no-store")
+    elif database.get("readProfile") == "bounded-immutable/1":
+        if "no-store" not in cache_control:
+            raise RuntimeError(f"{database['id']} bounded GET query is not no-store")
+    elif "max-age=86400" not in cache_control:
+        raise RuntimeError(f"{database['id']} GET query is not cacheable")
+
+
 def require_cors(origin: str, database_id: str, cors_origin: str, query_path: str) -> None:
     for path in (f"/ovdb/dbs/{database_id}", query_path):
         headers, _ = require_status(origin, path, headers={"Origin": cors_origin})
@@ -119,12 +130,7 @@ def main() -> None:
             )
             if headers.get("Access-Control-Allow-Origin") != cors_origin:
                 raise RuntimeError(f"{database['id']} response omitted allowed CORS origin {cors_origin}")
-            cache_control = headers.get("Cache-Control", "")
-            if database.get("readProfile") == "bounded-immutable/1":
-                if "no-store" not in cache_control:
-                    raise RuntimeError(f"{database['id']} bounded GET query is not no-store")
-            elif "max-age=86400" not in cache_control:
-                raise RuntimeError(f"{database['id']} GET query is not cacheable")
+            require_query_cache_control(database, headers.get("Cache-Control", ""))
             result = json.loads(result_bytes)
             records = result.get("records")
             if not isinstance(records, list) or not records:

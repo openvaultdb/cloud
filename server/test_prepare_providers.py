@@ -61,7 +61,7 @@ class PrepareProvidersTest(unittest.TestCase):
                 def request(origin, path, method="GET", body=None, headers=None):
                     paths.append(path)
                     response_headers = {"Access-Control-Allow-Origin": "https://sample.test", "Vary": "Origin",
-                                        "Access-Control-Allow-Methods": "POST", "Cache-Control": "max-age=86400",
+                                        "Access-Control-Allow-Methods": "POST", "Cache-Control": "no-store" if engine == "ingitdb" else "max-age=86400",
                                         "Access-Control-Allow-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close"}
                     if headers and headers.get("Origin") == "https://undeclared.invalid":
                         response_headers.pop("Access-Control-Allow-Origin")
@@ -80,6 +80,18 @@ class PrepareProvidersTest(unittest.TestCase):
                 with patch.object(sys, "argv", ["smoke_inventory.py", "--origin", "https://cloud.test", "--inventory", str(inventory)]), patch.object(smoke_inventory, "request", request):
                     smoke_inventory.main()
                 self.assertIn("/v1/databases/sample/records/baseline/key1", paths)
+
+    def test_smoke_cache_contracts_remain_engine_specific(self):
+        for provider, accepted, rejected in [
+            ({"id": "native", "storageEngine": "ingitdb"}, "no-store", ["", "max-age=86400", "no-store, max-age=86400"]),
+            ({"id": "bounded", "readProfile": "bounded-immutable/1"}, "no-store", ["", "max-age=86400"]),
+            ({"id": "legacy", "storageEngine": "sqlite"}, "max-age=86400", ["", "no-store", "max-age=300"]),
+        ]:
+            with self.subTest(provider=provider["id"]):
+                smoke_inventory.require_query_cache_control(provider, accepted)
+                for value in rejected:
+                    with self.assertRaises(RuntimeError):
+                        smoke_inventory.require_query_cache_control(provider, value)
 
     def native_fixture(self):
         ids = ("baseline", "recovery11045example", "recovery11062example")
