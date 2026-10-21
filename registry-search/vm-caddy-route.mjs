@@ -15,6 +15,7 @@ const anchor = 'vm1.sneat.dev {\n    route {\n';
 const begin = '        # BEGIN registry-search-live owner=alex task=01a114c1-e447-7a81-a869-0d82ca2a7747\n';
 const end = '        # END registry-search-live\n';
 const task = '01a114c1-e447-7a81-a869-0d82ca2a7747';
+export const routeCompositionVersion = 1;
 
 function hash(value) { return createHash('sha256').update(value).digest('hex'); }
 function fail(message) { throw new Error(message); }
@@ -59,8 +60,42 @@ export function insertRoute(original, snippet) {
 }
 export function removeRoute(installedText, snippet) {
   const block = begin + snippet.trimEnd().split('\n').map(line => `        ${line}`).join('\n') + '\n' + end;
-  if (installedText.split(block).length !== 2) throw new Error('owned Caddy route changed');
+  if (installedText.split(block).length !== 2 || installedText.split(begin).length !== 2 || installedText.split(end).length !== 2) throw new Error('owned Caddy route changed');
   return installedText.replace(block, '');
+}
+export function verifyComposition(value, source, snippet, backup, actual) {
+  if (hash(source) !== value.installerHash || hash(snippet) !== value.snippetHash || hash(backup) !== value.beforeHash) fail('owned Caddy source or backup drift');
+  // afterHash attests the original installation, not ownership of later blocks.
+  if (hash(insertRoute(backup.toString(), snippet.toString())) !== value.afterHash) fail('original Caddy installation receipt drift');
+  return removeRoute(actual.toString(), snippet.toString());
+}
+export function applyConfiguration(candidate, original, validate, write, reload) {
+  validate(candidate);
+  write(candidate);
+  try { reload(); }
+  catch (error) { write(original); reload(); throw error; }
+}
+function atomicPrivate(path, contents) {
+  const temp = `${path}.${process.pid}.tmp`;
+  try { privateWrite(temp, contents); renameSync(temp, path); }
+  finally { if (existsSync(temp)) rmSync(temp); }
+}
+export function upgradeOwnedSource(value, source, previous, previousReceipt, archive, writeSource, writeReceipt) {
+  if (hash(previous) !== value.installerHash) fail('owned Caddy source drift');
+  archive(previous);
+  const next = { ...value, installerHash: hash(source), routeCompositionVersion };
+  try { writeSource(source); writeReceipt(JSON.stringify(next) + '\n'); }
+  catch (error) { writeSource(previous); writeReceipt(previousReceipt); throw error; }
+  return next;
+}
+export function verifyUpgradeRecovery(journal, source, current, archived, snippet, backup, actual, installedSource, installedReceipt) {
+  const prior = JSON.parse(journal.receipt);
+  if (journal.targetHash !== hash(source) || prior.owner !== current.owner || prior.task !== current.task) fail('upgrade recovery identity mismatch');
+  verifyComposition(prior, archived, snippet, backup, actual);
+  const expected = { ...prior, installerHash: journal.targetHash, routeCompositionVersion };
+  if (![prior.installerHash, journal.targetHash].includes(hash(installedSource)) ||
+      ![hash(journal.receipt), hash(JSON.stringify(expected) + '\n')].includes(hash(installedReceipt))) fail('upgrade recovery files drifted');
+  return prior;
 }
 function owner() {
   if (!existsSync(receiptPath)) return null;
@@ -72,20 +107,51 @@ function owner() {
 function checkInstalled(value) {
   rootDir(installed);
   for (const name of ['vm-caddy-route.mjs', 'vm1-search.caddy', 'Caddyfile.before-registry-search']) rootFile(join(installed, name), true);
-  if (hash(readFileSync(join(installed, 'vm-caddy-route.mjs'))) !== value.installerHash || hash(readFileSync(join(installed, 'vm1-search.caddy'))) !== value.snippetHash || hash(readFileSync(backupPath)) !== value.beforeHash) fail('owned Caddy source or backup drift');
   const actual = readFileSync(caddyfile);
-  if (hash(actual) !== value.afterHash) fail('Caddyfile changed since registry route install');
+  verifyComposition(value, readFileSync(join(installed, 'vm-caddy-route.mjs')), readFileSync(join(installed, 'vm1-search.caddy')), readFileSync(backupPath), actual);
   return actual;
 }
 function main(command) {
   if (process.platform !== 'linux' || process.getuid?.() !== 0) fail('run as root on Linux');
-  if (!['install', 'status', 'teardown'].includes(command)) fail('usage: vm-caddy-route.mjs install|status|teardown');
+  if (!['install', 'status', 'teardown', 'upgrade'].includes(command)) fail('usage: vm-caddy-route.mjs install|status|teardown|upgrade');
   rootDir(root);
   rootFile(join(root, 'owner.json'), true);
   const pilot = JSON.parse(readFileSync(join(root, 'owner.json'), 'utf8'));
   if (pilot.operator !== 'alex' || pilot.task !== task || pilot.bind !== '127.0.0.1:8108') fail('unexpected VM pilot owner');
   const stat = rootFile(caddyfile);
   const current = owner();
+  if (command === 'upgrade') {
+    if (!current) fail('Caddy route has no owner receipt');
+    const sourcePath = join(installed, 'vm-caddy-route.mjs');
+    const source = readFileSync(new URL(import.meta.url));
+    const journalPath = join(installed, 'helper-upgrade.json');
+    if (existsSync(journalPath)) {
+      rootDir(installed);
+      rootFile(journalPath, true);
+      const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+      const prior = JSON.parse(journal.receipt);
+      const archivePath = join(installed, `vm-caddy-route.${prior.installerHash}.before-upgrade.mjs`);
+      for (const path of [sourcePath, archivePath, backupPath, join(installed, 'vm1-search.caddy')]) rootFile(path, true);
+      const archived = readFileSync(archivePath);
+      verifyUpgradeRecovery(journal, source, current, archived, readFileSync(join(installed, 'vm1-search.caddy')), readFileSync(backupPath), readFileSync(caddyfile), readFileSync(sourcePath), readFileSync(receiptPath));
+      atomicPrivate(sourcePath, archived);
+      atomicPrivate(receiptPath, journal.receipt);
+      rmSync(journalPath);
+    }
+    const verified = owner();
+    checkInstalled(verified);
+    const previous = readFileSync(sourcePath);
+    const priorReceipt = readFileSync(receiptPath);
+    const archive = join(installed, `vm-caddy-route.${verified.installerHash}.before-upgrade.mjs`);
+    upgradeOwnedSource(verified, source, previous, priorReceipt, bytes => {
+      if (existsSync(archive)) { rootFile(archive, true); if (hash(readFileSync(archive)) !== hash(bytes)) fail('upgrade archive drift'); }
+      else privateWrite(archive, bytes);
+      privateWrite(journalPath, JSON.stringify({ receipt: priorReceipt.toString(), targetHash: hash(source) }) + '\n');
+    }, bytes => atomicPrivate(sourcePath, bytes), bytes => atomicPrivate(receiptPath, bytes));
+    rmSync(journalPath);
+    process.stdout.write('Caddy route helper upgraded; original source archived; live configuration unchanged\n');
+    return;
+  }
   if (command === 'install') {
     const dir = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(new URL(import.meta.url));
@@ -121,21 +187,13 @@ function main(command) {
     if (!current) fail('Caddy route has no owner receipt');
     const installedText = checkInstalled(current).toString('utf8');
     const snippet = readFileSync(join(installed, 'vm1-search.caddy'), 'utf8');
-    const before = readFileSync(backupPath, 'utf8');
-    if (removeRoute(installedText, snippet) !== before) fail('Caddy backup does not match owned route removal');
+    const candidate = removeRoute(installedText, snippet);
     if (command === 'status') process.stdout.write(`Caddy search route owned by alex; teardown: ${current.teardown}\n`);
     else {
-      validateCandidate(before, stat);
-      atomicCaddyfile(before, stat);
-      try { caddy(['reload', '--config', caddyfile, '--adapter', 'caddyfile']); }
-      catch (error) {
-        atomicCaddyfile(installedText, stat);
-        caddy(['reload', '--config', caddyfile, '--adapter', 'caddyfile']);
-        throw error;
-      }
+      applyConfiguration(candidate, installedText, text => validateCandidate(text, stat), text => atomicCaddyfile(text, stat), () => caddy(['reload', '--config', caddyfile, '--adapter', 'caddyfile']));
       rmSync(receiptPath);
       rmSync(installed, { recursive: true });
-      process.stdout.write('Caddy search route removed; original file restored\n');
+      process.stdout.write('Caddy search route removed; unrelated configuration preserved\n');
     }
   }
 }
