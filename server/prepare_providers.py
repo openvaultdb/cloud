@@ -28,7 +28,7 @@ MAX_ENCODED_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_DECODED_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 RAW_GITHUB_ORIGIN = "https://raw.githubusercontent.com"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
-PROVIDER_FIELDS = {"id", "repository", "revision", "recordKeyFormat", "requirePublishedQuery", "smokeRecordsets", "emptyRecordsets", "blobSmokeFields", "foreignKeySmoke", "files", "corsOrigins"}
+PROVIDER_FIELDS = {"id", "repository", "revision", "recordKeyFormat", "requirePublishedQuery", "smokeRecordsets", "emptyRecordsets", "blobSmokeFields", "foreignKeySmoke", "files", "corsOrigins", "storageEngine", "nativeFiles", "metadataFiles"}
 PREPARATION_FIELDS = {"servingAdapter", "readProfile", "publisherManifest"}
 
 
@@ -221,9 +221,21 @@ def validate_inventory(document: dict[str, Any]) -> list[dict[str, Any]]:
             if identity in seen_relationships:
                 raise ValueError(f"{database_id} repeats foreignKeySmoke relationship {identity!r}")
             seen_relationships.add(identity)
+        origins = provider.get("corsOrigins")
+        if not isinstance(origins, list) or not origins:
+            raise ValueError(f"{database_id} must declare CORS origins")
+        for origin in origins:
+            if not isinstance(origin, str) or origin != f"https://{urlsplit(origin).netloc}" or urlsplit(origin).scheme != "https":
+                raise ValueError(f"{database_id} CORS origins must be HTTPS origins")
+        if len(origins) != len(set(origins)):
+            raise ValueError(f"{database_id} has duplicate CORS origins")
+        storage_engine = provider.get("storageEngine", "sqlite")
+        if storage_engine not in ("sqlite", "ingitdb"):
+            raise ValueError(f"{database_id} has unsupported storageEngine")
         files = provider.get("files")
-        if not isinstance(files, dict) or set(files) != {"manifest", "contract", "checksums", "databaseManifest", "artifact", "license"}:
-            raise ValueError(f"{database_id} must pin manifest, contract, checksums, databaseManifest, artifact, and license files")
+        expected_files = {"manifest", "contract", "checksums", "databaseManifest", "license"} | ({"artifact"} if storage_engine == "sqlite" else set())
+        if not isinstance(files, dict) or set(files) != expected_files:
+            raise ValueError(f"{database_id} must pin exactly its required provider files")
         for file_key, descriptor in files.items():
             if not isinstance(descriptor, dict):
                 raise ValueError(f"{database_id} {file_key} pin must be an object")
@@ -235,6 +247,22 @@ def validate_inventory(document: dict[str, Any]) -> list[dict[str, Any]]:
             safe_relative_path(descriptor.get("path"), f"{database_id} {file_key} path")
             if not isinstance(descriptor.get("sha256"), str) or not SHA256_PATTERN.fullmatch(descriptor["sha256"]):
                 raise ValueError(f"{database_id} {file_key} must pin a SHA-256")
+        if storage_engine == "ingitdb":
+            native = provider.get("nativeFiles")
+            metadata = provider.get("metadataFiles")
+            if not isinstance(native, list) or len(native) != 8 or not isinstance(metadata, list) or len(metadata) != 3:
+                raise ValueError(f"{database_id} native inGitDB provider must pin eight store files and three metadata receipts")
+            seen_paths: set[str] = set()
+            for descriptor in native + metadata:
+                if not isinstance(descriptor, dict) or set(descriptor) != {"path", "sha256", "bytes"}:
+                    raise ValueError(f"{database_id} native pins must contain only path/sha256/bytes")
+                path = safe_relative_path(descriptor.get("path"), f"{database_id} native path")
+                if path in seen_paths or not isinstance(descriptor.get("sha256"), str) or not SHA256_PATTERN.fullmatch(descriptor["sha256"]) or type(descriptor.get("bytes")) is not int or not 0 < descriptor["bytes"] <= MAX_ARTIFACT_BYTES:
+                    raise ValueError(f"{database_id} has an invalid or duplicate native pin")
+                seen_paths.add(path)
+            if any(not item["path"].startswith("ingitdb/") for item in native):
+                raise ValueError(f"{database_id} native store pins must use the ingitdb/ source prefix")
+            continue
         artifact = files["artifact"]
         if artifact.get("compression") is None:
             if type(artifact.get("bytes")) is not int or artifact["bytes"] <= 0 or artifact["bytes"] > MAX_ARTIFACT_BYTES:
@@ -406,6 +434,114 @@ def verify_blob_digest(actual_hash: str, actual_bytes: int, expected_hash: str, 
         raise ValueError(f"{context} is {actual_bytes} bytes, expected {expected_bytes}")
 
 
+def validate_native_provider(provider: dict[str, Any], fetch: Callable[[str, str, str], bytes], fetched: dict[str, Any]) -> dict[str, Any]:
+    """Validate the closed native inGitDB store without transforming its bytes."""
+    database_id, repository, revision = provider["id"], provider["repository"], provider["revision"]
+    native: dict[str, bytes] = {}
+    metadata: dict[str, bytes] = {}
+    for target, pins in ((native, provider["nativeFiles"]), (metadata, provider["metadataFiles"])):
+        for pin in pins:
+            data = fetch(repository, revision, pin["path"])
+            verify_blob(data, pin["sha256"], pin["bytes"], f"{database_id} {pin['path']}")
+            target[pin["path"]] = data
+    manifest = read_json(fetched["manifest"], f"{database_id} manifest")
+    contract = read_json(fetched["contract"], f"{database_id} contract")
+    descriptor = read_json(fetched["databaseManifest"], f"{database_id} descriptor")
+    checksums = read_json(fetched["checksums"], f"{database_id} checksums")
+    if manifest.get("id") != database_id or manifest.get("storage") != {"engine": "ingitdb", "path": "ingitdb"} or contract.get("schema", {}).get("database", {}).get("id") != database_id:
+        raise ValueError(f"{database_id} native provider identity/storage mismatch")
+    if descriptor.get("localId") != database_id or descriptor.get("capabilities") != {"read": True, "query": True, "write": False}:
+        raise ValueError(f"{database_id} native public descriptor is not read-only/queryable")
+    schema = read_json(metadata["metadata/schema.json"], f"{database_id} pinned schema")
+    if schema != contract.get("schema"):
+        raise ValueError(f"{database_id} pinned schema disagrees with contract")
+    source_pin = next(pin for pin in provider["metadataFiles"] if pin["path"] == "source-manifest.json")
+    if manifest.get("source", {}).get("sha256") != source_pin["sha256"]:
+        raise ValueError(f"{database_id} provider source digest disagrees with pinned source manifest")
+    advertised = checksums.get("files", {})
+    for pin in provider["nativeFiles"]:
+        if advertised.get(pin["path"]) != {"sha256": pin["sha256"], "bytes": pin["bytes"]}:
+            raise ValueError(f"{database_id} checksums disagree with {pin['path']}")
+    expected_root = {
+        "baseline": "collections/baseline",
+        "recovery11045example": "collections/recovery11045example",
+        "recovery11062example": "collections/recovery11062example",
+    }
+    expected_paths = {"ingitdb/.ingitdb/settings.yaml", "ingitdb/.ingitdb/root-collections.yaml"}
+    for path in expected_root.values():
+        expected_paths.update({f"ingitdb/{path}/.collection/definition.yaml", f"ingitdb/{path}/records.jsonl"})
+    if set(native) != expected_paths or len(provider["nativeFiles"]) != len(expected_paths):
+        raise ValueError(f"{database_id} native tree must contain exactly the eight declared members")
+    root = read_json(native["ingitdb/.ingitdb/root-collections.yaml"], f"{database_id} root collections")
+    if root != expected_root:
+        raise ValueError(f"{database_id} root collections must be the exact three public IDs")
+    schema_tables = {table["name"]: table for table in contract["schema"]["tables"]}
+    if set(schema_tables) != set(expected_root):
+        raise ValueError(f"{database_id} contract must contain exactly the three public collections")
+    for collection_id, collection_path in expected_root.items():
+        definition_path = f"ingitdb/{collection_path}/.collection/definition.yaml"
+        records_path = f"ingitdb/{collection_path}/records.jsonl"
+        definition = read_json(native[definition_path], f"{database_id} {collection_id} definition")
+        if definition.get("record_file") != {"name": "records.jsonl", "type": "[]map[string]any", "format": "jsonl"} or definition.get("primary_key") != ["event_id"]:
+            raise ValueError(f"{database_id} {collection_id} has an incompatible record file or primary key")
+        columns = definition.get("columns")
+        if not isinstance(columns, dict) or columns.get("event_id", {}).get("required") is not True or columns["event_id"].get("min_length") != 1:
+            raise ValueError(f"{database_id} {collection_id} does not require a nonblank event_id")
+        table = schema_tables.get(collection_id)
+        if table is None or set(columns) != {column["name"] for column in table["columns"]}:
+            raise ValueError(f"{database_id} {collection_id} definition disagrees with contract schema")
+        contract_columns = {column["name"]: column for column in table["columns"]}
+        for name, spec in columns.items():
+            column = contract_columns[name]
+            if (set(spec) - {"type", "required", "min_length"} or
+                    spec.get("type") not in {"string", "int", "bool"} or
+                    spec.get("type") != column.get("type") or
+                    spec.get("required") is not (not column.get("nullable", True)) or
+                    ("min_length" in spec and (spec["type"] != "string" or type(spec["min_length"]) is not int or spec["min_length"] < 0))):
+                raise ValueError(f"{database_id} {collection_id}.{name} definition disagrees with contract constraints")
+        if definition.get("columns_order") != list(columns):
+            raise ValueError(f"{database_id} {collection_id} column order differs from its definition")
+        seen: set[str] = set()
+        rows = native[records_path].splitlines()
+        for line in rows:
+            record = read_json(line, f"{database_id} {collection_id} record")
+            if set(record) != set(columns):
+                raise ValueError(f"{database_id} {collection_id} record differs from its definition")
+            key = record.get("event_id")
+            if not isinstance(key, str) or not key.strip() or key in seen:
+                raise ValueError(f"{database_id} {collection_id} has blank or duplicate event_id")
+            seen.add(key)
+            for name, spec in columns.items():
+                value = record[name]
+                expected = spec.get("type")
+                if (expected == "string" and (not isinstance(value, str) or len(value) < spec.get("min_length", 0))) or (expected == "int" and (type(value) is not int)) or (expected == "bool" and type(value) is not bool):
+                    raise ValueError(f"{database_id} {collection_id}.{name} violates its definition")
+        if len(rows) != table.get("rowCount"):
+            raise ValueError(f"{database_id} {collection_id} row count disagrees with contract")
+    source = read_json(metadata["source-manifest.json"], f"{database_id} source manifest")
+    source_files = manifest["source"]["files"]
+    if set(source_files) != set(expected_root) or len(source.get("logs", [])) != len(expected_root):
+        raise ValueError(f"{database_id} source manifest must describe exactly three distinct original logs")
+    source_prefix = str(Path(manifest["source"]["path"]).parent) + "/"
+    matched = set()
+    for name, details in source_files.items():
+        source_path = details["sourcePath"]
+        if not source_path.startswith(source_prefix):
+            raise ValueError(f"{database_id} source path escapes the original fixture")
+        logs = [item for item in source["logs"] if source_prefix + item.get("path", "") == source_path]
+        pin = next((pin for pin in provider["nativeFiles"] if pin["path"] == details["path"]), None)
+        expected_class = "baseline" if name == "baseline" else "recovery-example"
+        if (len(logs) != 1 or source_path in matched or pin is None or
+                details["path"] != f"ingitdb/{expected_root[name]}/records.jsonl" or
+                details.get("classification") != expected_class or
+                details.get("rowCount") != schema_tables[name]["rowCount"] or
+                any(details.get(field) != pin[field] or logs[0].get(field) != pin[field] for field in ("sha256", "bytes"))):
+            raise ValueError(f"{database_id} source manifest disagrees with original native file {name}")
+        matched.add(source_path)
+    fetched["nativeFiles"], fetched["metadataFiles"] = native, metadata
+    return fetched
+
+
 def validate_provider(
     provider: dict[str, Any],
     fetch: Callable[[str, str, str], bytes],
@@ -424,6 +560,9 @@ def validate_provider(
         expected_bytes = descriptor.get("bytes")
         verify_blob(data, descriptor["sha256"], expected_bytes, f"{database_id} {key}")
         fetched[key] = data
+
+    if provider.get("storageEngine", "sqlite") == "ingitdb":
+        return validate_native_provider(provider, fetch, fetched)
 
     manifest = read_json(fetched["manifest"], f"{database_id} provider manifest")
     contract = read_json(fetched["contract"], f"{database_id} provider contract")
@@ -444,8 +583,10 @@ def validate_provider(
     if database_manifest.get("format") != "ovdb-database/draft-1" or database_manifest.get("localId") != database_id:
         raise ValueError(f"{database_id} OVDB database manifest has incompatible identity")
     public_capabilities = database_manifest.get("capabilities", {})
-    if database_manifest.get("deployment", {}).get("engine") != "sqlite" or public_capabilities.get("read") is not True or public_capabilities.get("write") is not False:
-        raise ValueError(f"{database_id} OVDB database manifest is not a read-only SQLite provider")
+    deployment_engine = database_manifest.get("deployment", {}).get("engine")
+    expected_engine = "openvaultdb-go" if database_id in ("shipping", "shipping-logs") else "sqlite"
+    if deployment_engine != expected_engine or public_capabilities.get("read") is not True or public_capabilities.get("write") is not False:
+        raise ValueError(f"{database_id} OVDB database manifest is not a compatible read-only provider")
     if provider.get("requirePublishedQuery", True) and public_capabilities.get("query") is not True:
         raise ValueError(f"{database_id} OVDB database manifest does not advertise queries")
     bounded = provider.get("readProfile") == "bounded-immutable/1"
@@ -585,10 +726,28 @@ def validate_provider(
 
 
 def validate_image_layout(output: Path) -> None:
-    """The numeric Docker COPY contract requires a flat ordinary file set."""
+    """The image contains flat provider files plus one closed native store."""
     for entry in output.iterdir():
-        if entry.name.startswith(".") or entry.is_symlink() or not entry.is_file() or entry.stat().st_nlink != 1:
-            raise ValueError(f"image fixture output must be flat nonhidden ordinary files: {entry.name}")
+        if entry.is_symlink() or (not entry.is_file() and entry.name != "shipping-logs") or entry.name.startswith("."):
+            raise ValueError(f"image fixture output has an unapproved entry: {entry.name}")
+        if entry.is_file() and entry.stat().st_nlink != 1:
+            raise ValueError(f"image fixture output has a linked file: {entry.name}")
+    native = output / "shipping-logs"
+    if native.exists():
+        expected = {
+            ".ingitdb/settings.yaml", ".ingitdb/root-collections.yaml",
+            "collections/baseline/.collection/definition.yaml", "collections/baseline/records.jsonl",
+            "collections/recovery11045example/.collection/definition.yaml", "collections/recovery11045example/records.jsonl",
+            "collections/recovery11062example/.collection/definition.yaml", "collections/recovery11062example/records.jsonl",
+        }
+        actual = set()
+        for path in native.rglob("*"):
+            if path.is_symlink() or (path.is_file() and path.stat().st_nlink != 1):
+                raise ValueError("native inGitDB image tree contains a link")
+            if path.is_file():
+                actual.add(path.relative_to(native).as_posix())
+        if actual != expected:
+            raise ValueError("native inGitDB image tree differs from its exact eight-file inventory")
     if not (output / "inventory.json").is_file():
         raise ValueError("image fixture output has no inventory.json")
 
@@ -615,6 +774,42 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
             return data
 
         database_id = provider["id"]
+        if provider.get("storageEngine", "sqlite") == "ingitdb":
+            fetched = validate_provider(provider, fetch)
+            native_root = output / database_id
+            for pin in provider["nativeFiles"]:
+                relative = pin["path"].removeprefix("ingitdb/")
+                target = native_root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(fetched["nativeFiles"][pin["path"]])
+                target.chmod(0o444)
+            for directory in sorted((path for path in native_root.rglob("*") if path.is_dir()), reverse=True):
+                directory.chmod(0o555)
+            native_root.chmod(0o555)
+            for pin in provider["metadataFiles"]:
+                target = output / f"{database_id}-{Path(pin['path']).name}"
+                target.write_bytes(fetched["metadataFiles"][pin["path"]])
+            manifest_path = output / f"{database_id}.yaml"
+            manifest_path.write_text(
+                "database:\n  id: shipping-logs\n  schema_mode: schemaless\nstorage:\n  engine: ingitdb\n  path: ./shipping-logs\n",
+                encoding="utf-8",
+            )
+            license_name = f"{database_id}-UPSTREAM-LICENSE.md"
+            (output / license_name).write_bytes(fetched["license"])
+            source_sha = next(pin["sha256"] for pin in provider["metadataFiles"] if pin["path"] == "source-manifest.json")
+            (output / f"{database_id}.source-sha256").write_text(source_sha + "\n", encoding="utf-8")
+            runtime_databases.append({
+                "storageEngine": "ingitdb", "nativeRoot": database_id, "nativeFiles": [
+                    {**pin, "path": pin["path"].removeprefix("ingitdb/")} for pin in provider["nativeFiles"]
+                ],
+                "id": database_id, "manifest": manifest_path.name, "manifestSha256": prepare_fixture.sha256_file(manifest_path),
+                "corsOrigins": provider["corsOrigins"], "providerRepository": provider["repository"], "providerRevision": provider["revision"],
+                "sourceSha256": source_sha, "servingSha256": provider["files"]["contract"]["sha256"],
+                "license": license_name, "licenseSha256": provider["files"]["license"]["sha256"],
+                "smokeRecordset": provider["smokeRecordsets"][0], "smokeRecordsets": provider["smokeRecordsets"],
+                "emptyRecordsets": [], "blobSmokeFields": {}, "foreignKeySmoke": [],
+            })
+            continue
         artifact = provider["files"]["artifact"]
         source_fd, source_name = tempfile.mkstemp(prefix=f"{database_id}-source-", suffix=".sqlite", dir=output)
         os.close(source_fd)
@@ -677,6 +872,11 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                     runtime_databases[-1][field] = provider[field]
     runtime_path = output / "inventory.json"
     runtime_path.write_text(json.dumps({"version": inventory_version, "databases": runtime_databases}, indent=2) + "\n", encoding="utf-8")
+    for path in output.rglob("*"):
+        if path.is_file():
+            path.chmod(0o444)
+        elif path.is_dir():
+            path.chmod(0o555)
     validate_image_layout(output)
     return runtime_path
 

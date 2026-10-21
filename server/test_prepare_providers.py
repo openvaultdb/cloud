@@ -1,4 +1,9 @@
 import json
+import copy
+import sys
+from unittest.mock import patch
+
+import smoke_inventory
 import gzip
 import hashlib
 import sqlite3
@@ -17,7 +22,7 @@ class PrepareProvidersTest(unittest.TestCase):
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
-        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [provider["id"] for provider in providers])
+        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [provider["id"] for provider in providers])
         by_id = {provider["id"]: provider for provider in providers}
         self.assertTrue(by_id["adventureworks"]["requirePublishedQuery"])
         self.assertTrue(by_id["employees"]["requirePublishedQuery"])
@@ -34,14 +39,134 @@ class PrepareProvidersTest(unittest.TestCase):
             output = Path(temporary)
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)
             runtime = json.loads(runtime_path.read_text())
-            self.assertEqual(1, runtime["version"])
-            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [database["id"] for database in runtime["databases"]])
+            self.assertEqual(2, runtime["version"])
+            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [database["id"] for database in runtime["databases"]])
             for database in runtime["databases"]:
                 self.assertTrue((output / database["manifest"]).is_file())
                 self.assertTrue((output / database["license"]).is_file())
                 self.assertEqual(40, len(database["providerRevision"]))
                 self.assertIn("/", database["providerRepository"])
                 self.assertTrue((output / f"{database['id']}.source-sha256").is_file())
+
+    def test_smoke_actual_helper_supports_both_inventory_engines(self) -> None:
+        for engine, identity in (("sqlite", "id"), ("ingitdb", "event_id")):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as temporary:
+                inventory = Path(temporary) / "inventory.json"
+                inventory.write_text(json.dumps({"version": 2, "databases": [{
+                    "id": "sample", "storageEngine": engine, "corsOrigins": ["https://sample.test"],
+                    "smokeRecordsets": ["baseline"],
+                }]}))
+                paths = []
+                data = {identity: "key1", "value": "original"}
+                def request(origin, path, method="GET", body=None, headers=None):
+                    paths.append(path)
+                    response_headers = {"Access-Control-Allow-Origin": "https://sample.test", "Vary": "Origin",
+                                        "Access-Control-Allow-Methods": "POST", "Cache-Control": "no-store" if engine == "ingitdb" else "max-age=86400",
+                                        "Access-Control-Allow-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close"}
+                    if headers and headers.get("Origin") == "https://undeclared.invalid":
+                        response_headers.pop("Access-Control-Allow-Origin")
+                    if method == "OPTIONS":
+                        return 204, response_headers, b""
+                    if method == "PUT":
+                        return 403, response_headers, b""
+                    if path == "/ovdb/dbs/sample":
+                        return 200, response_headers, b"https://cloud.openvaultdb.com/ovdb/dbs/sample"
+                    if "/collections/" in path and engine == "ingitdb":
+                        self.fail("native engine has no SQLite collection HTML profile")
+                    result = {"key": "key1", "data": data}
+                    if "/dtql?" in path:
+                        result = {"records": [result]}
+                    return 200, response_headers, json.dumps(result).encode()
+                with patch.object(sys, "argv", ["smoke_inventory.py", "--origin", "https://cloud.test", "--inventory", str(inventory)]), patch.object(smoke_inventory, "request", request):
+                    smoke_inventory.main()
+                self.assertIn("/v1/databases/sample/records/baseline/key1", paths)
+
+    def test_smoke_cache_contracts_remain_engine_specific(self):
+        for provider, accepted, rejected in [
+            ({"id": "native", "storageEngine": "ingitdb"}, "no-store", ["", "max-age=86400", "no-store, max-age=86400"]),
+            ({"id": "bounded", "readProfile": "bounded-immutable/1"}, "no-store", ["", "max-age=86400"]),
+            ({"id": "legacy", "storageEngine": "sqlite"}, "max-age=86400", ["", "no-store", "max-age=300"]),
+        ]:
+            with self.subTest(provider=provider["id"]):
+                smoke_inventory.require_query_cache_control(provider, accepted)
+                for value in rejected:
+                    with self.assertRaises(RuntimeError):
+                        smoke_inventory.require_query_cache_control(provider, value)
+
+    def native_fixture(self):
+        ids = ("baseline", "recovery11045example", "recovery11062example")
+        root = {name: f"collections/{name}" for name in ids}
+        columns = {"event_id": {"type": "string", "required": True, "min_length": 1},
+                   "kind": {"type": "string", "required": True, "min_length": 2},
+                   "sequence": {"type": "int", "required": True}, "synthetic": {"type": "bool", "required": True}}
+        definition = {"record_file": {"name": "records.jsonl", "type": "[]map[string]any", "format": "jsonl"},
+                      "primary_key": ["event_id"], "columns": columns, "columns_order": list(columns)}
+        blobs = {"ingitdb/.ingitdb/settings.yaml": b"{}", "ingitdb/.ingitdb/root-collections.yaml": json.dumps(root).encode()}
+        tables, files, logs = [], {}, []
+        for name in ids:
+            blobs[f"ingitdb/collections/{name}/.collection/definition.yaml"] = json.dumps(definition).encode()
+            path = f"ingitdb/collections/{name}/records.jsonl"
+            rows = [{"event_id": f"{name}-{n}", "kind": "observed", "sequence": n, "synthetic": True} for n in range(2)]
+            blobs[path] = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+            pin = {"sha256": hashlib.sha256(blobs[path]).hexdigest(), "bytes": len(blobs[path])}
+            files[name] = {"path": path, "sourcePath": f"fixture/logs/{name}.jsonl", "classification": "baseline" if name == "baseline" else "recovery-example", "rowCount": 2, **pin}
+            logs.append({"path": f"logs/{name}.jsonl", **pin})
+            tables.append({"name": name, "rowCount": 2, "columns": [{"name": key, "type": value["type"], "nullable": False} for key, value in columns.items()]})
+        fetched = {"manifest": json.dumps({"id": "shipping-logs", "storage": {"engine": "ingitdb", "path": "ingitdb"}, "source": {"path": "fixture/manifest.json", "files": files}}).encode(),
+                   "contract": json.dumps({"schema": {"database": {"id": "shipping-logs"}, "tables": tables}}).encode(),
+                   "databaseManifest": json.dumps({"localId": "shipping-logs", "capabilities": {"read": True, "query": True, "write": False}}).encode()}
+        blobs["metadata/schema.json"] = json.dumps({"database": {"id": "shipping-logs"}, "tables": tables}).encode()
+        blobs["source-manifest.json"] = json.dumps({"logs": logs}).encode()
+        return blobs, fetched
+
+    def test_native_semantic_corruption_with_consistent_updated_pins(self) -> None:
+        records_path = "ingitdb/collections/baseline/records.jsonl"
+        definition_path = "ingitdb/collections/baseline/.collection/definition.yaml"
+        def change_json(blobs, path, change):
+            value = json.loads(blobs[path]); change(value); blobs[path] = json.dumps(value).encode()
+        def change_record(blobs, change):
+            rows = [json.loads(line) for line in blobs[records_path].splitlines()]
+            change(rows)
+            blobs[records_path] = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+        mutations = {
+            "valid": lambda b: None,
+            "root alias": lambda b: change_json(b, "ingitdb/.ingitdb/root-collections.yaml", lambda v: v.update(alias="collections/baseline")),
+            "missing member": lambda b: b.pop(records_path),
+            "extra definition": lambda b: b.update({"ingitdb/collections/extra/.collection/definition.yaml": b"{}"}),
+            "record filename": lambda b: change_json(b, definition_path, lambda v: v["record_file"].update(name="other.jsonl")),
+            "primary key": lambda b: change_json(b, definition_path, lambda v: v.update(primary_key=["kind"])),
+            "schema type": lambda b: change_json(b, definition_path, lambda v: v["columns"]["kind"].update(type="int")),
+            "required constraint": lambda b: change_json(b, definition_path, lambda v: v["columns"]["kind"].update(required=False)),
+            "unknown constraint": lambda b: change_json(b, definition_path, lambda v: v["columns"]["kind"].update(unsupported=True)),
+            "short string": lambda b: change_record(b, lambda rows: rows[0].update(kind="x")),
+            "blank identity": lambda b: change_record(b, lambda rows: rows[0].update(event_id=" ")),
+            "duplicate identity": lambda b: change_record(b, lambda rows: rows[1].update(event_id=rows[0]["event_id"])),
+            "wrong primitive": lambda b: change_record(b, lambda rows: rows[0].update(sequence=True)),
+            "extra field": lambda b: change_record(b, lambda rows: rows[0].update(extra="x")),
+            "missing field": lambda b: change_record(b, lambda rows: rows[0].pop("kind")),
+            "pinned schema": lambda b: change_json(b, "metadata/schema.json", lambda v: v["tables"][0]["columns"][0].update(type="bool")),
+            "source hash": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(sha256="0" * 64)),
+            "source length": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(bytes=0)),
+            "source alias": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(path=v["logs"][1]["path"])),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(mutation=name):
+                blobs, fetched = self.native_fixture()
+                mutate(blobs)
+                native_pins = [{"path": path, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)} for path, data in blobs.items() if path.startswith("ingitdb/")]
+                metadata_pins = [{"path": path, "sha256": hashlib.sha256(blobs[path]).hexdigest(), "bytes": len(blobs[path])} for path in ("source-manifest.json", "metadata/schema.json")]
+                manifest = json.loads(fetched["manifest"])
+                manifest["source"]["sha256"] = metadata_pins[0]["sha256"]
+                fetched["manifest"] = json.dumps(manifest).encode()
+                # Keep all transport pins/checksums consistent, reaching semantic rejection.
+                fetched["checksums"] = json.dumps({"files": {pin["path"]: {key: pin[key] for key in ("sha256", "bytes")} for pin in native_pins}}).encode()
+                provider = {"id": "shipping-logs", "repository": "demo-db/shipping-logs", "revision": "a" * 40, "nativeFiles": native_pins, "metadataFiles": metadata_pins}
+                validate = lambda: prepare_providers.validate_native_provider(provider, lambda repo, revision, path: blobs[path], copy.deepcopy(fetched))
+                if name == "valid":
+                    self.assertEqual(8, len(validate()["nativeFiles"]))
+                else:
+                    with self.assertRaises(ValueError):
+                        validate()
 
     def test_inventory_rejects_mutable_revisions_and_unsafe_artifact_paths(self) -> None:
         document = json.loads(INVENTORY.read_text())

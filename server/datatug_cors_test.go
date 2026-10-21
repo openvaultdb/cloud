@@ -24,8 +24,8 @@ func TestCloudDataTugCORS(t *testing.T) {
 	if err := json.Unmarshal(data, &declared); err != nil {
 		t.Fatal(err)
 	}
-	if len(declared.Databases) != 6 {
-		t.Fatalf("expected six declared providers, got %d", len(declared.Databases))
+	if len(declared.Databases) != 8 {
+		t.Fatalf("expected eight declared providers, got %d", len(declared.Databases))
 	}
 	var origins []string
 	for _, provider := range declared.Databases {
@@ -125,10 +125,9 @@ func TestCloudDataTugCORS(t *testing.T) {
 		if !slices.Contains(strings.Split(response.Header().Get("Access-Control-Expose-Headers"), ","), pin) {
 			t.Fatalf("POST response exposure missing %s", pin)
 		}
-		// The tiny runtime fixture currently produces no serving pin headers;
-		// allowing/exposing a header must never fabricate immutable identity.
-		if response.Header().Get(pin) != "" {
-			t.Fatalf("unexpected fabricated runtime pin %s", pin)
+		// These values were admitted by the actual inventory loader.
+		if want := providers[0].verifiedPins[pin]; want == "" || response.Header().Get(pin) != want {
+			t.Fatalf("verified runtime pin %s: got %q want %q", pin, response.Header().Get(pin), want)
 		}
 	}
 	var page northwindQueryPage

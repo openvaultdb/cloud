@@ -90,10 +90,9 @@ def fetch_metadata(repository, revision, path):
 
 def make_inventory(fetch=fetch_metadata):
     inventory = prepare_providers.read_json(Path("providers.json").read_bytes(), "legacy inventory")
-    if inventory["version"] != 1 or len(inventory["databases"]) != 6:
-        raise ValueError("requires unchanged complete six-provider inventory")
+    if inventory["version"] != 2 or len(inventory["databases"]) != 8:
+        raise ValueError("requires unchanged complete eight-provider inventory")
     inventory = copy.deepcopy(inventory)
-    inventory["version"] = 2
     names = {"manifest": "manifest.json", "contract": "metadata/contract.json",
              "checksums": "metadata/checksums.json", "databaseManifest": "ovdb-database.json",
              "license": "DATA-LICENSE.md"}
@@ -205,8 +204,8 @@ def prepare_phase(directory):
     receipt = {"outcome": "passed", "seconds": time.monotonic() - started,
                "inventory": inventory, "native_tables": native, "selected_tables": selected,
                "keys_scanned": keys, "native_proof": proof,
-               "prepared_files": [{"path": p.name, "bytes": p.stat().st_size,
-                                   "sha256": prepare_fixture.sha256_file(p)} for p in sorted(output.iterdir())]}
+               "prepared_files": [{"path": p.relative_to(output).as_posix(), "bytes": p.stat().st_size,
+                                   "sha256": prepare_fixture.sha256_file(p)} for p in sorted(output.rglob("*")) if p.is_file()]}
     (directory / "preparation.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
 

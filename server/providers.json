@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "databases": [
     {
       "id": "adventureworks",
@@ -59,7 +59,12 @@
         "Production.TransactionHistory"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "HumanResources.EmployeeDepartmentHistory", "sourceField": "BusinessEntityID", "targetRecordset": "HumanResources.Employee", "targetField": "BusinessEntityID"}
+        {
+          "sourceRecordset": "HumanResources.EmployeeDepartmentHistory",
+          "sourceField": "BusinessEntityID",
+          "targetRecordset": "HumanResources.Employee",
+          "targetField": "BusinessEntityID"
+        }
       ],
       "emptyRecordsets": [
         "dbo.DatabaseLog",
@@ -118,7 +123,12 @@
         "dept_manager"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "dept_emp", "sourceField": "emp_no", "targetRecordset": "employees", "targetField": "emp_no"}
+        {
+          "sourceRecordset": "dept_emp",
+          "sourceField": "emp_no",
+          "targetRecordset": "employees",
+          "targetField": "emp_no"
+        }
       ],
       "corsOrigins": [
         "https://employees.demodb.dev",
@@ -164,7 +174,12 @@
         "Customer"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "Invoice", "sourceField": "CustomerId", "targetRecordset": "Customer", "targetField": "CustomerId"}
+        {
+          "sourceRecordset": "Invoice",
+          "sourceField": "CustomerId",
+          "targetRecordset": "Customer",
+          "targetField": "CustomerId"
+        }
       ],
       "corsOrigins": [
         "https://chinook.demodb.dev",
@@ -213,10 +228,17 @@
         "Employees"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "Order Details", "sourceField": "OrderID", "targetRecordset": "Orders", "targetField": "OrderID"}
+        {
+          "sourceRecordset": "Order Details",
+          "sourceField": "OrderID",
+          "targetRecordset": "Orders",
+          "targetField": "OrderID"
+        }
       ],
       "blobSmokeFields": {
-        "Employees": ["Photo"]
+        "Employees": [
+          "Photo"
+        ]
       },
       "corsOrigins": [
         "https://northwind.demodb.dev",
@@ -263,7 +285,12 @@
         "titles"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "roysched", "sourceField": "title_id", "targetRecordset": "titles", "targetField": "title_id"}
+        {
+          "sourceRecordset": "roysched",
+          "sourceField": "title_id",
+          "targetRecordset": "titles",
+          "targetField": "title_id"
+        }
       ],
       "corsOrigins": [
         "https://pubs.demodb.dev",
@@ -314,13 +341,178 @@
         "address"
       ],
       "foreignKeySmoke": [
-        {"sourceRecordset": "film_actor", "sourceField": "actor_id", "targetRecordset": "actor", "targetField": "actor_id"}
+        {
+          "sourceRecordset": "film_actor",
+          "sourceField": "actor_id",
+          "targetRecordset": "actor",
+          "targetField": "actor_id"
+        }
       ],
       "blobSmokeFields": {
-        "address": ["location"]
+        "address": [
+          "location"
+        ]
       },
       "corsOrigins": [
         "https://sakila.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "shipping",
+      "repository": "demo-db/shipping",
+      "revision": "04128331f0357ca231441cb8e8aaa4a94c659772",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "e0a2dcfbf7ae271783d4454aac069d58417268fff642a4eb5692131793e54d21"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "dc65dc97d01e8e5ed0afbc959e6a98bc04a2469df6cf9db43c4cc2c2be34234d"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "f0bc7e5cded6eaace0a140042976cf230eab8e3500e721f2e89baeacab379ba2"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "d9ef83c2c8e2fd2367a3201787511698a7fd411a36d2a2653c36ba5c1d292678"
+        },
+        "artifact": {
+          "path": "artifacts/shipping.sqlite",
+          "sha256": "73f0d871607ee5b24de68b5398c25806f556a3126a31e1865fee79b2881977e0",
+          "bytes": 110592
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "requests",
+        "events",
+        "attempts"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "events",
+          "sourceField": "attempt_id",
+          "targetRecordset": "attempts",
+          "targetField": "attempt_id"
+        }
+      ],
+      "corsOrigins": [
+        "https://shipping.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "shipping-logs",
+      "repository": "demo-db/shipping-logs",
+      "revision": "e4a714f915b147c357afdfffe103ca88e917b8cb",
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "storageEngine": "ingitdb",
+      "smokeRecordsets": [
+        "baseline",
+        "recovery11045example",
+        "recovery11062example"
+      ],
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "bd42a5b9dd9e93ab4b2e348746a6f82f0b0727d9f9fceed1eb9b95c246fc4931",
+          "bytes": 3985
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "1934ff898e78fe860c05e4d3cd0140d13ace30fd0466dc454bb4d19cbb5e2b06",
+          "bytes": 14367
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "729b482701c8507527f0a7e6bb12b6f736840b74081cbae11aa2aa5d746bcb2c",
+          "bytes": 3029
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "a512f288438faf7fc58833a1a72ba02c96c8ded06eb6b24d064467ac8044b30a",
+          "bytes": 8575
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "bytes": 7048
+        }
+      },
+      "nativeFiles": [
+        {
+          "path": "ingitdb/.ingitdb/settings.yaml",
+          "sha256": "62fcca91b55bc9903f6739e86d2c749ce4fea7fe3c12475f86390d6a5bab4535",
+          "bytes": 60
+        },
+        {
+          "path": "ingitdb/.ingitdb/root-collections.yaml",
+          "sha256": "f42977f823a59f402dd38b73af0d90afab01437c30ce9e521a90e5364e3cd4f4",
+          "bytes": 165
+        },
+        {
+          "path": "ingitdb/collections/baseline/.collection/definition.yaml",
+          "sha256": "a1959947c5e12b07895ef7f01ad513b32fb8f12a4a6b7580e8f55d863e882e79",
+          "bytes": 1079
+        },
+        {
+          "path": "ingitdb/collections/baseline/records.jsonl",
+          "sha256": "5814c09c2821dcf5fb7c313d4416fadd71f62519ab8aafe01de0ac6e6a4db65e",
+          "bytes": 6873
+        },
+        {
+          "path": "ingitdb/collections/recovery11045example/.collection/definition.yaml",
+          "sha256": "2672e56ea2f10f04c613eb36924fb27ba81f4e7fe487ca26bcb0ea2318cbbfd5",
+          "bytes": 1099
+        },
+        {
+          "path": "ingitdb/collections/recovery11045example/records.jsonl",
+          "sha256": "a03031230dfad126783e557b61631f1173dd6c5867f19e2758e971ffea716379",
+          "bytes": 704
+        },
+        {
+          "path": "ingitdb/collections/recovery11062example/.collection/definition.yaml",
+          "sha256": "e8d2b2e1165a73e81ca3de88803b2643aa2584b73aee876f8a4ef73a6fcc9466",
+          "bytes": 1099
+        },
+        {
+          "path": "ingitdb/collections/recovery11062example/records.jsonl",
+          "sha256": "ab668b7a26e034d80486f6ea1d17f89c9b226f3a98e297bb3b80186cc65936a5",
+          "bytes": 704
+        }
+      ],
+      "metadataFiles": [
+        {
+          "path": "source-manifest.json",
+          "sha256": "fd9c22c47ea5ab589e4e0b00a6bb2b86de6046a678d078684f7feb8422878ab1",
+          "bytes": 15525
+        },
+        {
+          "path": "metadata/schema.json",
+          "sha256": "0c26d564288e7e82d89ac24ce281eee44ec46a9b518c36dea6e8322d7f8ac9fe",
+          "bytes": 8705
+        },
+        {
+          "path": "ovdb.yaml",
+          "sha256": "06f61172f61b0b91c4f962fe94ac2e0806e607c9b8918c110bdbbe41a74e3238",
+          "bytes": 1271
+        }
+      ],
+      "corsOrigins": [
+        "https://shipping-logs.demodb.dev",
         "https://demodb.dev",
         "https://www.demodb.dev",
         "https://datatug.app"

@@ -24,6 +24,20 @@ func selectedInventoryFixture(t *testing.T) (string, []runtimeDatabase) {
 	if err != nil {
 		t.Fatalf("prepare tiny fixtures: %v\n%s", err, output)
 	}
+	// The production preparation step seals its complete output tree. These
+	// synthetic fixtures are mutated below to exercise fail-closed startup
+	// checks, so make this test-owned copy writable after preparation.
+	if err := filepath.Walk(filepath.Join(directory, "output"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.Chmod(path, 0o755)
+		}
+		return os.Chmod(path, 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(directory, "output", "inventory.json")
 	providers, err := loadRuntimeInventory(path)
 	if err != nil {
@@ -503,5 +517,33 @@ func TestDescriptorMetadataExactConsumedMembers(t *testing.T) {
 		if _, err := verifySelectedFiles(candidate, filepath.Dir(path)); err == nil {
 			t.Fatal("existing nested exact map check weakened")
 		}
+	}
+}
+
+func TestActualSelectedHandlerDeploymentSmoke(t *testing.T) {
+	inventory, providers := selectedInventoryFixture(t)
+	handler, closeDBs, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := closeDBs(); closeErr != nil {
+			t.Errorf("close selected databases: %v", closeErr)
+		}
+	})
+	runActualInventorySmoke(t, handler, inventory)
+	providers[0].verifiedPins = nil
+	handler2, close2, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := close2(); closeErr != nil {
+			t.Errorf("close unverified selected databases: %v", closeErr)
+		}
+	})
+	response := selectedRequest(handler2, http.MethodGet, "/v1/databases/"+providers[0].ID, "")
+	if response.Header().Get("OVDB-Provider-Revision") != "" {
+		t.Fatal("unverified ad-hoc provider emitted identity")
 	}
 }

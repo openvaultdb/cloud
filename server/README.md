@@ -556,7 +556,8 @@ hashing cost require six-plus-two capacity measurement; tiny fixtures establish 
 production memory/disk or latency headroom. Using the current native snapshot
 sizes only as an estimate, ROR's 238,563,328 bytes add 227.51 MiB (44.44% of
 512 MiB); Geo's 75,304,960 bytes add 71.82 MiB. Together these copies alone are
-299.33 MiB (58.46%), before serving helpers, the six legacy providers, heap,
+299.33 MiB (58.46%), before serving helpers, the seven SQLite providers and
+native Shipping Logs provider, heap,
 SQLite connections/cache and snapshot spooling. These are source-size arithmetic,
 not measured serving sizes or admitted memory use. Cloud Run's [writable
 filesystem uses instance memory](https://docs.cloud.google.com/run/docs/container-contract#filesystem).
@@ -570,9 +571,12 @@ descriptor flags. The library mount verifies every selected serving ID. Legacy
 providers retain their read/snapshot behavior and existing limits, including the
 48 AdventureWorks decimal fields.
 
-The production `providers.json` and protected image continue to serve the six
-SQLite providers. Native PostgreSQL is a separate runtime opt-in and does not
-change that inventory. Four-pin HTTP guards, deadline/cache middleware, Worker
+The production `providers.json` and protected image serve the six established
+SQLite providers, the immutable Shipping SQLite provider, and the original
+eight-file Shipping Logs inGitDB store. Shipping Logs is read directly through
+the published inGitDB DAL; preparation and runtime do not create a parsed log
+database, cache, or snapshot. Native PostgreSQL is a separate runtime opt-in and
+does not change that inventory. Four-pin HTTP guards, deadline/cache middleware, Worker
 propagation, public descriptor routes, attribution downloads, deploy verification
 and smoke, actual Geo/ROR preparation and all-key proof, six-plus-two capacity and
 live journeys, final wrapper repins, Directory and App admission remain downstream
@@ -633,7 +637,11 @@ mounts reopen the exact protected manifest and `./<id>.sqlite` through the
 existing library API; the same fixed paths apply to driver, schema, sandbox and
 later connection opens. Direct-mode close/failure never removes image assets.
 All native diagnostics remain physically present and outside public routes.
-The production inventory remains the six legacy providers.
+The production inventory contains the six established providers plus Shipping
+and native Shipping Logs. The deployment gate preserves the established six,
+checks both additions through the existing public plural routes, and records a
+rollback receipt that proves the additions are absent after restoring the prior
+revision.
 
 For selected development/tests explicitly set `OVDB_SELECTED_STORAGE=sealed-copy`
 and `SAMPLE_DATABASES_INVENTORY` to the prepared inventory. This retains the

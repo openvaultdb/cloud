@@ -35,6 +35,9 @@ type runtimePinnedFile struct {
 }
 
 type runtimeDatabase struct {
+	StorageEngine         string                     `json:"storageEngine,omitempty"`
+	NativeRoot            string                     `json:"nativeRoot,omitempty"`
+	NativeFiles           []runtimePinnedFile        `json:"nativeFiles,omitempty"`
 	ManifestSHA256        string                     `json:"manifestSha256,omitempty"`
 	ServingAdapter        string                     `json:"servingAdapter,omitempty"`
 	ReadProfile           string                     `json:"readProfile,omitempty"`
@@ -56,6 +59,7 @@ type runtimeDatabase struct {
 	BlobSmokeFields       map[string][]string        `json:"blobSmokeFields"`
 	ForeignKeySmoke       []runtimeForeignKeySmoke   `json:"foreignKeySmoke"`
 	nativePostgres        *nativePostgresMountConfig `json:"-"`
+	verifiedPins          map[string]string
 }
 
 type runtimeForeignKeySmoke struct {
@@ -113,6 +117,31 @@ func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtim
 		}
 		if !safeInventoryFilename(database.Manifest) || !safeInventoryFilename(database.License) {
 			return nil, fmt.Errorf("runtime provider %q manifest and license must be simple filenames", database.ID)
+		}
+		if database.StorageEngine == "" {
+			database.StorageEngine = "sqlite"
+		}
+		if database.StorageEngine != "sqlite" && database.StorageEngine != "ingitdb" {
+			return nil, fmt.Errorf("runtime provider %q has unsupported storage engine %q", database.ID, database.StorageEngine)
+		}
+		if database.StorageEngine == "ingitdb" {
+			if !safeInventoryFilename(database.NativeRoot) || len(database.NativeFiles) != 8 {
+				return nil, fmt.Errorf("runtime provider %q must pin the exact native inGitDB root and eight files", database.ID)
+			}
+			seenNative := map[string]struct{}{}
+			for _, pin := range database.NativeFiles {
+				if !safePinnedPath(pin.Path) || !providerSHA256Pattern.MatchString(pin.SHA256) || pin.Bytes <= 0 {
+					return nil, fmt.Errorf("runtime provider %q has an invalid native inGitDB pin", database.ID)
+				}
+				if _, exists := seenNative[pin.Path]; exists {
+					return nil, fmt.Errorf("runtime provider %q repeats native inGitDB path %q", database.ID, pin.Path)
+				}
+				seenNative[pin.Path] = struct{}{}
+				data, readErr := os.ReadFile(filepath.Join(base, database.NativeRoot, filepath.FromSlash(pin.Path)))
+				if readErr != nil || int64(len(data)) != pin.Bytes || digest(data) != pin.SHA256 {
+					return nil, fmt.Errorf("runtime provider %q native inGitDB pin mismatch: %s", database.ID, pin.Path)
+				}
+			}
 		}
 		if !providerRepositoryPattern.MatchString(database.ProviderRepository) || !providerRevisionPattern.MatchString(database.ProviderRevision) || !providerSHA256Pattern.MatchString(database.SourceSHA256) || !providerSHA256Pattern.MatchString(database.ServingSHA256) || !providerSHA256Pattern.MatchString(database.LicenseSHA256) {
 			return nil, fmt.Errorf("runtime provider %q is missing immutable source identity", database.ID)
@@ -185,7 +214,9 @@ func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtim
 		sqlitePath := filepath.Join(base, database.ID+".sqlite")
 		var actualHash string
 		var hashErr error
-		if image != nil {
+		if database.StorageEngine == "ingitdb" {
+			actualHash = database.ServingSHA256
+		} else if image != nil {
 			actualHash, hashErr = image.hashSQLite(sqlitePath)
 		} else {
 			actualHash, hashErr = sha256File(sqlitePath)
@@ -214,11 +245,24 @@ func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtim
 				return nil, fmt.Errorf("runtime provider %q: %w", database.ID, err)
 			}
 		}
-		if image != nil {
+		if image != nil && database.StorageEngine == "sqlite" {
 			image.verifiedSQLite[sqlitePath] = actualHash
+		}
+		manifestHash, err := sha256File(filepath.Join(base, database.Manifest))
+		if err != nil {
+			return nil, err
+		}
+		database.verifiedPins = map[string]string{
+			"OVDB-Provider-Revision": database.ProviderRevision,
+			"OVDB-Source-SHA256":     database.SourceSHA256,
+			"OVDB-Serving-SHA256":    database.ServingSHA256,
+			"OVDB-Manifest-SHA256":   manifestHash,
 		}
 		database.Manifest = filepath.Join(base, database.Manifest)
 		database.License = filepath.Join(base, database.License)
+		if database.StorageEngine == "ingitdb" {
+			database.NativeRoot = filepath.Join(base, database.NativeRoot)
+		}
 	}
 	return inventory.Databases, nil
 }
