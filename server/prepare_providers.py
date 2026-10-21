@@ -452,19 +452,32 @@ def validate_native_provider(provider: dict[str, Any], fetch: Callable[[str, str
         raise ValueError(f"{database_id} native provider identity/storage mismatch")
     if descriptor.get("localId") != database_id or descriptor.get("capabilities") != {"read": True, "query": True, "write": False}:
         raise ValueError(f"{database_id} native public descriptor is not read-only/queryable")
+    schema = read_json(metadata["metadata/schema.json"], f"{database_id} pinned schema")
+    if schema != contract.get("schema"):
+        raise ValueError(f"{database_id} pinned schema disagrees with contract")
+    source_pin = next(pin for pin in provider["metadataFiles"] if pin["path"] == "source-manifest.json")
+    if manifest.get("source", {}).get("sha256") != source_pin["sha256"]:
+        raise ValueError(f"{database_id} provider source digest disagrees with pinned source manifest")
     advertised = checksums.get("files", {})
     for pin in provider["nativeFiles"]:
         if advertised.get(pin["path"]) != {"sha256": pin["sha256"], "bytes": pin["bytes"]}:
             raise ValueError(f"{database_id} checksums disagree with {pin['path']}")
-    root = read_json(native["ingitdb/.ingitdb/root-collections.yaml"], f"{database_id} root collections")
     expected_root = {
         "baseline": "collections/baseline",
         "recovery11045example": "collections/recovery11045example",
         "recovery11062example": "collections/recovery11062example",
     }
+    expected_paths = {"ingitdb/.ingitdb/settings.yaml", "ingitdb/.ingitdb/root-collections.yaml"}
+    for path in expected_root.values():
+        expected_paths.update({f"ingitdb/{path}/.collection/definition.yaml", f"ingitdb/{path}/records.jsonl"})
+    if set(native) != expected_paths or len(provider["nativeFiles"]) != len(expected_paths):
+        raise ValueError(f"{database_id} native tree must contain exactly the eight declared members")
+    root = read_json(native["ingitdb/.ingitdb/root-collections.yaml"], f"{database_id} root collections")
     if root != expected_root:
         raise ValueError(f"{database_id} root collections must be the exact three public IDs")
     schema_tables = {table["name"]: table for table in contract["schema"]["tables"]}
+    if set(schema_tables) != set(expected_root):
+        raise ValueError(f"{database_id} contract must contain exactly the three public collections")
     for collection_id, collection_path in expected_root.items():
         definition_path = f"ingitdb/{collection_path}/.collection/definition.yaml"
         records_path = f"ingitdb/{collection_path}/records.jsonl"
@@ -477,6 +490,17 @@ def validate_native_provider(provider: dict[str, Any], fetch: Callable[[str, str
         table = schema_tables.get(collection_id)
         if table is None or set(columns) != {column["name"] for column in table["columns"]}:
             raise ValueError(f"{database_id} {collection_id} definition disagrees with contract schema")
+        contract_columns = {column["name"]: column for column in table["columns"]}
+        for name, spec in columns.items():
+            column = contract_columns[name]
+            if (set(spec) - {"type", "required", "min_length"} or
+                    spec.get("type") not in {"string", "int", "bool"} or
+                    spec.get("type") != column.get("type") or
+                    spec.get("required") is not (not column.get("nullable", True)) or
+                    ("min_length" in spec and (spec["type"] != "string" or type(spec["min_length"]) is not int or spec["min_length"] < 0))):
+                raise ValueError(f"{database_id} {collection_id}.{name} definition disagrees with contract constraints")
+        if definition.get("columns_order") != list(columns):
+            raise ValueError(f"{database_id} {collection_id} column order differs from its definition")
         seen: set[str] = set()
         rows = native[records_path].splitlines()
         for line in rows:
@@ -484,23 +508,36 @@ def validate_native_provider(provider: dict[str, Any], fetch: Callable[[str, str
             if set(record) != set(columns):
                 raise ValueError(f"{database_id} {collection_id} record differs from its definition")
             key = record.get("event_id")
-            if not isinstance(key, str) or not key or key in seen:
+            if not isinstance(key, str) or not key.strip() or key in seen:
                 raise ValueError(f"{database_id} {collection_id} has blank or duplicate event_id")
             seen.add(key)
             for name, spec in columns.items():
                 value = record[name]
                 expected = spec.get("type")
-                if (expected == "string" and not isinstance(value, str)) or (expected == "int" and (type(value) is not int)) or (expected == "bool" and type(value) is not bool):
+                if (expected == "string" and (not isinstance(value, str) or len(value) < spec.get("min_length", 0))) or (expected == "int" and (type(value) is not int)) or (expected == "bool" and type(value) is not bool):
                     raise ValueError(f"{database_id} {collection_id}.{name} violates its definition")
         if len(rows) != table.get("rowCount"):
             raise ValueError(f"{database_id} {collection_id} row count disagrees with contract")
     source = read_json(metadata["source-manifest.json"], f"{database_id} source manifest")
-    for name, details in manifest["source"]["files"].items():
-        log = next((item for item in source.get("logs", []) if item.get("path") == details["sourcePath"] or item.get("name") == details["sourcePath"]), None)
-        # The source manifest has a richer shape; immutable top-level receipt plus
-        # the three exact original JSONL pins is the closed cross-check.
-        if details["sha256"] != next(pin["sha256"] for pin in provider["nativeFiles"] if pin["path"] == details["path"]):
-            raise ValueError(f"{database_id} source file pin differs from native bytes")
+    source_files = manifest["source"]["files"]
+    if set(source_files) != set(expected_root) or len(source.get("logs", [])) != len(expected_root):
+        raise ValueError(f"{database_id} source manifest must describe exactly three distinct original logs")
+    source_prefix = str(Path(manifest["source"]["path"]).parent) + "/"
+    matched = set()
+    for name, details in source_files.items():
+        source_path = details["sourcePath"]
+        if not source_path.startswith(source_prefix):
+            raise ValueError(f"{database_id} source path escapes the original fixture")
+        logs = [item for item in source["logs"] if source_prefix + item.get("path", "") == source_path]
+        pin = next((pin for pin in provider["nativeFiles"] if pin["path"] == details["path"]), None)
+        expected_class = "baseline" if name == "baseline" else "recovery-example"
+        if (len(logs) != 1 or source_path in matched or pin is None or
+                details["path"] != f"ingitdb/{expected_root[name]}/records.jsonl" or
+                details.get("classification") != expected_class or
+                details.get("rowCount") != schema_tables[name]["rowCount"] or
+                any(details.get(field) != pin[field] or logs[0].get(field) != pin[field] for field in ("sha256", "bytes"))):
+            raise ValueError(f"{database_id} source manifest disagrees with original native file {name}")
+        matched.add(source_path)
     fetched["nativeFiles"], fetched["metadataFiles"] = native, metadata
     return fetched
 

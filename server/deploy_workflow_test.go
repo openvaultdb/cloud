@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,222 +50,270 @@ func deploymentStepNamed(t *testing.T, steps []deploymentStep, name string) (int
 	return 0, deploymentStep{}
 }
 
-// Execute the actual workflow scripts with authored CLI seams. No cloud command,
-// HTTP request, provider body or listener is used by this harness.
-const deploymentCLISeams = `
-gcloud() {
-  if [ "${1:-} ${2:-}" = 'run deploy' ]; then
-    printf 'deploy\n' >> "$SYNTHETIC_CALLS"
-  fi
-  printf '%s\n' "$SYNTHETIC_URL"
-}
-git() {
-  printf '%s\trefs/heads/main\n' "$SYNTHETIC_MAIN"
-  return "$SYNTHETIC_GIT_EXIT"
-}
-curl() {
-  printf 'curl\n' >> "$SYNTHETIC_CALLS"
-  case " $* " in *" %{http_code} "*) printf '403' ;; esac
-}
-jq() { :; }
-grep() { :; }
-python3() {
-  if [ "${1:-}" = smoke_inventory.py ]; then
-    printf 'inventory\n' >> "$SYNTHETIC_CALLS"
-  else
-    command "$SYNTHETIC_PYTHON" "$@"
-  fi
-}
+// Execute the actual workflow scripts with deterministic CLI seams. Subprocess
+// gcloud and HTTP helpers have no credentials, network requests, or listeners.
+const deploymentGcloudSeam = `#!/usr/bin/env python3
+import json,os,sys
+from pathlib import Path
+args=sys.argv[1:]
+state=Path("state.json")
+mode=state.read_text() if state.exists() else "prior"
+with open("calls","a") as calls: calls.write(" ".join(args[:3])+"\n")
+image="registry.example/server@sha256:"
+if args[:4] == ["artifacts","docker","images","describe"]:
+    print("sha256:"+"a"*64)
+elif args[:2] == ["run","deploy"]:
+    if os.environ.get("SCENARIO") == "startup-failure": sys.exit(9)
+    if not any(arg == "--image="+image+"a"*64 for arg in args): sys.exit(10)
+    state.write_text("candidate")
+elif args[:3] == ["run","services","update-traffic"]:
+    if "--to-revisions=prior-a=60,prior-b=40" not in args: sys.exit(11)
+    state.write_text("restored")
+elif args[:3] == ["run","services","describe"]:
+    traffic=[{"revisionName":"candidate","percent":100}] if mode == "candidate" else [{"revisionName":"prior-a","percent":60},{"revisionName":"prior-b","percent":40}]
+    if mode == "candidate" and os.environ.get("SCENARIO") == "wrong-traffic": traffic=[{"revisionName":"prior-a","percent":100}]
+    print(json.dumps({"status":{"url":os.environ["SYNTHETIC_URL"],"latestReadyRevisionName":"unused-latest-ready","traffic":traffic}, "spec":{"template":{"spec":{"containers":[{"image":"mutable:unused"}]}}}}))
+elif args[:3] == ["run","revisions","describe"]:
+    name=args[3]
+    digest="a" if name == "candidate" else "b" if name == "prior-a" else "c"
+    if name == "candidate" and os.environ.get("SCENARIO") == "wrong-image": digest="d"
+    if mode == "restored" and os.environ.get("SCENARIO") == "rollback-verification-failure": digest="d"
+    source="a" if name == "candidate" else "b"
+    if name == "candidate" and os.environ.get("SCENARIO") == "wrong-source": source="d"
+    print(json.dumps({"status":{"imageDigest":image+digest*64},"metadata":{"labels":{"source-sha":source*40}}}))
+else:
+    sys.exit(12)
 `
 
-func runDeploymentScript(t *testing.T, dir, script, origin, mainSHA string) error {
-	return runDeploymentScriptWithGit(t, dir, script, origin, mainSHA, "0", true)
-}
+const deploymentSmokeSeam = `import json,os,sys
+from pathlib import Path
+def require_status(origin,path,expected=200,**kwargs):
+    with open("http-calls","a") as calls: calls.write(json.dumps({"origin":origin,"path":path,"expected":expected})+"\n")
+    if not origin.startswith("https://"): raise RuntimeError("invalid independent prior origin")
+    return {},b"{}"
+if __name__ == "__main__":
+    mode=Path("state.json").read_text()
+    with open("http-calls","a") as calls: calls.write("six-provider-smoke-queries\n")
+    if mode == "candidate" and os.environ.get("SCENARIO") == "smoke-failure": sys.exit(13)
+    receipt=sys.argv[sys.argv.index("--receipt")+1]
+    Path(receipt).write_text(json.dumps({"actualSeamExecuted":True}))
+`
 
-func runDeploymentScriptWithGit(t *testing.T, dir, script, origin, mainSHA, gitExit string, pipefail bool) error {
+func deploymentHarness(t *testing.T) string {
 	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"--noprofile", "--norc", "-e"}
-	if pipefail {
-		args = append(args, "-o", "pipefail")
+	gcloud := strings.Replace(deploymentGcloudSeam, "#!/usr/bin/env python3", "#!"+python, 1)
+	for path, content := range map[string]string{filepath.Join(bin, "gcloud"): gcloud, filepath.Join(dir, "smoke_inventory.py"): deploymentSmokeSeam} {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
-	cmd := exec.Command("bash", append(args, "-c", deploymentCLISeams+script)...)
+	output := filepath.Join(dir, "fixture", "output")
+	if err := os.MkdirAll(output, 0700); err != nil {
+		t.Fatal(err)
+	}
+	inventory := `{"version":2,"databases":[{"id":"adventureworks"},{"id":"employees"},{"id":"chinook"},{"id":"northwind"},{"id":"pubs"},{"id":"sakila"},{"id":"shipping"},{"id":"shipping-logs"}]}`
+	if err := os.WriteFile(filepath.Join(output, "inventory.json"), []byte(inventory), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func runWorkflow(t *testing.T, dir, script, scenario, origin, mainSHA, gitExit string) error {
+	t.Helper()
+	seam := `git() { printf '%s\trefs/heads/main\n' "$SYNTHETIC_MAIN"; return "$SYNTHETIC_GIT_EXIT"; }
+`
+	cmd := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", seam+script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"SYNTHETIC_URL="+origin, "SYNTHETIC_MAIN="+mainSHA,
-		"SYNTHETIC_GIT_EXIT="+gitExit,
-		"SYNTHETIC_PYTHON="+python, "SYNTHETIC_CALLS="+filepath.Join(dir, "calls"),
-		"DEPLOY_SHA="+strings.Repeat("a", 40), "SERVICE_URL="+origin,
-		"SERVICE_NAME=synthetic", "PROJECT_ID=synthetic", "REGION=synthetic",
-		"RUNNER_TEMP="+dir, "GITHUB_OUTPUT="+filepath.Join(dir, "outputs"))
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"), "SCENARIO="+scenario, "SYNTHETIC_URL="+origin, "SYNTHETIC_MAIN="+mainSHA, "SYNTHETIC_GIT_EXIT="+gitExit, "DEPLOY_SHA="+strings.Repeat("a", 40), "IMAGE=registry.example/server:"+strings.Repeat("a", 40), "SERVICE_NAME=synthetic", "PROJECT_ID=synthetic", "REGION=synthetic", "RUNNER_TEMP="+dir, "GITHUB_OUTPUT="+filepath.Join(dir, "outputs"))
 	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		t.Logf("authored workflow script output: %s", output)
+	if err != nil {
+		t.Logf("authored workflow seam: %s", output)
 	}
 	return err
+}
+func runStep(t *testing.T, dir string, step deploymentStep, scenario string) error {
+	return runWorkflow(t, dir, step.Run, scenario, "https://synthetic.a.run.app", strings.Repeat("a", 40), "0")
+}
+func receiptJSON(t *testing.T, dir, file string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt map[string]any
+	if err = json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	return receipt
 }
 
 func TestCloudRunExactSHAGuardsRequireSuccessfulGitLookup(t *testing.T) {
 	upstream := deploymentSteps(t, "deploy-chinook-cloudrun.yml")
 	downstream := deploymentSteps(t, "deploy.yml")
-	sha, origin := strings.Repeat("a", 40), "https://synthetic.a.run.app"
 	for _, guard := range []struct {
 		steps []deploymentStep
 		name  string
 	}{
-		{upstream, "Reject an older main commit"},
-		{upstream, "Deploy the public read-only service"},
-		{upstream, "Record deployed service origin and source"},
-		{upstream, "Verify live profile and cacheable DTQL"},
-		{downstream, "Reject stale deployment"},
+		{upstream, "Reject an older main commit"}, {upstream, "Build and push the validated image"}, {upstream, "Deploy the public read-only service"}, {upstream, "Record deployed service origin and source"}, {upstream, "Verify live profile and cacheable DTQL"}, {downstream, "Reject stale deployment"},
 	} {
 		_, step := deploymentStepNamed(t, guard.steps, guard.name)
-		for _, mode := range []struct {
-			name     string
-			pipefail bool
-		}{{"bash-e", false}, {"bash-eo-pipefail", true}} {
-			for _, lookup := range []struct {
-				name, output, status string
-				wantSuccess          bool
-			}{
-				{"current", sha, "0", true},
-				{"stale", strings.Repeat("b", 40), "0", false},
-				{"correct-output-exit8", sha, "8", false},
-			} {
-				t.Run(guard.name+"/"+mode.name+"/"+lookup.name, func(t *testing.T) {
-					dir := t.TempDir()
-					err := runDeploymentScriptWithGit(t, dir, step.Run, origin, lookup.output, lookup.status, mode.pipefail)
-					if (err == nil) != lookup.wantSuccess {
-						t.Fatalf("git lookup success=%v: step error=%v", lookup.wantSuccess, err)
+		for _, lookup := range []struct{ name, sha, status string }{{"stale", strings.Repeat("b", 40), "0"}, {"correct-output-exit8", strings.Repeat("a", 40), "8"}} {
+			t.Run(guard.name+"/"+lookup.name, func(t *testing.T) {
+				dir := deploymentHarness(t)
+				if err := runWorkflow(t, dir, step.Run, "", "https://synthetic.a.run.app", lookup.sha, lookup.status); err == nil {
+					t.Fatal("failed authoritative main query accepted")
+				}
+				for _, file := range []string{"chinook-run-origin.txt", "chinook-deploy-sha.txt", "outputs", "state.json"} {
+					if _, err := os.Stat(filepath.Join(dir, file)); !os.IsNotExist(err) {
+						t.Fatal("failed guard mutated or published", file)
 					}
-					if !lookup.wantSuccess {
-						for _, file := range []string{"chinook-run-origin.txt", "chinook-deploy-sha.txt", "outputs"} {
-							if _, err := os.Stat(filepath.Join(dir, file)); !os.IsNotExist(err) {
-								t.Fatal("failed lookup published metadata", file, err)
-							}
-						}
-					}
-					if guard.name == "Deploy the public read-only service" {
-						calls, err := os.ReadFile(filepath.Join(dir, "calls"))
-						if lookup.wantSuccess {
-							if err != nil || string(calls) != "deploy\n" {
-								t.Fatal("successful lookup did not reach synthetic deployment", string(calls), err)
-							}
-						} else if !os.IsNotExist(err) {
-							t.Fatal("failed lookup reached deployment", string(calls), err)
-						}
-					}
-				})
-			}
+				}
+			})
 		}
 	}
 }
 
-func TestCloudRunSmokeIsOptInAndDeploymentReceiptSurvives(t *testing.T) {
+func TestCloudRunPublicationRequiresLiveAcceptanceAndServingDigest(t *testing.T) {
 	steps := deploymentSteps(t, "deploy-chinook-cloudrun.yml")
-	deployIndex, deploy := deploymentStepNamed(t, steps, "Deploy the public read-only service")
-	receiptIndex, receipt := deploymentStepNamed(t, steps, "Record deployed service origin and source")
-	smokeIndex, smoke := deploymentStepNamed(t, steps, "Verify live profile and cacheable DTQL")
-	rollbackIndex, rollback := deploymentStepNamed(t, steps, "Roll back a failed publication")
-	uploadIndex, upload := deploymentStepNamed(t, steps, "Publish deployment metadata for the Worker deploy")
-	if deployIndex >= receiptIndex || receiptIndex >= smokeIndex || smokeIndex >= uploadIndex ||
-		deploy.If != "" || receipt.If != "" || upload.If != "${{ always() }}" || receipt.ID != "deployment" ||
-		!strings.Contains(deploy.Run, "gcloud run deploy") {
-		t.Fatal("deployment or its unconditional receipt was gated or reordered")
+	_, capture := deploymentStepNamed(t, steps, "Capture rollback target")
+	_, deploy := deploymentStepNamed(t, steps, "Deploy the public read-only service")
+	_, record := deploymentStepNamed(t, steps, "Record deployed service origin and source")
+	_, live := deploymentStepNamed(t, steps, "Verify live profile and cacheable DTQL")
+	_, upload := deploymentStepNamed(t, steps, "Publish deployment metadata for the Worker deploy")
+	if live.If != "" || !strings.Contains(live.Run, "--publication-receipt") || !strings.Contains(deploy.Run, `--image="${CANDIDATE_IMAGE}"`) || !strings.Contains(upload.With["path"], "shipping-publication-rollback-receipt.json") {
+		t.Fatal("publication acceptance/digest/retained artifact contract missing")
 	}
-	if smoke.If != "${{ vars.OVDB_CLOUD_RUN_SMOKE_ENABLED == 'true' }}" ||
-		smoke.Env["SERVICE_URL"] != "https://cloud.openvaultdb.com" || smoke.Env["SERVICE_ORIGIN"] != "${{ steps.deployment.outputs.origin }}" {
-		t.Fatal("live smoke requires an explicit repository opt-in and validated origin")
-	}
-	if rollback.Env["SERVICE_URL"] != "https://cloud.openvaultdb.com" || rollback.Env["SERVICE_ORIGIN"] != "${{ steps.deployment.outputs.origin }}" ||
-		!strings.Contains(rollback.Run, "adventureworks employees chinook northwind pubs sakila") ||
-		!strings.Contains(rollback.Run, "shipping shipping-logs") ||
-		!strings.Contains(rollback.Run, `= 404`) || !strings.Contains(rollback.Run, `= 403`) ||
-		!strings.Contains(rollback.Run, "candidatesAbsent:true") || !strings.Contains(rollback.Run, "originSecretBoundaryVerified:true") {
-		t.Fatal("rollback acceptance no longer proves old providers, candidate absence, and the origin-secret boundary")
-	}
-	if upload.With["name"] != "chinook-cloudrun-deployment" || upload.With["if-no-files-found"] != "error" ||
-		strings.Join(strings.Fields(upload.With["path"]), ",") != "server/chinook-run-origin.txt,server/chinook-deploy-sha.txt,server/shipping-publication-deploy-receipt.json,server/shipping-publication-live-receipt.json,server/shipping-publication-rollback-receipt.json" {
-		t.Fatal("downstream deployment artifact contract changed")
-	}
-	// Every live query remains in the gated step, including the inventory script.
-	for i, step := range steps {
-		if (strings.Contains(step.Run, "curl ") || strings.Contains(step.Run, "smoke_inventory.py")) && i != smokeIndex && i != rollbackIndex {
-			t.Fatal("live request escaped the opt-in smoke step")
-		}
-	}
-	_, downstream := deploymentStepNamed(t, deploymentSteps(t, "deploy.yml"), "Read deployment receipt")
-	_, download := deploymentStepNamed(t, deploymentSteps(t, "deploy.yml"), "Download verified Cloud Run origin")
-	if download.With["name"] != upload.With["name"] {
-		t.Fatal("Worker downloads a different deployment artifact")
-	}
-	sha, origin := strings.Repeat("a", 40), "https://synthetic-service.a.run.app"
-	for _, variable := range []string{"", "false", "true"} {
-		t.Run("variable="+variable, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := runDeploymentScript(t, dir, receipt.Run, origin, sha); err != nil {
-				t.Fatal("metadata-only deployment receipt failed", err)
+	for _, scenario := range []string{"valid", "wrong-image", "wrong-source", "wrong-traffic"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := deploymentHarness(t)
+			if err := runStep(t, dir, capture, scenario); err != nil {
+				t.Fatal(err)
 			}
-			// The expression above is a literal variable equality; unset/false skip.
-			if variable == "true" {
-				if err := runDeploymentScript(t, dir, smoke.Run, origin, sha); err != nil {
-					t.Fatal("authored enabled smoke control failed", err)
+			prior := receiptJSON(t, dir, "shipping-publication-deploy-receipt.json")
+			revisions := prior["priorRevisions"].(map[string]any)
+			if len(revisions) != 2 || revisions["unused-latest-ready"] != nil || prior["serviceOrigin"] != "https://synthetic.a.run.app" {
+				t.Fatal("prior serving traffic/digests not captured independently", prior)
+			}
+			if err := runStep(t, dir, deploy, scenario); err != nil {
+				t.Fatal(err)
+			}
+			err := runStep(t, dir, record, scenario)
+			if (err == nil) != (scenario == "valid") {
+				t.Fatal("serving identity counterexample verdict", err)
+			}
+			if scenario != "valid" {
+				if _, err := os.Stat(filepath.Join(dir, "chinook-deploy-sha.txt")); !os.IsNotExist(err) {
+					t.Fatal("wrong serving identity published")
+				}
+				return
+			}
+			if err := runStep(t, dir, live, scenario); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range []string{"chinook-run-origin.txt", "chinook-deploy-sha.txt", "shipping-publication-live-receipt.json"} {
+				if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+					t.Fatal(err)
 				}
 			}
-			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
-			if variable == "true" {
-				if err != nil || strings.Count(string(calls), "curl\n") != 14 || strings.Count(string(calls), "inventory\n") != 1 {
-					t.Fatal("enabled smoke positive control did not execute every synthetic request", string(calls), err)
-				}
-			} else if !os.IsNotExist(err) {
-				t.Fatal("default-off deployment invoked smoke", string(calls), err)
-			}
+			_, downstream := deploymentStepNamed(t, deploymentSteps(t, "deploy.yml"), "Read deployment receipt")
 			artifact := filepath.Join(dir, "chinook-deployment")
 			if err := os.Mkdir(artifact, 0700); err != nil {
 				t.Fatal(err)
 			}
-			for file, want := range map[string]string{"chinook-run-origin.txt": origin, "chinook-deploy-sha.txt": sha} {
+			for _, file := range []string{"chinook-run-origin.txt", "chinook-deploy-sha.txt"} {
 				data, err := os.ReadFile(filepath.Join(dir, file))
-				if err != nil || string(data) != want+"\n" {
-					t.Fatal("deployment metadata missing or changed", file, err)
+				if err != nil {
+					t.Fatal(err)
 				}
 				if err := os.WriteFile(filepath.Join(artifact, file), data, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := runDeploymentScript(t, dir, downstream.Run, origin, sha); err != nil {
-				t.Fatal("actual downstream receipt script refused metadata", err)
-			}
-			outputs, err := os.ReadFile(filepath.Join(dir, "outputs"))
-			if err != nil || !strings.Contains(string(outputs), "sha="+sha+"\n") || !strings.Contains(string(outputs), "origin="+origin+"\n") {
-				t.Fatal("Worker release inputs missing", err)
+			if err := runStep(t, dir, downstream, scenario); err != nil {
+				t.Fatal("downstream metadata compatibility", err)
 			}
 		})
 	}
 }
 
-func TestCloudRunDeploymentReceiptRefusesUntrustedOriginAndStaleSHA(t *testing.T) {
-	_, receipt := deploymentStepNamed(t, deploymentSteps(t, "deploy-chinook-cloudrun.yml"), "Record deployed service origin and source")
-	sha := strings.Repeat("a", 40)
-	for _, origin := range []string{"", "http://synthetic.a.run.app", "https://example.invalid", "https://user@synthetic.a.run.app", "https://synthetic.a.run.app/", "https://synthetic.a.run.app?q=1", "https://synthetic.a.run.app#fragment", "https://synthetic.a.run.app:443"} {
-		t.Run(origin, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := runDeploymentScript(t, dir, receipt.Run, origin, sha); err == nil {
-				t.Fatal("untrusted origin produced deployment metadata")
+func TestCloudRunStartupAndSmokeFailureRollbackExecuteAndRetainEvidence(t *testing.T) {
+	steps := deploymentSteps(t, "deploy-chinook-cloudrun.yml")
+	_, capture := deploymentStepNamed(t, steps, "Capture rollback target")
+	_, deploy := deploymentStepNamed(t, steps, "Deploy the public read-only service")
+	_, record := deploymentStepNamed(t, steps, "Record deployed service origin and source")
+	_, live := deploymentStepNamed(t, steps, "Verify live profile and cacheable DTQL")
+	_, rollback := deploymentStepNamed(t, steps, "Roll back a failed publication")
+	for _, scenario := range []string{"startup-failure", "smoke-failure", "rollback-verification-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := deploymentHarness(t)
+			if err := runStep(t, dir, capture, scenario); err != nil {
+				t.Fatal(err)
 			}
-			if _, err := os.Stat(filepath.Join(dir, "chinook-run-origin.txt")); !os.IsNotExist(err) {
-				t.Fatal("invalid origin published a receipt", err)
+			deployErr := runStep(t, dir, deploy, scenario)
+			if scenario == "startup-failure" {
+				if deployErr == nil {
+					t.Fatal("startup counterexample succeeded")
+				}
+			} else {
+				if deployErr != nil {
+					t.Fatal(deployErr)
+				}
+				if err := runStep(t, dir, record, scenario); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "smoke-failure" {
+					if err := runStep(t, dir, live, scenario); err == nil {
+						t.Fatal("smoke counterexample succeeded")
+					}
+				}
+			}
+			err := runStep(t, dir, rollback, scenario)
+			if (err == nil) != (scenario != "rollback-verification-failure") {
+				t.Fatal("rollback expected verification outcome", err)
+			}
+			receipt := receiptJSON(t, dir, "shipping-publication-rollback-receipt.json")
+			if receipt["verified"] != (scenario != "rollback-verification-failure") || receipt["failedImage"] != "registry.example/server@sha256:"+strings.Repeat("a", 64) || receipt["completedAt"] == nil || receipt["restoredRevisions"] == nil {
+				t.Fatal("rollback evidence missing", receipt)
+			}
+			checks := receipt["checks"].([]any)
+			if len(checks) != 6 {
+				t.Fatal("rollback did not attempt every verification", receipt)
+			}
+			calls, err := os.ReadFile(filepath.Join(dir, "http-calls"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(calls), "six-provider-smoke-queries") || !strings.Contains(string(calls), `"expected": 403`) || strings.Count(string(calls), `"expected": 404`) != 2 {
+				t.Fatal("rollback omitted queries/absence/prior-origin checks", string(calls))
+			}
+			if scenario == "startup-failure" && receipt["failedRevision"] != nil {
+				t.Fatal("startup failure invented a deployed revision")
 			}
 		})
 	}
-	dir := t.TempDir()
-	if err := runDeploymentScript(t, dir, receipt.Run, "https://synthetic.a.run.app", strings.Repeat("b", 40)); err == nil {
-		t.Fatal("stale deployed SHA produced metadata")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "chinook-deploy-sha.txt")); !os.IsNotExist(err) {
-		t.Fatal("stale SHA published a receipt", err)
+}
+
+func TestCloudRunDeploymentReceiptRefusesUntrustedOrigin(t *testing.T) {
+	steps := deploymentSteps(t, "deploy-chinook-cloudrun.yml")
+	_, capture := deploymentStepNamed(t, steps, "Capture rollback target")
+	for _, origin := range []string{"", "http://synthetic.a.run.app", "https://example.invalid", "https://user@synthetic.a.run.app", "https://synthetic.a.run.app/", "https://synthetic.a.run.app?q=1", "https://synthetic.a.run.app#fragment", "https://synthetic.a.run.app:443"} {
+		t.Run(fmt.Sprintf("%q", origin), func(t *testing.T) {
+			dir := deploymentHarness(t)
+			if err := runWorkflow(t, dir, capture.Run, "", origin, strings.Repeat("a", 40), "0"); err == nil {
+				t.Fatal("invalid prior origin accepted")
+			}
+			if _, err := os.Stat(filepath.Join(dir, "shipping-publication-deploy-receipt.json")); !os.IsNotExist(err) {
+				t.Fatal("invalid rollback origin published")
+			}
+		})
 	}
 }
