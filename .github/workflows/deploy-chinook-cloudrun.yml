@@ -183,7 +183,9 @@ jobs:
             --concurrency=2 \
             --cpu=1 \
             --timeout=120 \
-            --quiet
+            --no-traffic \
+            --format=json \
+            --quiet > candidate-deployment.json
 
       - name: Record deployed service origin and source
         id: deployment
@@ -217,12 +219,23 @@ jobs:
 
           path = Path("shipping-publication-deploy-receipt.json")
           receipt = json.loads(path.read_text())
+          receipt["phase"]="verify-created-identity"
+          path.write_text(json.dumps(receipt))
+          created = json.loads(Path("candidate-deployment.json").read_text())
+          name = created.get("status", {}).get("latestCreatedRevisionName", "")
+          if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", name): raise RuntimeError("missing created revision identity")
+          identity = revision(name)
+          if identity["image"] != receipt["candidateImage"] or identity["sourceSha"] != os.environ["DEPLOY_SHA"]: raise RuntimeError("created image/source differs from immutable candidate")
+          receipt.update(createdRevision=name, phase="route-created-revision")
+          path.write_text(json.dumps(receipt))
+          subprocess.run(["gcloud", "run", "services", "update-traffic", os.environ["SERVICE_NAME"], "--to-revisions="+name+"=100", "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--quiet"], check=True)
           receipt["phase"]="verify-serving-identity"
           path.write_text(json.dumps(receipt))
           value = service()
           targets = traffic(value)
           if len(targets) != 1 or targets[0]["percent"] != 100: raise RuntimeError("candidate must serve all traffic")
           name = targets[0]["revisionName"]
+          if name != receipt["createdRevision"]: raise RuntimeError("serving revision differs from created candidate")
           identity = revision(name)
           if identity["image"] != receipt["candidateImage"] or identity["sourceSha"] != os.environ["DEPLOY_SHA"]: raise RuntimeError("serving image/source differs from immutable candidate")
           service_origin = origin(value)
@@ -303,6 +316,7 @@ jobs:
               if any(ord(char) < 33 for char in text) or url.scheme != "https" or not url.hostname or not url.hostname.endswith(".run.app") or url.netloc != url.hostname or url.path or url.query or url.fragment: raise RuntimeError("invalid Cloud Run origin")
               return text
 
+          from tempfile import TemporaryDirectory
           import smoke_inventory as smoke
           path=Path("shipping-publication-deploy-receipt.json")
           deploy=json.loads(path.read_text())
@@ -326,12 +340,10 @@ jobs:
               inventory=json.loads(Path("fixture/output/inventory.json").read_text())
               inventory["databases"]=[db for db in inventory["databases"] if db["id"] not in ("shipping","shipping-logs")]
               if len(inventory["databases"]) != 6: raise RuntimeError("six established providers required")
-              filtered=Path("fixture/output/rollback-inventory.json")
-              filtered.write_text(json.dumps(inventory))
-              try:
+              with TemporaryDirectory(prefix="ovdb-rollback-") as scratch:
+                  filtered=Path(scratch)/"rollback-inventory.json"
+                  filtered.write_text(json.dumps(inventory))
                   subprocess.run(["python3","smoke_inventory.py","--origin","https://cloud.openvaultdb.com","--inventory",str(filtered),"--receipt","rollback-http-receipt.json"],check=True)
-              finally:
-                  filtered.unlink(missing_ok=True)
           try:
               check("restore-traffic",restore)
               check("restored-immutable-image-and-traffic",verify_identity)

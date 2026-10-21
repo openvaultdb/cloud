@@ -65,10 +65,15 @@ if args[:4] == ["artifacts","docker","images","describe"]:
 elif args[:2] == ["run","deploy"]:
     if os.environ.get("SCENARIO") == "startup-failure": sys.exit(9)
     if not any(arg == "--image="+image+"a"*64 for arg in args): sys.exit(10)
-    state.write_text("candidate")
+    if "--no-traffic" not in args or "--format=json" not in args: sys.exit(14)
+    state.write_text("created")
+    print(json.dumps({"status":{"latestCreatedRevisionName":"candidate"}}))
 elif args[:3] == ["run","services","update-traffic"]:
-    if "--to-revisions=prior-a=60,prior-b=40" not in args: sys.exit(11)
-    state.write_text("restored")
+    if "--to-revisions=candidate=100" in args:
+        state.write_text("candidate")
+    elif "--to-revisions=prior-a=60,prior-b=40" in args:
+        state.write_text("restored")
+    else: sys.exit(11)
 elif args[:3] == ["run","services","describe"]:
     traffic=[{"revisionName":"candidate","percent":100}] if mode == "candidate" else [{"revisionName":"prior-a","percent":60},{"revisionName":"prior-b","percent":40}]
     if mode == "candidate" and os.environ.get("SCENARIO") == "wrong-traffic": traffic=[{"revisionName":"prior-a","percent":100}]
@@ -95,6 +100,9 @@ if __name__ == "__main__":
     mode=Path("state.json").read_text()
     with open("http-calls","a") as calls: calls.write("six-provider-smoke-queries\n")
     if mode == "candidate" and os.environ.get("SCENARIO") == "smoke-failure": sys.exit(13)
+    inventory=Path(sys.argv[sys.argv.index("--inventory")+1])
+    if mode == "restored":
+        if inventory.parent == Path("fixture/output") or len(json.loads(inventory.read_text())["databases"]) != 6: sys.exit(15)
     receipt=sys.argv[sys.argv.index("--receipt")+1]
     Path(receipt).write_text(json.dumps({"actualSeamExecuted":True}))
 `
@@ -210,6 +218,12 @@ func TestCloudRunPublicationRequiresLiveAcceptanceAndServingDigest(t *testing.T)
 			if (err == nil) != (scenario == "valid") {
 				t.Fatal("serving identity counterexample verdict", err)
 			}
+			if scenario == "wrong-image" || scenario == "wrong-source" {
+				state, readErr := os.ReadFile(filepath.Join(dir, "state.json"))
+				if readErr != nil || string(state) != "created" {
+					t.Fatal("identity mismatch routed traffic", string(state), readErr)
+				}
+			}
 			if scenario != "valid" {
 				if _, err := os.Stat(filepath.Join(dir, "chinook-deploy-sha.txt")); !os.IsNotExist(err) {
 					t.Fatal("wrong serving identity published")
@@ -276,7 +290,16 @@ func TestCloudRunStartupAndSmokeFailureRollbackExecuteAndRetainEvidence(t *testi
 					}
 				}
 			}
+			protected := filepath.Join(dir, "fixture", "output")
+			if err := os.Chmod(protected, 0555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(protected, 0700) })
 			err := runStep(t, dir, rollback, scenario)
+			info, statErr := os.Stat(protected)
+			if statErr != nil || info.Mode().Perm() != 0555 {
+				t.Fatal("rollback relaxed fixture modes", statErr)
+			}
 			if (err == nil) != (scenario != "rollback-verification-failure") {
 				t.Fatal("rollback expected verification outcome", err)
 			}
