@@ -165,6 +165,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 		server.WithReadOnly(true),
 		server.WithDatabaseReadProfiles(profiles),
 		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
+		server.WithSourceRights("https://demodb.dev/ovdb", nil),
 		server.WithCORS(cors),
 	)
 	checked, err := server.NewChecked("demodb-cloud", databases, options...)

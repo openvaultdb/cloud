@@ -725,6 +725,40 @@ def validate_provider(
     return fetched
 
 
+# Narrow operator declarations derived from verified publisher data metadata.
+# They remain server-declared evidence, not publisher attestation or legal advice.
+SHOWCASE_RECORDSETS = {"northwind": ("Customers",), "chinook": ("Customer", "Invoice")}
+
+
+def scoped_recordset_licenses(provider: dict[str, Any], fetched: dict[str, Any]) -> dict[str, dict[str, str]] | None:
+    names = SHOWCASE_RECORDSETS.get(provider["id"])
+    if names is None:
+        return None
+    database_id = provider["id"]
+    if provider["repository"] != "demo-db/" + database_id:
+        raise ValueError("scoped rights require the pinned publisher repository")
+    source = read_json(fetched["manifest"], "provider manifest")["source"]
+    public = read_json(fetched["databaseManifest"], "public database manifest")
+    contract = read_json(fetched["contract"], "provider contract")
+    descriptor = provider["files"]["license"]
+    if descriptor["path"] != "data-source/LICENSE.md" or source.get("licenseFile") != descriptor["path"] or source.get("license") != "MIT" or public.get("licences", {}).get("data") != "MIT" or public.get("provenance", {}).get("license") != "MIT":
+        raise ValueError("scoped rights require matching publisher data MIT declarations")
+    for key in ("manifest", "databaseManifest", "contract", "license"):
+        if hashlib.sha256(fetched[key]).hexdigest() != provider["files"][key]["sha256"]:
+            raise ValueError("scoped rights input differs from its verified pin")
+    native = {table["name"] for table in contract["schema"]["tables"] if table.get("kind", "table") == "table"}
+    published = {table["name"] for table in public["recordsets"] if table.get("kind", "table") == "table"}
+    if not set(names).issubset(native & published):
+        raise ValueError("scoped rights recordset absent from native/public publisher scope")
+    text = fetched["license"].decode("utf-8")
+    if not text.strip() or len(fetched["license"]) > 65536:
+        raise ValueError("scoped rights license text is empty or exceeds evidence bound")
+    # Validate repository/revision/path with the existing immutable fetch contract.
+    immutable_url(provider["repository"], provider["revision"], descriptor["path"])
+    url = f"https://github.com/{provider['repository']}/blob/{provider['revision']}/{descriptor['path']}"
+    return {name: {"spdx": "MIT", "url": url, "text": text} for name in names}
+
+
 def validate_image_layout(output: Path) -> None:
     """The image contains flat provider files plus one closed native store."""
     for entry in output.iterdir():
@@ -837,6 +871,7 @@ def prepare_inventory(inventory: Path, output: Path, local_root: Path | None = N
                 consume_source=True,
                 serving_adapter=provider.get("servingAdapter"),
                 selected_tables=selected,
+                recordset_licenses=scoped_recordset_licenses(provider, fetched),
             )
         finally:
             source_path.unlink(missing_ok=True)

@@ -228,6 +228,7 @@ def prepare(
     consume_source: bool = False,
     serving_adapter: str | None = None,
     selected_tables: list[str] | None = None,
+    recordset_licenses: dict[str, dict[str, str]] | None = None,
 ) -> Path:
     actual_sha256 = sha256_file(source)
     if expected_sha256 and actual_sha256 != expected_sha256:
@@ -270,6 +271,12 @@ def prepare(
         selected = tables if selected_tables is None else sorted(selected_tables)
         if set(selected) - set(tables):
             raise ValueError("publisher selection names absent physical tables")
+        if recordset_licenses is not None:
+            if not isinstance(recordset_licenses, dict) or set(recordset_licenses) - set(selected):
+                raise ValueError("recordset licenses require selected physical collection names")
+            for name, declaration in recordset_licenses.items():
+                if manifest_identifier(name) != name or not isinstance(declaration, dict) or set(declaration) != {"spdx", "url", "text"} or any(not isinstance(value, str) or not value.strip() for value in declaration.values()):
+                    raise ValueError("invalid scoped recordset license declaration")
         native_metadata = {table: table_metadata(connection, table) for table in tables}
         column_pragma = "table_xinfo" if serving_adapter else "table_info"
         native_columns = {table: [tuple(column[:6]) for column in connection.execute(f"PRAGMA {column_pragma}({quote_identifier(table)})")] for table in tables}
@@ -320,6 +327,8 @@ def prepare(
         raise
     finally:
         connection.close()
+    if recordset_licenses:
+        manifest.append("recordset_licenses: " + json.dumps(recordset_licenses, ensure_ascii=False, sort_keys=True))
     manifest_path = output / f"{database_id}.yaml"
     manifest_path.write_text("\n".join(manifest) + "\n", encoding="utf-8")
     (output / f"{database_id}.source-sha256").write_text(actual_sha256 + "\n", encoding="ascii")

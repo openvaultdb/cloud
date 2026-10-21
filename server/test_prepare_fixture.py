@@ -1,4 +1,5 @@
 import hashlib
+import json
 import importlib.util
 import sqlite3
 import tempfile
@@ -46,6 +47,21 @@ def make_source(path: Path) -> None:
 
 
 class PrepareFixtureTest(unittest.TestCase):
+    def test_optional_recordset_rights_preserve_default_bytes_and_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); source=root/"source.sqlite"; make_source(source)
+            baseline=prepare_fixture.prepare(source,root/"default","sample","","natural").read_bytes()
+            empty=prepare_fixture.prepare(source,root/"empty","sample","","natural",recordset_licenses={}).read_bytes()
+            self.assertEqual(baseline,empty)
+            self.assertNotIn(b"recordset_licenses",baseline)
+            declaration={"spdx":"MIT","url":"https://example.test/terms","text":"Fixture-only terms\n"}
+            annotated=prepare_fixture.prepare(source,root/"scoped","sample","","natural",recordset_licenses={"discounts":declaration}).read_bytes()
+            prefix,block=annotated.rsplit(b"recordset_licenses: ",1)
+            self.assertEqual(prefix,baseline)
+            self.assertEqual(json.loads(block),{"discounts":declaration})
+            for name in ("Discounts","absent"):
+                with self.assertRaises(ValueError): prepare_fixture.prepare(source,root/name,"sample","","natural",recordset_licenses={name:declaration})
+
     def test_consumes_verified_staging_source_without_a_second_full_sqlite_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

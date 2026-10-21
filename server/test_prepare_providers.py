@@ -19,6 +19,45 @@ INVENTORY = Path(__file__).with_name("providers.json")
 
 
 class PrepareProvidersTest(unittest.TestCase):
+    def scoped_rights_fixture(self, database_id="chinook"):
+        names = prepare_providers.SHOWCASE_RECORDSETS[database_id]
+        blobs = {
+            "manifest": json.dumps({"source": {"license":"MIT", "licenseFile":"data-source/LICENSE.md"}}).encode(),
+            "databaseManifest": json.dumps({"licences":{"data":"MIT"},"provenance":{"license":"MIT"},"recordsets":[{"name":name,"kind":"table"} for name in names]}).encode(),
+            "contract": json.dumps({"schema":{"tables":[{"name":name,"kind":"table"} for name in names]}}).encode(),
+            "license": b"MIT fixture-only license text\n",
+        }
+        provider = {"id":database_id,"repository":"demo-db/"+database_id,"revision":"a"*40,"files":{key:{"path":"data-source/LICENSE.md" if key=="license" else key+".json","sha256":hashlib.sha256(value).hexdigest()} for key,value in blobs.items()}}
+        return provider, blobs
+
+    def test_scoped_rights_derive_only_three_verified_publisher_recordsets(self):
+        for database_id in ("northwind", "chinook"):
+            provider, blobs = self.scoped_rights_fixture(database_id)
+            rights = prepare_providers.scoped_recordset_licenses(provider, blobs)
+            self.assertEqual(set(rights), set(prepare_providers.SHOWCASE_RECORDSETS[database_id]))
+            for declaration in rights.values():
+                self.assertEqual(declaration, {"spdx":"MIT","url":f"https://github.com/demo-db/{database_id}/blob/{'a'*40}/data-source/LICENSE.md","text":blobs["license"].decode()})
+        self.assertIsNone(prepare_providers.scoped_recordset_licenses({"id":"shipping"}, {}))
+
+    def test_scoped_rights_refuse_missing_membership_license_and_pin_changes(self):
+        for corruption in ("native", "public", "data-license", "provenance-license", "license-path", "license-bytes", "repository", "revision"):
+            with self.subTest(corruption=corruption):
+                provider, blobs = self.scoped_rights_fixture()
+                if corruption in ("native", "public", "data-license", "provenance-license"):
+                    key = "contract" if corruption=="native" else "databaseManifest"
+                    document=json.loads(blobs[key])
+                    if corruption=="native": document["schema"]["tables"][0]["name"]="customer"
+                    elif corruption=="public": document["recordsets"][0]["name"]="customer"
+                    elif corruption=="data-license": document["licences"]["data"]="CC0-1.0"
+                    else: document["provenance"]["license"]="CC0-1.0"
+                    blobs[key]=json.dumps(document).encode()
+                    provider["files"][key]["sha256"]=hashlib.sha256(blobs[key]).hexdigest()
+                elif corruption=="license-path": provider["files"]["license"]["path"]="README.md"
+                elif corruption=="license-bytes": blobs["license"]+=b"changed"
+                elif corruption=="repository": provider["repository"]="unrelated/chinook"
+                else: provider["revision"]="main"
+                with self.assertRaises(ValueError): prepare_providers.scoped_recordset_licenses(provider, blobs)
+
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
