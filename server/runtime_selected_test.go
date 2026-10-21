@@ -526,14 +526,22 @@ func TestActualSelectedHandlerDeploymentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeDBs()
+	t.Cleanup(func() {
+		if closeErr := closeDBs(); closeErr != nil {
+			t.Errorf("close selected databases: %v", closeErr)
+		}
+	})
 	runActualInventorySmoke(t, handler, inventory)
 	providers[0].verifiedPins = nil
 	handler2, close2, err := newHandlerWithProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer close2()
+	t.Cleanup(func() {
+		if closeErr := close2(); closeErr != nil {
+			t.Errorf("close unverified selected databases: %v", closeErr)
+		}
+	})
 	response := selectedRequest(handler2, http.MethodGet, "/v1/databases/"+providers[0].ID, "")
 	if response.Header().Get("OVDB-Provider-Revision") != "" {
 		t.Fatal("unverified ad-hoc provider emitted identity")

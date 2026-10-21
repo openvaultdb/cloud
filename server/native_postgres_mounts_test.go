@@ -363,8 +363,8 @@ func TestDemoPostgresAbandonedMountKeepsItsSlot(t *testing.T) {
 	stopped := make(chan error, 1)
 	go func() { stopped <- m.stop() }()
 	select {
-	case <-stopped:
-		t.Fatal("stop returned before the abandoned mount ended")
+	case stopErr := <-stopped:
+		t.Fatalf("stop returned before the abandoned mount ended: %v", stopErr)
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(release)
