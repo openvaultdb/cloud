@@ -394,7 +394,11 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeDBs()
+	t.Cleanup(func() {
+		if closeErr := closeDBs(); closeErr != nil {
+			t.Errorf("close candidate databases: %v", closeErr)
+		}
+	})
 	runActualInventorySmoke(t, handler, inventory)
 	// Rollback uses these same six entries; retain fixture-relative paths.
 	var prior runtimeInventory
@@ -427,7 +431,11 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	if err = os.WriteFile(rollbackPath, content, 0600); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(rollbackPath)
+	t.Cleanup(func() {
+		if removeErr := os.Remove(rollbackPath); removeErr != nil {
+			t.Errorf("remove rollback inventory: %v", removeErr)
+		}
+	})
 	var rollbackProviders []runtimeDatabase
 	for _, provider := range providers {
 		if provider.ID != "shipping" && provider.ID != "shipping-logs" {
@@ -438,7 +446,11 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closePrior()
+	t.Cleanup(func() {
+		if closeErr := closePrior(); closeErr != nil {
+			t.Errorf("close rollback databases: %v", closeErr)
+		}
+	})
 	runActualInventorySmoke(t, rollbackHandler, rollbackPath)
 	for _, id := range []string{"shipping", "shipping-logs"} {
 		response := selectedRequest(rollbackHandler, http.MethodGet, "/v1/databases/"+id, "")

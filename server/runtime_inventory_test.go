@@ -268,7 +268,11 @@ func TestActualNativeCollectionDiscoveryAndReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeDBs()
+	t.Cleanup(func() {
+		if closeErr := closeDBs(); closeErr != nil {
+			t.Errorf("close native databases: %v", closeErr)
+		}
+	})
 	assertNativeCollectionDiscovery(t, handler)
 	for collection, key := range map[string]string{"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1"} {
 		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 100\n")
