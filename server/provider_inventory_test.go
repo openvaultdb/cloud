@@ -97,11 +97,13 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 			}
 			verifiedDecimalString := false
 			for _, recordset := range recordsets {
-				collectionPath := "/ovdb/dbs/" + url.PathEscape(provider.ID) + "/collections/" + url.PathEscape(recordset)
-				collection := httptest.NewRecorder()
-				handler.ServeHTTP(collection, httptest.NewRequest(http.MethodGet, collectionPath, nil))
-				if collection.Code != http.StatusOK {
-					t.Fatalf("recordset profile %q returned %d: %s", recordset, collection.Code, collection.Body.String())
+				if provider.StorageEngine == "sqlite" {
+					collectionPath := "/ovdb/dbs/" + url.PathEscape(provider.ID) + "/collections/" + url.PathEscape(recordset)
+					collection := httptest.NewRecorder()
+					handler.ServeHTTP(collection, httptest.NewRequest(http.MethodGet, collectionPath, nil))
+					if collection.Code != http.StatusOK {
+						t.Fatalf("recordset profile %q returned %d: %s", recordset, collection.Code, collection.Body.String())
+					}
 				}
 
 				query := "from: {name: '" + strings.ReplaceAll(recordset, "'", "''") + "'}\nlimit: 1\n"
@@ -137,9 +139,13 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 				if !strings.HasPrefix(result.Records[0].Key, recordset+"/") {
 					t.Fatalf("recordset %q returned key outside its native collection: %q", recordset, result.Records[0].Key)
 				}
-				adapterID, ok := result.Records[0].Data["id"].(string)
+				identityField := "id"
+				if provider.StorageEngine == "ingitdb" {
+					identityField = "event_id"
+				}
+				adapterID, ok := result.Records[0].Data[identityField].(string)
 				if !ok || adapterID == "" {
-					t.Fatalf("recordset %q did not expose its serving identity for lookup: %#v", recordset, result.Records[0].Data)
+					t.Fatalf("recordset %q did not expose its %s serving identity for lookup: %#v", recordset, identityField, result.Records[0].Data)
 				}
 				recordURL := "/v1/databases/" + url.PathEscape(provider.ID) + "/records/" + url.PathEscape(recordset) + "/" + url.PathEscape(adapterID)
 				record := httptest.NewRecorder()
@@ -234,6 +240,16 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 	}
 	closed = true
 	for _, provider := range providers {
+		if provider.StorageEngine == "ingitdb" {
+			for _, pin := range provider.NativeFiles {
+				path := filepath.Join(provider.NativeRoot, filepath.FromSlash(pin.Path))
+				got, err := sha256File(path)
+				if err != nil || got != pin.SHA256 {
+					t.Errorf("read-only mount/query mutated %s native file %s: got SHA-256 %s, inventory pins %s, err=%v", provider.ID, pin.Path, got, pin.SHA256, err)
+				}
+			}
+			continue
+		}
 		servingPath := filepath.Join(filepath.Dir(provider.Manifest), provider.ID+".sqlite")
 		got, err := sha256File(servingPath)
 		if err != nil {
