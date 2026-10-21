@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -171,7 +172,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 	}
 	if !hasNativePostgres {
-		return checked.Handler(), func() error { return closeMountedDatabases(databases) }, nil
+		return withVerifiedProviderPins(checked.Handler(), providers), func() error { return closeMountedDatabases(databases) }, nil
 	}
 	timing, err := demoPostgresMountTimingFromEnv(os.Getenv)
 	if err != nil {
@@ -179,7 +180,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 	}
 	mounter := newDemoPostgresMounter(checked, nativePostgresProviders, timing)
 	mounter.start(nativePostgresProviders)
-	handler := &demoPostgresHandler{Handler: mounter.wrap(checked.Handler()), mounter: mounter}
+	handler := &demoPostgresHandler{Handler: withVerifiedProviderPins(mounter.wrap(checked.Handler()), providers), mounter: mounter}
 	return handler, func() error {
 		return errors.Join(mounter.stop(), closeMountedDatabases(databases))
 	}, nil
@@ -200,4 +201,27 @@ func closeMountedDatabases(databases map[string]*core.Database) error {
 		}
 	}
 	return closeErr
+}
+
+// withVerifiedProviderPins publishes only identities admitted by the inventory
+// loader. Ad-hoc mounts and background providers have no verified inventory pins.
+func withVerifiedProviderPins(next http.Handler, providers []runtimeDatabase) http.Handler {
+	pins := make(map[string]map[string]string)
+	for _, provider := range providers {
+		if provider.verifiedPins != nil {
+			pins[provider.ID] = provider.verifiedPins
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, prefix := range []string{"/v1/databases/", "/ovdb/dbs/"} {
+			if path, ok := strings.CutPrefix(r.URL.Path, prefix); ok {
+				id, _, _ := strings.Cut(path, "/")
+				for name, value := range pins[id] {
+					w.Header().Set(name, value)
+				}
+				break
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

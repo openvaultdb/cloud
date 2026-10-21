@@ -59,6 +59,7 @@ type runtimeDatabase struct {
 	BlobSmokeFields       map[string][]string        `json:"blobSmokeFields"`
 	ForeignKeySmoke       []runtimeForeignKeySmoke   `json:"foreignKeySmoke"`
 	nativePostgres        *nativePostgresMountConfig `json:"-"`
+	verifiedPins          map[string]string
 }
 
 type runtimeForeignKeySmoke struct {
@@ -246,6 +247,16 @@ func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtim
 		}
 		if image != nil && database.StorageEngine == "sqlite" {
 			image.verifiedSQLite[sqlitePath] = actualHash
+		}
+		manifestHash, err := sha256File(filepath.Join(base, database.Manifest))
+		if err != nil {
+			return nil, err
+		}
+		database.verifiedPins = map[string]string{
+			"OVDB-Provider-Revision": database.ProviderRevision,
+			"OVDB-Source-SHA256":     database.SourceSHA256,
+			"OVDB-Serving-SHA256":    database.ServingSHA256,
+			"OVDB-Manifest-SHA256":   manifestHash,
 		}
 		database.Manifest = filepath.Join(base, database.Manifest)
 		database.License = filepath.Join(base, database.License)

@@ -519,3 +519,23 @@ func TestDescriptorMetadataExactConsumedMembers(t *testing.T) {
 		}
 	}
 }
+
+func TestActualSelectedHandlerDeploymentSmoke(t *testing.T) {
+	inventory, providers := selectedInventoryFixture(t)
+	handler, closeDBs, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDBs()
+	runActualInventorySmoke(t, handler, inventory)
+	providers[0].verifiedPins = nil
+	handler2, close2, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close2()
+	response := selectedRequest(handler2, http.MethodGet, "/v1/databases/"+providers[0].ID, "")
+	if response.Header().Get("OVDB-Provider-Revision") != "" {
+		t.Fatal("unverified ad-hoc provider emitted identity")
+	}
+}

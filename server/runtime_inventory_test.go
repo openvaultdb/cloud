@@ -61,6 +61,26 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 			t.Error(err)
 		}
 	})
+
+	profile := selectedRequest(handler, "GET", "/v1/databases/shipping-logs", "")
+	if profile.Code != 200 {
+		t.Fatalf("native profile: %d %s", profile.Code, profile.Body.String())
+	}
+	for name, want := range loaded[0].verifiedPins {
+		if got := profile.Header().Get(name); got != want {
+			t.Fatalf("native %s: %q want %q", name, got, want)
+		}
+	}
+	for _, collection := range []string{"baseline", "recovery11045example", "recovery11062example"} {
+		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 10\n")
+		if query.Code != 200 || !strings.Contains(query.Body.String(), collection+"-e1") {
+			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())
+		}
+		keyed := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/records/"+collection+"/"+collection+"-e1", "")
+		if keyed.Code != 200 || !strings.Contains(keyed.Body.String(), "observed") {
+			t.Fatalf("native keyed %s: %d %s", collection, keyed.Code, keyed.Body.String())
+		}
+	}
 	query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: baseline}\nlimit: 10\n")
 	if query.Code != 200 || !strings.Contains(query.Body.String(), "baseline-e1") {
 		t.Fatalf("native query: %d %s", query.Code, query.Body.String())

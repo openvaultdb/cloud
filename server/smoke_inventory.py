@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 import sqlite3
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, parse_qs, urlsplit
+from urllib.parse import quote, unquote, urlencode, parse_qs, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -119,7 +119,11 @@ def main() -> None:
             )
             if headers.get("Access-Control-Allow-Origin") != cors_origin:
                 raise RuntimeError(f"{database['id']} response omitted allowed CORS origin {cors_origin}")
-            if "max-age=86400" not in headers.get("Cache-Control", ""):
+            cache_control = headers.get("Cache-Control", "")
+            if database.get("readProfile") == "bounded-immutable/1":
+                if "no-store" not in cache_control:
+                    raise RuntimeError(f"{database['id']} bounded GET query is not no-store")
+            elif "max-age=86400" not in cache_control:
                 raise RuntimeError(f"{database['id']} GET query is not cacheable")
             result = json.loads(result_bytes)
             records = result.get("records")
@@ -133,6 +137,13 @@ def main() -> None:
                 raise RuntimeError(f"{database['id']} query returned an invalid record key for {collection!r}: {record_key!r}")
             identity_field = "event_id" if database.get("storageEngine") == "ingitdb" else "id"
             record_id = first_record["data"].get(identity_field)
+            if database.get("servingAdapter") == "separate-id/1":
+                # Native data can retain its own integer `id`; the envelope
+                # carries the separately declared serving record key.
+                prefix = collection + "/"
+                if not record_key.startswith(prefix) or "/" in record_key[len(prefix):]:
+                    raise RuntimeError(f"{database['id']} malformed serving key for {collection!r}")
+                record_id = unquote(record_key[len(prefix):])
             if not isinstance(record_id, str) or not record_id:
                 raise RuntimeError(f"{database['id']} query returned no serving identity for {collection!r}")
             queried_rows[collection] = first_record["data"]

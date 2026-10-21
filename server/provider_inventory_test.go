@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -313,5 +316,134 @@ func TestRecordDataMatchesNormalizesOnlyMissingNullableValues(t *testing.T) {
 	}
 	if recordDataMatches(query, map[string]any{"OrderID": float64(10248), "Extra": true}) {
 		t.Fatal("an unexpected response field must not be accepted")
+	}
+}
+
+// runActualInventorySmoke connects the deployment helper to real ServeHTTP
+// responses over stdio, without a network listener or substituted verifier.
+func runActualInventorySmoke(t *testing.T, handler http.Handler, inventory string) {
+	t.Helper()
+	script := `import base64, contextlib, email.message, json, sys
+import smoke_inventory as smoke
+wire=sys.stdout
+def request(origin,path,method="GET",body=None,headers=None):
+ wire.write(json.dumps({"path":path,"method":method,"body":base64.b64encode(body or b"").decode(),"headers":headers or {}})+"\n"); wire.flush()
+ response=json.loads(sys.stdin.readline()); h=email.message.Message()
+ for name,values in response["headers"].items():
+  for value in values: h[name]=value
+ return smoke.observe(origin,path,method,response["status"],h,base64.b64decode(response["body"] or ""))
+smoke.request=request
+sys.argv=["smoke_inventory.py","--origin","https://cloud.openvaultdb.com","--inventory",sys.argv[1]]
+with contextlib.redirect_stdout(sys.stderr): smoke.main()
+`
+	command := exec.Command("python3", "-c", script, inventory)
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	command.Stderr = &diagnostic
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(output)
+	for scanner.Scan() {
+		var request struct {
+			Path    string
+			Method  string
+			Body    []byte
+			Headers map[string]string
+		}
+		if err = json.Unmarshal(scanner.Bytes(), &request); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(request.Method, request.Path, bytes.NewReader(request.Body))
+		for name, value := range request.Headers {
+			req.Header.Set(name, value)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if err = json.NewEncoder(input).Encode(map[string]any{"status": response.Code, "headers": response.Header(), "body": response.Body.Bytes()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = input.Close()
+	if err = scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err = command.Wait(); err != nil {
+		t.Fatalf("actual deployment smoke: %v\n%s", err, diagnostic.String())
+	}
+	t.Log(diagnostic.String())
+}
+
+func TestActualHandlerDeploymentSmoke(t *testing.T) {
+	inventory := os.Getenv("SAMPLE_DATABASES_INVENTORY")
+	if inventory == "" {
+		t.Skip("set SAMPLE_DATABASES_INVENTORY for all real providers")
+	}
+	providers, err := loadRuntimeInventory(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, closeDBs, err := newHandlerWithProviders(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeDBs()
+	runActualInventorySmoke(t, handler, inventory)
+	// Rollback uses these same six entries; retain fixture-relative paths.
+	var prior runtimeInventory
+	content, err := os.ReadFile(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(content, &prior); err != nil {
+		t.Fatal(err)
+	}
+	old := prior.Databases[:0]
+	for _, provider := range prior.Databases {
+		if provider.ID != "shipping" && provider.ID != "shipping-logs" {
+			old = append(old, provider)
+		}
+	}
+	prior.Databases = old
+	content, err = json.Marshal(prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackDir := t.TempDir()
+	for _, provider := range prior.Databases {
+		source := filepath.Join(filepath.Dir(inventory), provider.ID+".sqlite")
+		if err := os.Symlink(source, filepath.Join(rollbackDir, provider.ID+".sqlite")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rollbackPath := filepath.Join(rollbackDir, "inventory.json")
+	if err = os.WriteFile(rollbackPath, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(rollbackPath)
+	var rollbackProviders []runtimeDatabase
+	for _, provider := range providers {
+		if provider.ID != "shipping" && provider.ID != "shipping-logs" {
+			rollbackProviders = append(rollbackProviders, provider)
+		}
+	}
+	rollbackHandler, closePrior, err := newHandlerWithProviders(rollbackProviders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closePrior()
+	runActualInventorySmoke(t, rollbackHandler, rollbackPath)
+	for _, id := range []string{"shipping", "shipping-logs"} {
+		response := selectedRequest(rollbackHandler, http.MethodGet, "/v1/databases/"+id, "")
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("rollback candidate %s: %d", id, response.Code)
+		}
 	}
 }
