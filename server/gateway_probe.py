@@ -11,17 +11,25 @@ import ssl
 from urllib.parse import urlsplit
 
 
-def direct(host, address, path):
+def direct(host, address, path, credential_variant="missing"):
     connection = http.client.HTTPSConnection(host, timeout=20)
     raw = socket.create_connection((address, 443), timeout=20)
     connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
     certificate = connection.sock.getpeercert()
     fingerprint = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
     try:
-        connection.request("GET", path, headers={"Host": host, "CF-Connecting-IP": "192.0.2.1", "X-Forwarded-Host": host})
+        if credential_variant not in ("missing", "wrong", "duplicate"):
+            raise RuntimeError("unsupported credential proof variant")
+        connection.putrequest("GET", path, skip_host=True)
+        connection.putheader("Host", host)
+        connection.putheader("CF-Connecting-IP", "192.0.2.1")
+        connection.putheader("X-Forwarded-Host", host)
+        for _ in range({"missing":0,"wrong":1,"duplicate":2}[credential_variant]):
+            connection.putheader("X-OVDB-Origin-Secret", "invalid-bootstrap-proof")
+        connection.endheaders()
         response = connection.getresponse()
         response.read(1024)
-        return {"host": host, "address": address, "path": path, "status": response.status, "certificateSHA256": fingerprint, "notAfter": certificate.get("notAfter")}
+        return {"host": host, "address": address, "path": path, "status": response.status, "certificateSHA256": fingerprint, "notAfter": certificate.get("notAfter"), "credentialVariant": credential_variant}
     finally:
         connection.close()
 

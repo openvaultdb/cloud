@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reviewed Go gateway rollout controller. Runs only from explicit deployment workflow.
-No secret values are read: pinned resource references go directly to Cloud Run.
+Origin/proxy secret values are never fetched: pinned references go to Cloud Run.
+First-bootstrap CAS uses an existing ephemeral OAuth credential only in memory.
 """
 import argparse
 import json
@@ -93,8 +94,25 @@ def traffic(service):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=("protect-origin", "mapped"), required=True)
+    parser.add_argument("--mode", choices=("accepted-rollback", "first-bootstrap"), default="accepted-rollback")
+    parser.add_argument("--bootstrap-action", choices=("capture", "quiesce", "protect", "open-for-mapping", "status", "seal-after-acceptance"))
+    parser.add_argument("--bootstrap-state", default="ovdb-bootstrap-state.json")
+    parser.add_argument("--bootstrap-ingress-inventory")
+    parser.add_argument("--bootstrap-functional-acceptance")
+    parser.add_argument("--phase", choices=("protect-origin", "mapped"))
     args = parser.parse_args()
+    if args.mode == "first-bootstrap":
+        if not args.bootstrap_action:
+            parser.error("first-bootstrap requires explicit action")
+        from bootstrap_gateway import main as bootstrap_main
+        return bootstrap_main(args.bootstrap_action, args.bootstrap_state, args.bootstrap_ingress_inventory, args.bootstrap_functional_acceptance)
+    if not args.phase or args.bootstrap_action:
+        parser.error("ordinary mode requires phase and cannot consume bootstrap actions")
+    if Path(args.bootstrap_state).exists():
+        from bootstrap_gateway import load as load_bootstrap
+        bootstrap_state = load_bootstrap(Path(args.bootstrap_state))
+        if bootstrap_state.get("functionalRollbackAccepted") is not True or bootstrap_state.get("stage") != "mapped-accepted-default-disabled" or bootstrap_state.get("unresolved"):
+            raise RuntimeError("first bootstrap pending; ordinary rollback mode forbidden")
     sha = os.environ["DEPLOY_SHA"]
     origin_binding = os.environ["OVDB_ORIGIN_SECRET_BINDING"]
     proxy_binding = os.environ["OVDB_DEVICE_AUTH_PROXY_SECRET_BINDING"]

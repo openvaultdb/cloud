@@ -29,4 +29,20 @@ class ProbeTest(unittest.TestCase):
             resolve.assert_called_once_with("google-target.example",443,type=probe.socket.SOCK_STREAM)
             self.assertFalse(Path("receipt.json").exists())
 
+class DirectCredentialVariantTest(unittest.TestCase):
+    def test_duplicate_invalid_values_are_sent_as_two_headers_without_real_secret(self):
+        from unittest.mock import Mock
+        tls=Mock()
+        tls.getpeercert.side_effect=lambda binary_form=False: b"certificate" if binary_form else {"notAfter":"future"}
+        connection=Mock()
+        connection.getresponse.return_value.status=403
+        context=Mock();context.wrap_socket.return_value=tls
+        with patch.object(probe.http.client,"HTTPSConnection",return_value=connection),patch.object(probe.socket,"create_connection"),patch.object(probe.ssl,"create_default_context",return_value=context):
+            result=probe.direct("service.run.app","service.run.app","/v1",credential_variant="duplicate")
+        credential_headers=[call for call in connection.putheader.call_args_list if call.args[0]=="X-OVDB-Origin-Secret"]
+        self.assertEqual(len(credential_headers),2)
+        self.assertTrue(all(call.args[1]=="invalid-bootstrap-proof" for call in credential_headers))
+        self.assertEqual(result["credentialVariant"],"duplicate")
+        self.assertEqual(result["status"],403)
+
 if __name__=="__main__":unittest.main()

@@ -95,3 +95,62 @@ Wrangler development dependency remain. Retiring the two-host OVDB gateway
 Worker does not retire that separate service.
 
 See `server/README.md` for native providers, immutable fixture and storage policy.
+
+## First-bootstrap controller contract — future provider execution
+
+The reviewed draft bootstrap is separate from ordinary `accepted-rollback`
+mode. `first-bootstrap` exposes explicit `capture`, `quiesce`, `protect`,
+`open-for-mapping`, `status` and `seal-after-acceptance` actions. This describes
+source interfaces, not an executed cutover/runbook. Mapping, DNS, certificates,
+edge-rule mutations and the real authenticated journey remain root-owned.
+
+Its owned local `ovdb-bootstrap-state.json` records mode, actual UID/generation/
+resourceVersion, config/evidence digests and all observed direct/alias/tag URLs.
+Atomic0600 replacement and directory fsync precede each mutation; a local lock
+serializes the receipt. The root must durably retain this same state across jobs
+and supply it on resume. A missing state never authorizes resume by stage label;
+current provider identity/config/traffic must agree. Pending bootstrap blocks
+ordinary-mode fallback. Protection-only state never supplies `routesAccepted` or
+an accepted functional rollback receipt.
+
+Capture requires `--bootstrap-ingress-inventory`: a fresh root-owned
+`ovdb-bootstrap-ingress-inventory/1` document bound to the exact target/fence,
+`complete:true`, full coverage of project/region mappings, service direct aliases/
+tags and bounded service public ingress, with attributable complete-source result
+SHA256 provenance. Its mappingResources/otherPublicIngress must be empty and all
+actual Google origins retained. CLI listing failures/incomplete inventory cannot
+stand for absence. This is not fleet discovery or an inference that no LB exists.
+
+Bootstrap writes only the existing openvaultdb/europe-west1/chinook-ovdb service.
+It sends the captured resourceVersion unchanged in the documented regional v1
+replaceService PUT; no gcloud-replace refresh may substitute a newer version.
+The same UID/name/namespace and full unrelated spec/metadata are preserved.
+Existing Google OAuth credentials are captured only in subprocess memory and the
+fixed Google HTTPS Authorization header. They never enter argv/files/receipts or
+HTTP error bodies; origin/proxy Secret Manager values are never fetched.409 or
+UID/version drift is unresolved and never triggers blind retry/replacement by
+name. A lost write response also remains unresolved; only a durably recorded
+response generation can authorize reconciliation on resume. Root remediation is
+required when safe closure cannot be attributed.
+
+Quiescence disables default and removes all tags before any protected image
+change. Protection keeps default disabled, pins digest/source/credential references
+and TCP8080, verifies named ready revision/config, then routes that name100%.
+Only verified protection permits explicit default re-enable; real missing/wrong/
+duplicate credential probes must reject known data/auth/static paths with valid
+TLS. Active default/alias URLs must return403; removed tag URLs may return403
+or404. Network/TLS errors, unrelated404 or5xx are not closure evidence. Every later
+failure re-closes with the expected-version fence, or records an unresolved
+incident; captured naked traffic is never restored.
+
+`status` stops pending external mapping-resource/DNS/certificate/real both-host
+data/auth gates. `seal-after-acceptance` additionally requires a fresh root-owned
+`ovdb-functional-mapped-acceptance/1` proof: exact service UID/candidate identity,
+public hosts, retained originIdentity, genuine origin/routes/auth acceptance and
+complete ingress inventory, with separate DNS/origin-certificate/edge-rule/
+data-pin-streaming/authenticated-device-database evidence SHA256s and provenance.
+It re-reads both mapping readiness generations, repeats current public/origin/data
+probes with all eight native providers, then disables default and verifies closure
+again. The state records only the external proof digest; it never fabricates the
+first ordinary-mode functional proof. Natural certificate renewal remains pending
+until observed, independently of this source and initial acceptance.
