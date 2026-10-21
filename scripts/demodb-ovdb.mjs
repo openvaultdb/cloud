@@ -1,7 +1,7 @@
-// Keeps src/demodb-ovdb.json, the DemoDB OVDB allowlist this Worker serves at
+// Keeps server/gatewayassets/demodb-ovdb.json, the DemoDB OVDB allowlist the Go gateway serves at
 // https://ovdb.demodb.dev/v1, in step with its source of truth: the
 // src/data/generated/ovdb.json that demo-db/websites `npm run prepare:databases`
-// writes. The Worker has no runtime dependency on the demo-db repository.
+// writes. The Go gateway has no runtime dependency on the demo-db repository.
 //
 //   node scripts/demodb-ovdb.mjs check <path/to/demo-db/websites/src/data/generated/ovdb.json>
 //   node scripts/demodb-ovdb.mjs write <same path>
@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const COMMITTED_PATH = path.join(repositoryRoot, "src", "demodb-ovdb.json");
+export const COMMITTED_PATH = path.join(repositoryRoot, "server", "gatewayassets", "demodb-ovdb.json");
 const localIdPattern = /^[a-z][a-z0-9-]{0,39}$/u;
 
 /** The part of demo-db's generated ovdb.json the gateway needs: the server index and per-database query capability. */
@@ -37,7 +37,7 @@ export function deriveDemoDBOVDB(generated) {
 // Worker rewrites both to https://ovdb.demodb.dev/v1 when it serves the index.
 const apiBases = ["https://demodb.dev/ovdb/v1", "https://ovdb.demodb.dev/v1"];
 
-/** Invariants the Worker relies on; scripts/demodb-ovdb.test.mjs checks the committed copy with the same rules. */
+/** Invariants the Go gateway relies on; scripts/demodb-ovdb.test.mjs checks the committed copy with the same rules. */
 export function validateDemoDBOVDB({ server, query }) {
   if (!apiBases.includes(server.apiUrl)) throw new Error(`server.apiUrl must be one of ${apiBases.join(", ")}`);
   const ids = server.databases.map((database) => database.localId);

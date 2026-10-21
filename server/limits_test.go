@@ -121,7 +121,7 @@ func readServerFile(t *testing.T, elements ...string) string {
 // deployedInstance reads the instance settings from the deploy description.
 func deployedInstance(t *testing.T) (memoryBytes int64, concurrency int) {
 	t.Helper()
-	description := readServerFile(t, "..", ".github", "workflows", "deploy-chinook-cloudrun.yml")
+	description := readServerFile(t, "deploy_gateway.py")
 	memory := regexp.MustCompile(`--memory=(\d+)Mi\b`).FindStringSubmatch(description)
 	if memory == nil {
 		t.Fatal("the deploy description does not set --memory in MiB")

@@ -9,11 +9,10 @@ import (
 	"strings"
 )
 
-// The Cloud Run service is deployed --allow-unauthenticated, so its *.run.app
-// URL answers anyone who finds it, bypassing the Worker's rate limits. When
-// OVDB_ORIGIN_SECRET is set, every request must carry it in the header named by
-// OVDB_ORIGIN_SECRET_HEADER (default X-OVDB-Origin-Secret); the Worker adds it
-// from its own OVDB_ORIGIN_SECRET secret binding. Unset, behaviour is unchanged.
+// Cloudflare overwrites the configured header on the two admitted public hosts.
+// The production gateway requires this credential at startup and verifies it
+// before all routing. The reusable wrapper retains its optional composition
+// contract for internal handlers; newGateway enforces the public boundary.
 const (
 	originSecretEnv           = "OVDB_ORIGIN_SECRET"
 	originSecretHeaderEnv     = "OVDB_ORIGIN_SECRET_HEADER"

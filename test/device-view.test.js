@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceView } from "../public/device-view.js";
+import { deviceView } from "../server/gatewayassets/public/device-view.js";
 
 describe("OpenVaultDB device authorization wizard", () => {
   it("shows only code entry before a code is verified", () => {

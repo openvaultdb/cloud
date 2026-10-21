@@ -4,9 +4,9 @@ import test from "node:test";
 
 import { parseJSONC } from "./jsonc.mjs";
 
-test("the real wrangler.jsonc parses as JSONC and binds no D1 database", async () => {
-  const real = parseJSONC(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
-  assert.equal(real.name, "openvaultdb-cloud");
+test("the retained registry Worker configuration parses as JSONC and binds no D1 database", async () => {
+  const real = parseJSONC(await readFile(new URL("../registry-search/wrangler.live.jsonc", import.meta.url), "utf8"));
+  assert.equal(real.name, "registry-metadata-search");
   assert.equal(Object.hasOwn(real, "d1_databases"), false);
 });
 

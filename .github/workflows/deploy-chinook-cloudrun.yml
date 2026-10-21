@@ -1,10 +1,15 @@
-name: Deploy Chinook to Cloud Run
+name: Deploy OVDB Go gateway
 
 on:
-  workflow_run:
-    workflows: [Cloud Worker CI]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: Successful exact-main Go CI run with immutable artifact
+        required: true
+      phase:
+        type: choice
+        options: [protect-origin, mapped]
+        required: true
 
 permissions:
   contents: read
@@ -17,35 +22,56 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     environment: production
     env:
       PROJECT_ID: openvaultdb
       REGION: europe-west1
       SERVICE_NAME: chinook-ovdb
-      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
-      IMAGE: europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${{ github.event.workflow_run.head_sha }}
+      OVDB_ORIGIN_SECRET_BINDING: ${{ vars.OVDB_ORIGIN_SECRET_BINDING }}
+      OVDB_DEVICE_AUTH_PROXY_SECRET_BINDING: ${{ vars.OVDB_DEVICE_AUTH_PROXY_SECRET_BINDING }}
+      SNEAT_API_ORIGIN: ${{ vars.SNEAT_API_ORIGIN }}
+      OVDB_GOOGLE_ORIGIN_TARGET: ${{ vars.OVDB_GOOGLE_ORIGIN_TARGET }}
+      OVDB_SECURE_ROLLBACK_REVISION: ${{ vars.OVDB_SECURE_ROLLBACK_REVISION }}
     steps:
-      - name: Check out the validated commit
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ env.DEPLOY_SHA }}
+      - name: Verify exact successful main artifact run
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          [[ "${CI_RUN_ID}" =~ ^[0-9]+$ ]]
+          gh api "repos/${REPOSITORY}/actions/runs/${CI_RUN_ID}" > run.json
+          python3 - <<'PY'
+          import json, os, re
+          run=json.load(open("run.json"))
+          if run.get("name") != "Cloud Go CI" or run.get("head_branch") != "main" or run.get("conclusion") != "success" or not re.fullmatch("[0-9a-f]{40}",run.get("head_sha","")):
+              raise SystemExit("successful exact-main Go CI required")
+          with open(os.environ["GITHUB_OUTPUT"],"a") as stream: stream.write("sha="+run["head_sha"]+"\n")
+          PY
 
-      - name: Reject an older main commit
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.ci.outputs.sha }}
+
+      - name: Reject stale main
+        env:
+          DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
         run: |
           REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
           test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
-      - name: Download the validated Go binary
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8
         with:
           name: ovdb-cloud-linux-amd64
           path: server
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ inputs.ci_run_id }}
           github-token: ${{ github.token }}
 
       - name: Verify binary identity and checksum
+        env:
+          DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
         working-directory: server
         run: |
           test "$(cat ovdb-cloud.source-sha)" = "${DEPLOY_SHA}"
@@ -105,260 +131,40 @@ jobs:
           PY
           chmod +x ovdb-cloud
 
-      - name: Authenticate with OpenVaultDB Google Cloud
+
+      - uses: google-github-actions/auth@v3
         id: auth
-        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/323159488879/locations/global/workloadIdentityPools/github/providers/github-provider
           service_account: github-chinook-deploy@openvaultdb.iam.gserviceaccount.com
 
-      - name: Configure gcloud and Docker
+      - name: Build the exact verified image
+        env:
+          DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
         run: |
           gcloud auth login --brief --cred-file="${{ steps.auth.outputs.credentials_file_path }}"
-          gcloud config set project "${PROJECT_ID}"
-          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+          docker build --label "org.opencontainers.image.revision=${DEPLOY_SHA}" --file server/Dockerfile --tag "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${DEPLOY_SHA}" server
+          docker push "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${DEPLOY_SHA}"
 
-      - name: Build and push the validated image
+      - name: Load independently validated secure rollback receipt
+        env:
+          ROLLBACK_RECEIPT: ${{ vars.OVDB_SECURE_ROLLBACK_RECEIPT }}
         run: |
-          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
-          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
-          docker build --label "org.opencontainers.image.revision=${DEPLOY_SHA}" --file server/Dockerfile --tag "${IMAGE}" server
-          docker push "${IMAGE}"
+          printf '%s' "${ROLLBACK_RECEIPT}" > server/secure-rollback-acceptance.json
 
-      - name: Capture rollback target
+      - name: Deploy and verify named Go gateway revision
         working-directory: server
-        run: |
-          python3 - <<'PY'
-          import json, os, re, subprocess, time
-          from pathlib import Path
-          from urllib.parse import urlsplit
+        env:
+          DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
+          IMAGE: europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${{ steps.ci.outputs.sha }}
+          DEPLOY_PHASE: ${{ inputs.phase }}
+        run: python3 deploy_gateway.py --phase "${DEPLOY_PHASE}"
 
-          def cloud(*args):
-              return json.loads(subprocess.check_output(["gcloud", *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
-          def service():
-              return cloud("run", "services", "describe", os.environ["SERVICE_NAME"])
-          def revision(name):
-              value = cloud("run", "revisions", "describe", name)
-              digest = value.get("status", {}).get("imageDigest", "")
-              if "@sha256:" not in digest: raise RuntimeError("revision has no resolved immutable digest")
-              return {"image": digest, "sourceSha": value.get("metadata", {}).get("labels", {}).get("source-sha")}
-          def traffic(value):
-              targets = [{"revisionName": target["revisionName"], "percent": target["percent"]} for target in value["status"].get("traffic", []) if target.get("percent", 0) > 0]
-              if not targets or sum(target["percent"] for target in targets) != 100: raise RuntimeError("serving traffic is incomplete")
-              return sorted(targets, key=lambda target: target["revisionName"])
-          def origin(value):
-              text = value["status"]["url"]
-              url = urlsplit(text)
-              if any(ord(char) < 33 for char in text) or url.scheme != "https" or not url.hostname or not url.hostname.endswith(".run.app") or url.netloc != url.hostname or url.path or url.query or url.fragment: raise RuntimeError("invalid Cloud Run origin")
-              return text
-
-          value = service()
-          targets = traffic(value)
-          receipt = {"mergeSha": os.environ["DEPLOY_SHA"], "phase": "captured", "capturedAt": int(time.time()), "serviceOrigin": origin(value), "priorTraffic": targets, "priorRevisions": {target["revisionName"]: revision(target["revisionName"]) for target in targets}}
-          # Resolve the exact just-pushed SHA tag before deployment; deploy only this digest.
-          digest = subprocess.check_output(["gcloud", "artifacts", "docker", "images", "describe", os.environ["IMAGE"], "--format=value(image_summary.digest)"], text=True).strip()
-          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest): raise RuntimeError("invalid candidate image digest")
-          receipt["candidateImage"] = os.environ["IMAGE"].rsplit(":", 1)[0]+"@"+digest
-          Path("shipping-publication-deploy-receipt.json").write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
-          PY
-
-      - name: Deploy the public read-only service
-        working-directory: server
-        run: |
-          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
-          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
-          python3 -c 'import json; from pathlib import Path; p=Path("shipping-publication-deploy-receipt.json"); d=json.loads(p.read_text()); d["phase"]="deploy-started"; p.write_text(json.dumps(d))'
-          CANDIDATE_IMAGE=$(python3 -c 'import json; print(json.load(open("shipping-publication-deploy-receipt.json"))["candidateImage"])')
-          # --concurrency is pinned to the memory arithmetic in server/limits.go.
-          gcloud run deploy "${SERVICE_NAME}" \
-            --image="${CANDIDATE_IMAGE}" \
-            --labels="source-sha=${DEPLOY_SHA}" \
-            --region="${REGION}" \
-            --project="${PROJECT_ID}" \
-            --service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com \
-            --allow-unauthenticated \
-            --min-instances=0 \
-            --max-instances=2 \
-            --memory=512Mi \
-            --concurrency=2 \
-            --cpu=1 \
-            --timeout=120 \
-            --quiet
-
-      - name: Record deployed service origin and source
-        id: deployment
-        working-directory: server
-        run: |
-          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
-          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
-          python3 - <<'PY'
-          import json, os, re, subprocess, time
-          from pathlib import Path
-          from urllib.parse import urlsplit
-
-          def cloud(*args):
-              return json.loads(subprocess.check_output(["gcloud", *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
-          def service():
-              return cloud("run", "services", "describe", os.environ["SERVICE_NAME"])
-          def revision(name):
-              value = cloud("run", "revisions", "describe", name)
-              digest = value.get("status", {}).get("imageDigest", "")
-              if "@sha256:" not in digest: raise RuntimeError("revision has no resolved immutable digest")
-              return {"image": digest, "sourceSha": value.get("metadata", {}).get("labels", {}).get("source-sha")}
-          def traffic(value):
-              targets = [{"revisionName": target["revisionName"], "percent": target["percent"]} for target in value["status"].get("traffic", []) if target.get("percent", 0) > 0]
-              if not targets or sum(target["percent"] for target in targets) != 100: raise RuntimeError("serving traffic is incomplete")
-              return sorted(targets, key=lambda target: target["revisionName"])
-          def origin(value):
-              text = value["status"]["url"]
-              url = urlsplit(text)
-              if any(ord(char) < 33 for char in text) or url.scheme != "https" or not url.hostname or not url.hostname.endswith(".run.app") or url.netloc != url.hostname or url.path or url.query or url.fragment: raise RuntimeError("invalid Cloud Run origin")
-              return text
-
-          path = Path("shipping-publication-deploy-receipt.json")
-          receipt = json.loads(path.read_text())
-          receipt["phase"]="verify-serving-identity"
-          path.write_text(json.dumps(receipt))
-          value = service()
-          targets = traffic(value)
-          if len(targets) != 1 or targets[0]["percent"] != 100: raise RuntimeError("candidate must serve all traffic")
-          name = targets[0]["revisionName"]
-          identity = revision(name)
-          if identity["image"] != receipt["candidateImage"] or identity["sourceSha"] != os.environ["DEPLOY_SHA"]: raise RuntimeError("serving image/source differs from immutable candidate")
-          service_origin = origin(value)
-          if service_origin != receipt["serviceOrigin"]: raise RuntimeError("service origin changed")
-          receipt.update(deployedRevision=name, deployedImage=identity["image"], deployedSourceSha=identity["sourceSha"], deployedTraffic=targets, deployedAt=int(time.time()))
-          path.write_text(json.dumps(receipt, sort_keys=True, indent=2)+"\n")
-          Path("chinook-run-origin.txt").write_text(service_origin+"\n")
-          Path("chinook-deploy-sha.txt").write_text(os.environ["DEPLOY_SHA"]+"\n")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as stream: stream.write("origin="+service_origin+"\n")
-          PY
-
-      - name: Verify live profile and cacheable DTQL
-        working-directory: server
-        run: |
-          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
-          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
-          python3 -c 'import json; from pathlib import Path; p=Path("shipping-publication-deploy-receipt.json"); d=json.loads(p.read_text()); d["phase"]="live-acceptance"; p.write_text(json.dumps(d))'
-          python3 smoke_inventory.py --origin https://cloud.openvaultdb.com --inventory fixture/output/inventory.json --publication-receipt shipping-publication-deploy-receipt.json --receipt shipping-publication-live-pending.json
-          # Re-read serving traffic and immutable revision identity after live requests.
-          python3 - <<'PY'
-          import json, os, re, subprocess, time
-          from pathlib import Path
-          from urllib.parse import urlsplit
-
-          def cloud(*args):
-              return json.loads(subprocess.check_output(["gcloud", *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
-          def service():
-              return cloud("run", "services", "describe", os.environ["SERVICE_NAME"])
-          def revision(name):
-              value = cloud("run", "revisions", "describe", name)
-              digest = value.get("status", {}).get("imageDigest", "")
-              if "@sha256:" not in digest: raise RuntimeError("revision has no resolved immutable digest")
-              return {"image": digest, "sourceSha": value.get("metadata", {}).get("labels", {}).get("source-sha")}
-          def traffic(value):
-              targets = [{"revisionName": target["revisionName"], "percent": target["percent"]} for target in value["status"].get("traffic", []) if target.get("percent", 0) > 0]
-              if not targets or sum(target["percent"] for target in targets) != 100: raise RuntimeError("serving traffic is incomplete")
-              return sorted(targets, key=lambda target: target["revisionName"])
-          def origin(value):
-              text = value["status"]["url"]
-              url = urlsplit(text)
-              if any(ord(char) < 33 for char in text) or url.scheme != "https" or not url.hostname or not url.hostname.endswith(".run.app") or url.netloc != url.hostname or url.path or url.query or url.fragment: raise RuntimeError("invalid Cloud Run origin")
-              return text
-
-          receipt=json.loads(Path("shipping-publication-deploy-receipt.json").read_text())
-          value=service()
-          identity=revision(receipt["deployedRevision"])
-          if traffic(value) != receipt["deployedTraffic"] or identity["image"] != receipt["deployedImage"] or identity["sourceSha"] != receipt["mergeSha"]: raise RuntimeError("serving identity changed during live acceptance")
-          PY
-          REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
-          test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
-          mv shipping-publication-live-pending.json shipping-publication-live-receipt.json
-
-      - name: Roll back a failed publication
-        if: ${{ failure() && hashFiles('server/shipping-publication-deploy-receipt.json') != '' }}
-        working-directory: server
-        run: |
-          python3 - <<'PY'
-          import json, os, re, subprocess, time
-          from pathlib import Path
-          from urllib.parse import urlsplit
-
-          def cloud(*args):
-              return json.loads(subprocess.check_output(["gcloud", *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
-          def service():
-              return cloud("run", "services", "describe", os.environ["SERVICE_NAME"])
-          def revision(name):
-              value = cloud("run", "revisions", "describe", name)
-              digest = value.get("status", {}).get("imageDigest", "")
-              if "@sha256:" not in digest: raise RuntimeError("revision has no resolved immutable digest")
-              return {"image": digest, "sourceSha": value.get("metadata", {}).get("labels", {}).get("source-sha")}
-          def traffic(value):
-              targets = [{"revisionName": target["revisionName"], "percent": target["percent"]} for target in value["status"].get("traffic", []) if target.get("percent", 0) > 0]
-              if not targets or sum(target["percent"] for target in targets) != 100: raise RuntimeError("serving traffic is incomplete")
-              return sorted(targets, key=lambda target: target["revisionName"])
-          def origin(value):
-              text = value["status"]["url"]
-              url = urlsplit(text)
-              if any(ord(char) < 33 for char in text) or url.scheme != "https" or not url.hostname or not url.hostname.endswith(".run.app") or url.netloc != url.hostname or url.path or url.query or url.fragment: raise RuntimeError("invalid Cloud Run origin")
-              return text
-
-          import smoke_inventory as smoke
-          path=Path("shipping-publication-deploy-receipt.json")
-          deploy=json.loads(path.read_text())
-          receipt={"trigger":deploy.get("phase","publication-failure"), "failedMerge":deploy["mergeSha"], "failedImage":deploy["candidateImage"], "failedRevision":deploy.get("deployedRevision"), "startedAt":int(time.time()), "priorTraffic":deploy["priorTraffic"], "restoredRevisions":deploy["priorRevisions"], "checks":[], "errors":[]}
-          def check(name, function):
-              try:
-                  function()
-                  receipt["checks"].append({"name":name,"passed":True})
-              except Exception as error:
-                  receipt["errors"].append({"name":name,"error":str(error)})
-                  receipt["checks"].append({"name":name,"passed":False})
-          def restore():
-              targets=",".join(target["revisionName"]+"="+str(target["percent"]) for target in deploy["priorTraffic"])
-              subprocess.run(["gcloud","run","services","update-traffic",os.environ["SERVICE_NAME"],"--project="+os.environ["PROJECT_ID"],"--region="+os.environ["REGION"],"--to-revisions="+targets,"--quiet"],check=True)
-          def verify_identity():
-              value=service()
-              if origin(value) != deploy["serviceOrigin"] or traffic(value) != deploy["priorTraffic"]: raise RuntimeError("restored traffic/origin differs from captured prior state")
-              for name, expected in deploy["priorRevisions"].items():
-                  if revision(name)["image"] != expected["image"]: raise RuntimeError("restored image digest differs")
-          def verify_http():
-              inventory=json.loads(Path("fixture/output/inventory.json").read_text())
-              inventory["databases"]=[db for db in inventory["databases"] if db["id"] not in ("shipping","shipping-logs")]
-              if len(inventory["databases"]) != 6: raise RuntimeError("six established providers required")
-              filtered=Path("fixture/output/rollback-inventory.json")
-              filtered.write_text(json.dumps(inventory))
-              try:
-                  subprocess.run(["python3","smoke_inventory.py","--origin","https://cloud.openvaultdb.com","--inventory",str(filtered),"--receipt","rollback-http-receipt.json"],check=True)
-              finally:
-                  filtered.unlink(missing_ok=True)
-          try:
-              check("restore-traffic",restore)
-              check("restored-immutable-image-and-traffic",verify_identity)
-              check("six-provider-queries-and-proxy-pins",verify_http)
-              for candidate in ("shipping","shipping-logs"):
-                  check("candidate-absent-"+candidate,lambda candidate=candidate: smoke.require_status("https://cloud.openvaultdb.com","/ovdb/dbs/"+candidate,expected=404))
-              check("origin-secret-boundary",lambda: smoke.require_status(deploy["serviceOrigin"],"/ovdb/dbs/chinook",expected=403))
-          finally:
-              receipt["boundaryRequests"]=getattr(smoke,"OBSERVATIONS",[])
-              receipt["completedAt"]=int(time.time())
-              receipt["verified"]=not receipt["errors"]
-              for evidence in ("rollback-http-receipt.json",):
-                  if Path(evidence).exists(): receipt[evidence]=json.loads(Path(evidence).read_text())
-              Path("shipping-publication-rollback-receipt.json").write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
-          if receipt["errors"]: raise SystemExit("rollback verification failed; retained failure receipt")
-          PY
-
-      - name: Publish deployment metadata for the Worker deploy
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          name: chinook-cloudrun-deployment
+          name: ovdb-gateway-deployment
+          if-no-files-found: warn
           path: |
-            server/chinook-run-origin.txt
-            server/chinook-deploy-sha.txt
-            server/shipping-publication-deploy-receipt.json
-            server/shipping-publication-live-receipt.json
-            server/shipping-publication-rollback-receipt.json
-          if-no-files-found: error
-          retention-days: 7
+            server/*receipt.json

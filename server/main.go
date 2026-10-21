@@ -34,7 +34,7 @@ func main() {
 			log.Printf("close sample databases: %v", err)
 		}
 	}()
-	handler, err = withOriginSecret(handler, os.Getenv)
+	handler, err = newGateway(handler, os.Getenv, nil)
 	if err != nil {
 		log.Fatalf("origin secret: %v", err)
 	}
@@ -43,7 +43,7 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second, ErrorLog: safeHTTPErrorLog(os.Stderr)}
+	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10, ErrorLog: safeHTTPErrorLog(os.Stderr)}
 	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	go func() {
