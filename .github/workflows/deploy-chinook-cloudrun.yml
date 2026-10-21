@@ -96,6 +96,12 @@ jobs:
                   serving_hash = sha256_file(fixture / f"{database['id']}.sqlite")
               if source_hash != database["sourceSha256"] or serving_hash != database["servingSha256"] or license_hash != database["licenseSha256"]:
                   raise SystemExit(f"provider receipt mismatch: {database['id']}")
+          # data_filter makes files owner-writable; restore the verified image policy.
+          for path in fixture.rglob("*"):
+              if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                  raise SystemExit(f"unexpected extracted fixture entry: {path}")
+              path.chmod(0o555 if path.is_dir() else 0o444)
+          fixture.chmod(0o555)
           PY
           chmod +x ovdb-cloud
 
