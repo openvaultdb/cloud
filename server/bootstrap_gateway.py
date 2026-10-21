@@ -34,6 +34,10 @@ class ProviderFailure(RuntimeError):
     """Fixed redacted stage/status message only, never an HTTP response body."""
 
 
+class ReconciliationPending(RuntimeError):
+    """Acknowledged exact-generation mutation has not finished reconciling."""
+
+
 class Conflict(RuntimeError):
     """A conditional write lost its fence. Never refresh-and-overwrite."""
 
@@ -261,8 +265,13 @@ class Bootstrap:
             pending = self.state["pending"]
             if self.state.get("unresolved"):
                 raise Conflict("unresolved conditional mutation; root remediation required")
-            if pending.get("responseGeneration") is None or generation(service["metadata"]["generation"]) != pending["responseGeneration"] or digest(config(service)) != pending["configSHA256"] or not ready(service):
+            if pending.get("responseGeneration") is None or generation(service["metadata"]["generation"]) != pending["responseGeneration"] or digest(config(service)) != pending["configSHA256"]:
                 raise Conflict("pending mutation not attributable/reconciled; root remediation required")
+            if not ready(service):
+                status = service.get("status", {})
+                if str(status.get("observedGeneration")) == str(service["metadata"]["generation"]) and any(c.get("type") == "Ready" and c.get("status") == "False" for c in status.get("conditions", [])):
+                    raise RuntimeError("acknowledged mutation readiness failed")
+                raise ReconciliationPending("acknowledged mutation reconciliation pending")
             self.state["fence"] = fence(service)
             self.state.pop("pending")
             self.save(self.state["stage"])
@@ -289,17 +298,13 @@ class Bootstrap:
         self.state["pending"]["responseVersion"] = response_fence["resourceVersion"]
         self.save(self.state["stage"])
         # Read actual state; CLI/HTTP return status alone cannot advance.
-        for _ in range(5):
-            value = self.read()
-            if generation(value["metadata"]["generation"]) != self.state["pending"]["responseGeneration"]:
-                raise Conflict("generation drift after conditional response")
-            if digest(config(value)) == self.state["pending"]["configSHA256"] and ready(value):
-                self.state["fence"] = fence(value)
-                self.state.pop("pending")
-                self.save(self.state["stage"])
-                return value
-            time.sleep(1)
-        raise RuntimeError("bootstrap mutation reconciliation pending")
+        for attempt in range(5):
+            try:
+                return self.current()
+            except ReconciliationPending:
+                if attempt == 4:
+                    raise
+                time.sleep(1)
 
     def closed(self, service):
         if not disabled(service) or tags(service):
@@ -474,7 +479,7 @@ class Bootstrap:
                         raise RuntimeError("protected default credential rejection required")
 
     def seal(self, acceptance_path):
-        if self.state["stage"] not in ("protected-default-enabled-for-mapping", "mapped-accepted"):
+        if self.state["stage"] not in ("protected-default-enabled-for-mapping", "mapped-accepted", "protected-mapped-default-disabled"):
             raise RuntimeError("mapping acceptance requires verified protected opening")
         service = self.current()
         if disabled(service):
@@ -541,6 +546,21 @@ class Bootstrap:
                     self.closed(service)
             else:
                 raise RuntimeError("unsupported bootstrap action")
+        except ReconciliationPending:
+            # A recorded successful response is not an unknown write result.
+            # Preserve its exact-generation checkpoint only with observed closed
+            # default/tag ingress; never promote an Unknown revision to ready.
+            try:
+                value = self.read()
+                pending = self.state["pending"]
+                if generation(value["metadata"]["generation"]) != pending["responseGeneration"] or digest(config(value)) != pending["configSHA256"]:
+                    raise Conflict("pending reconciliation drift")
+                self.closed(value)
+                self.save(self.state["stage"])
+            except Exception:
+                self.state["unresolved"] = "pending reconciliation closure/identity not verified; root remediation required"
+                self.save(self.state["stage"])
+            raise
         except Conflict:
             if self.state:
                 self.state["unresolved"] = "service CAS/version/UID conflict; no blind retry or replacement by name"
@@ -551,8 +571,11 @@ class Bootstrap:
                 self.state["providerFailure"] = str(failure)
             if self.state and self.state.get("quiescenceStarted"):
                 try:
-                    self.close()
-                    self.save("quiesced-after-failure")
+                    mapped_checkpoint = self.state["stage"] in ("protected-default-enabled-for-mapping", "mapped-accepted", "protected-mapped-default-disabled")
+                    service = self.close()
+                    if mapped_checkpoint:
+                        self.protected(service)
+                    self.save("protected-mapped-default-disabled" if mapped_checkpoint else "quiesced-after-failure")
                 except Exception:
                     self.state["unresolved"] = "post-quiescence closure not verified; root remediation required"
                     self.save(self.state["stage"])

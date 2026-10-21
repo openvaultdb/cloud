@@ -191,15 +191,18 @@ class BootstrapTest(unittest.TestCase):
         with patch.object(deploy,"cloud",side_effect=lag),patch.object(bootstrap.time,"sleep"):
             with self.assertRaises(RuntimeError): self.controller().run("quiesce")
         self.assertNotEqual(self.controller().state["stage"],"quiesced")
-        self.assertIn("unresolved",self.controller().state)
+        self.assertNotIn("unresolved",self.controller().state)
+        self.assertIn("pending",self.controller().state)
 
-    def test_real_external_gates_precede_final_default_retirement(self):
+    def mapped_acceptance_fixture(self):
         self.protect();self.controller().run("open-for-mapping")
         self.mapping=[{"metadata":{"name":host,"uid":"mapping-"+host,"generation":1},"spec":{"routeName":"chinook-ovdb"},"status":{"observedGeneration":1,"resourceRecords":[{"type":"A","rrdata":"192.0.2.99"}],"conditions":[{"type":"Ready","status":"True"}]}} for host in bootstrap.HOSTS]
         proof={"contract":"ovdb-functional-mapped-acceptance/1","serviceUid":"uid1","identity":self.controller().state["candidate"],"publicHosts":bootstrap.HOSTS,"originRejected":True,"routesAccepted":True,"authenticatedJourneyAccepted":True,"completeIngressInventory":True,"provenance":["root actual independent journey"],"observedAt":int(time.time()),"originIdentity":{**bootstrap.target(),"defaultUrl":"https://service.run.app"},"evidenceSHA256":{key:"f"*64 for key in ("dns","originCertificates","edgeRules","dataPinsStreaming","authenticatedDeviceDatabase")}}
         Path("acceptance.json").write_text(json.dumps(proof))
         Path("fixture/output").mkdir(parents=True)
         Path("fixture/output/inventory.json").write_text(json.dumps({"databases":[{"id":name} for name in ("adventureworks","employees","chinook","northwind","pubs","sakila","shipping","shipping-logs")]}))
+    def test_real_external_gates_precede_final_default_retirement(self):
+        self.mapped_acceptance_fixture()
         with patch.object(bootstrap.subprocess,"run") as run:
             self.controller().run("seal-after-acceptance",acceptance_path="acceptance.json")
         self.assertEqual(run.call_count,2)
@@ -208,6 +211,79 @@ class BootstrapTest(unittest.TestCase):
         self.assertTrue(self.controller().state["functionalRollbackAccepted"])
         self.assertFalse(self.controller().state["routesAccepted"])
         self.assertNotIn("identity",self.controller().state)
+
+    def test_acknowledged_unknown_startup_resumes_same_generation_when_ready(self):
+        self.quiesce()
+        real_read=self.read_cloud
+        def delayed(*args):
+            value=real_read(*args)
+            if args[:3]==("run","services","describe") and len(self.calls)>=2:
+                value["status"]["observedGeneration"]=value["metadata"]["generation"]-1
+                value["status"]["conditions"]=[{"type":"Ready","status":"Unknown"}]
+            return value
+        with patch.object(deploy,"cloud",side_effect=delayed),patch.object(bootstrap.time,"sleep"):
+            with self.assertRaises(RuntimeError): self.controller().run("protect")
+            writes=len(self.calls)
+            with self.assertRaises(RuntimeError): self.controller().run("protect")
+            self.assertEqual(len(self.calls),writes)
+        state=self.controller().state
+        self.assertEqual(state["stage"],"protected-deploying")
+        self.assertIn("responseGeneration",state["pending"])
+        self.assertNotIn("unresolved",state)
+        self.assertFalse(state["functionalRollbackAccepted"])
+        self.assertTrue(bootstrap.disabled(self.service))
+        self.controller().run("protect")
+        self.assertEqual(self.controller().state["stage"],"protected-serving-default-disabled")
+        self.assertNotIn("pending",self.controller().state)
+        self.assertTrue(all(bootstrap.disabled(call) for call in self.calls))
+
+    def assert_failed_startup_not_resumable(self, condition, drift=False):
+        self.quiesce()
+        real_read=self.read_cloud
+        def failed(*args):
+            value=real_read(*args)
+            if args[:3]==("run","services","describe") and len(self.calls)>=2:
+                value["status"]["conditions"]=[{"type":"Ready","status":condition}]
+                if drift: value["spec"]["template"]["spec"]["timeoutSeconds"]=121
+            return value
+        with patch.object(deploy,"cloud",side_effect=failed),patch.object(bootstrap.time,"sleep"):
+            with self.assertRaises(RuntimeError): self.controller().run("protect")
+        self.assertIn("unresolved",self.controller().state)
+        self.assertFalse(self.controller().state["functionalRollbackAccepted"])
+        self.assertTrue(bootstrap.disabled(self.service))
+
+    def test_actual_failed_startup_is_not_pending_success(self):
+        self.assert_failed_startup_not_resumable("False")
+
+    def test_pending_config_drift_is_not_resumable(self):
+        self.assert_failed_startup_not_resumable("Unknown",drift=True)
+
+    def test_mapped_transient_probe_retry_stays_closed_and_requires_fresh_acceptance(self):
+        self.mapped_acceptance_fixture()
+        with patch.object(bootstrap.subprocess,"run",side_effect=RuntimeError("transient probe failure")):
+            with self.assertRaises(RuntimeError): self.controller().run("seal-after-acceptance",acceptance_path="acceptance.json")
+        state=self.controller().state
+        self.assertEqual(state["stage"],"protected-mapped-default-disabled")
+        self.assertNotIn("unresolved",state)
+        self.assertFalse(state["functionalRollbackAccepted"])
+        self.assertFalse(state["routesAccepted"])
+        writes=len(self.calls)
+        proof=json.loads(Path("acceptance.json").read_text())
+        proof["observedAt"]=int(time.time())-301
+        Path("acceptance.json").write_text(json.dumps(proof))
+        with patch.object(bootstrap.subprocess,"run") as run:
+            with self.assertRaises(RuntimeError): self.controller().run("seal-after-acceptance",acceptance_path="acceptance.json")
+            run.assert_not_called()
+        self.assertEqual(self.controller().state["stage"],"protected-mapped-default-disabled")
+        proof["observedAt"]=int(time.time())
+        Path("acceptance.json").write_text(json.dumps(proof))
+        with patch.object(bootstrap.subprocess,"run") as run:
+            self.controller().run("seal-after-acceptance",acceptance_path="acceptance.json")
+        self.assertEqual(run.call_count,2)
+        self.assertEqual(self.controller().state["stage"],"mapped-accepted-default-disabled")
+        self.assertTrue(self.controller().state["functionalRollbackAccepted"])
+        self.assertTrue(all(bootstrap.disabled(call) for call in self.calls[writes:]))
+        self.assertEqual(len(self.mapping),2)
 
     def test_missing_external_auth_or_stale_mapping_proof_recloses(self):
         self.protect();self.controller().run("open-for-mapping")

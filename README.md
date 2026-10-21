@@ -131,7 +131,11 @@ HTTP error bodies; origin/proxy Secret Manager values are never fetched.409 or
 UID/version drift is unresolved and never triggers blind retry/replacement by
 name. A lost write response also remains unresolved; only a durably recorded
 response generation can authorize reconciliation on resume. Root remediation is
-required when safe closure cannot be attributed.
+required when safe closure cannot be attributed. An acknowledged exact-generation
+mutation with unknown readiness retains its in-progress checkpoint while closure
+is observed; only later actual Ready reconciliation permits advancement. Actual
+failed readiness, version/config drift and missing response attribution remain
+failures.
 
 Quiescence disables default and removes all tags before any protected image
 change. Protection keeps default disabled, pins digest/source/credential references
@@ -141,7 +145,11 @@ duplicate credential probes must reject known data/auth/static paths with valid
 TLS. Active default/alias URLs must return403; removed tag URLs may return403
 or404. Network/TLS errors, unrelated404 or5xx are not closure evidence. Every later
 failure re-closes with the expected-version fence, or records an unresolved
-incident; captured naked traffic is never restored.
+incident; captured naked traffic is never restored. A safely reclosed protected
+mapping-stage failure retains its candidate checkpoint. Acceptance can retry
+while default remains disabled, but must re-read current mappings/protection and
+fresh external evidence and rerun live probes; no mapping recreation or naked
+reopening is authorized.
 
 `status` stops pending external mapping-resource/DNS/certificate/real both-host
 data/auth gates. `seal-after-acceptance` additionally requires a fresh root-owned
