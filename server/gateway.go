@@ -245,13 +245,16 @@ func canonicalGatewayPath(raw string) (string, error) {
 	}
 	return out, nil
 }
-func (g *gateway) limited(w http.ResponseWriter, r *http.Request, class string, limit int) bool {
+func (g *gateway) admit(r *http.Request, class string, limit int) bool {
 	ip := r.Header.Values("CF-Connecting-IP")
 	actor := "unknown"
 	if len(ip) == 1 {
 		actor = gatewayActor(ip[0])
 	}
-	if g.limiter.allow(class, actor, limit) {
+	return g.limiter.allow(class, actor, limit)
+}
+func (g *gateway) limited(w http.ResponseWriter, r *http.Request, class string, limit int) bool {
+	if g.admit(r, class, limit) {
 		return false
 	}
 	w.Header().Set("Retry-After", "60")
@@ -367,11 +370,27 @@ func (g *gateway) auth(w http.ResponseWriter, r *http.Request, p string) {
 		gatewayError(w, 405, "Method not allowed")
 		return
 	}
-	class, limit := "device-lookup", 60
+	limit := 60
 	if p == "/oauth/device/code" {
-		class, limit = "device-start", 10
+		limit = 10
 	}
-	if g.limited(w, r, class, limit) {
+	// The key comes from the fixed owning route, never a caller-selected ID.
+	if !g.admit(r, "device:"+route[1], limit) {
+		w.Header().Set("Retry-After", "60")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
+		body := map[string]string{"error": "Too many attempts. Try again in one minute."}
+		switch p {
+		case "/oauth/token":
+			body = map[string]string{"error": "slow_down", "error_description": "Polling limit exceeded."}
+		case "/oauth/device/code":
+			body = map[string]string{"error": "temporarily_unavailable", "error_description": "Try again in one minute."}
+		case "/oauth/userinfo", "/oauth/revoke":
+			body = map[string]string{"error": "temporarily_unavailable"}
+		}
+		w.WriteHeader(429)
+		_ = json.NewEncoder(w).Encode(body)
 		return
 	}
 	if g.proxy == nil {

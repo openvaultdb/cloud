@@ -23,11 +23,18 @@ class GatewayDeploymentTest(unittest.TestCase):
                 source=SHA if candidate else rollback["sourceSha"]
                 if candidate and scenario=="wrong-image": image=image[:-1]+"d"
                 if candidate and scenario=="wrong-source": source="d"*40
-                return {"status":{"imageDigest":image},"metadata":{"labels":{"source-sha":source}},"spec":{"containers":[{"env":[{"name":"OVDB_ORIGIN_SECRET","valueFrom":{"secretKeyRef":{"name":"origin","key":"1"}}}]}]}}
+                return {"status":{"imageDigest":image},"metadata":{"labels":{"source-sha":source}},"spec":{"containers":[{"ports":[{"containerPort":8080}],"startupProbe":{"tcpSocket":{"port":8080}},"env":[{"name":"OVDB_ORIGIN_SECRET","valueFrom":{"secretKeyRef":{"name":"origin","key":"1"}}}]}]}}
             if args[:3]==("run","services","describe"):
-                return {"status":{"url":"https://service.run.app","traffic":[{"revisionName":state["revision"],"percent":100}]}}
+                status={"traffic":[{"revisionName":state["revision"],"percent":100}]}
+                if scenario not in ("no-default-url","no-default-url-live-failure"): status["url"]="https://service.run.app"
+                container={"ports":[{"containerPort":8080}],"startupProbe":{"httpGet":{"path":"/health"}}}
+                if scenario=="http-liveness": container["livenessProbe"]={"httpGet":{"path":"/health"}}
+                if scenario=="http-readiness": container["readinessProbe"]={"httpGet":{"path":"/health"}}
+                return {"status":status,"spec":{"template":{"spec":{"containers":[container]}}}}
             if args[:2]==("run","deploy"):
                 self.assertIn("--no-traffic",args)
+                self.assertIn("--port=8080",args)
+                self.assertIn("--startup-probe=tcpSocket.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24",args)
                 self.assertIn("--image="+IMAGE,args)
                 self.assertEqual("--no-default-url" in args,phase=="mapped")
                 return {"status":{"latestCreatedRevisionName":"created-candidate"}}
@@ -37,23 +44,57 @@ class GatewayDeploymentTest(unittest.TestCase):
                 state["revision"]=route.split("=",1)[1].rsplit("=",1)[0]
                 return {}
             raise AssertionError(args)
+        git_reads=0
         def output(args,**kwargs):
+            nonlocal git_reads
             if args[0] == "git":
-                return ("d"*40 if scenario=="stale-main" else SHA)+"\trefs/heads/main\n"
+                git_reads += 1
+                stale = scenario=="stale-main" or scenario=="late-stale-main" and git_reads>1
+                return ("d"*40 if stale else SHA)+"\trefs/heads/main\n"
             return "sha256:"+"a"*64
         def run(args,**kwargs):
             calls.append(tuple(args))
-            if scenario=="live-failure" and "gateway-live-receipt.json" in args:
+            if scenario in ("live-failure","no-default-url-live-failure") and "gateway-live-receipt.json" in args:
                 raise RuntimeError("synthetic live failure")
-        environment={"DEPLOY_SHA":SHA,"OVDB_ORIGIN_SECRET_BINDING":"origin:1","OVDB_DEVICE_AUTH_PROXY_SECRET_BINDING":"proxy:2","SNEAT_API_ORIGIN":"https://sneat.example","SERVICE_NAME":"gateway","OVDB_SECURE_ROLLBACK_REVISION":"secure-prior","IMAGE":"registry.example/server:source"}
+        environment={"PROJECT_ID":"test-project","REGION":"test-region","OVDB_DEFAULT_ORIGIN_URL":"https://service.run.app","DEPLOY_SHA":SHA,"OVDB_ORIGIN_SECRET_BINDING":"origin:1","OVDB_DEVICE_AUTH_PROXY_SECRET_BINDING":"proxy:2","SNEAT_API_ORIGIN":"https://sneat.example","SERVICE_NAME":"gateway","OVDB_SECURE_ROLLBACK_REVISION":"secure-prior","IMAGE":"registry.example/server:source"}
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), patch.dict(os.environ,environment), patch.object(deploy,"cloud",side_effect=cloud), patch.object(deploy.subprocess,"check_output",side_effect=output), patch.object(deploy.subprocess,"run",side_effect=run), patch("sys.argv",["deploy_gateway.py","--phase",phase]):
-            Path("secure-rollback-acceptance.json").write_text(json.dumps({"identity":rollback,"originRejected":proof,"routesAccepted":True}))
+            if scenario=="invalid-retained-url": os.environ["OVDB_DEFAULT_ORIGIN_URL"]="https://attacker.example"
+            if scenario=="unbound-retained-url": os.environ["OVDB_DEFAULT_ORIGIN_URL"]="https://other.run.app"
+            Path("secure-rollback-acceptance.json").write_text(json.dumps({"identity":rollback,"originRejected":proof,"routesAccepted":True,"originIdentity":{"project":"test-project","region":"test-region","service":"gateway","defaultUrl":"https://service.run.app"}}))
             error=None
             try: deploy.main()
             except RuntimeError as exc: error=exc
             receipt=json.loads(Path("shipping-publication-deploy-receipt.json").read_text()) if Path("shipping-publication-deploy-receipt.json").exists() else None
             restored=json.loads(Path("shipping-publication-rollback-receipt.json").read_text()) if Path("shipping-publication-rollback-receipt.json").exists() else None
         return calls,state,error,receipt,restored
+    def test_disabled_default_url_uses_retained_identity_for_deploy_and_rollback(self):
+        for scenario in ("no-default-url","no-default-url-live-failure"):
+            calls,_,error,_,restored=self.exercise(scenario)
+            probes=[a for a in calls if "gateway_probe.py" in a]
+            self.assertTrue(probes)
+            for call in probes: self.assertEqual(call[call.index("--default-url")+1],"https://service.run.app")
+            if scenario=="no-default-url": self.assertIsNone(error)
+            else:
+                self.assertIsNotNone(error)
+                self.assertTrue(restored["liveAcceptancePassed"])
+    def test_pre_mutation_stale_main_has_zero_traffic_or_deployment_writes(self):
+        calls,state,error,_,restored=self.exercise("stale-main")
+        self.assertIsNotNone(error)
+        self.assertEqual(state["revision"],"prior")
+        self.assertIsNone(restored)
+        self.assertFalse(any(a[:2]==("run","deploy") or a[:3]==("run","services","update-traffic") for a in calls))
+    def test_inherited_http_liveness_and_readiness_fail_before_mutation(self):
+        for scenario in ("http-liveness","http-readiness"):
+            calls,state,error,_,_=self.exercise(scenario)
+            self.assertIsNotNone(error)
+            self.assertEqual(state["revision"],"prior")
+            self.assertFalse(any(a[:2]==("run","deploy") or a[:3]==("run","services","update-traffic") for a in calls))
+    def test_retained_origin_rejects_invalid_or_unbound_endpoint_before_mutation(self):
+        for scenario in ("invalid-retained-url","unbound-retained-url"):
+            calls,state,error,_,_=self.exercise(scenario)
+            self.assertIsNotNone(error)
+            self.assertEqual(state["revision"],"prior")
+            self.assertFalse(any(a[:2]==("run","deploy") or a[:3]==("run","services","update-traffic") for a in calls))
     def test_pinned_old_traffic_routes_only_verified_created_revision(self):
         calls,state,error,receipt,_=self.exercise()
         self.assertIsNone(error)
@@ -61,7 +102,7 @@ class GatewayDeploymentTest(unittest.TestCase):
         self.assertEqual(receipt["phase"],"public-data-accepted-auth-journey-pending")
         self.assertEqual(len([a for a in calls if a[:3]==("run","services","update-traffic")]),1)
     def test_identity_mismatch_never_routes_candidate_and_stays_red(self):
-        for case in ("wrong-image","wrong-source","live-failure","stale-main"):
+        for case in ("wrong-image","wrong-source","live-failure","late-stale-main"):
             with self.subTest(case=case):
                 calls,state,error,_,restored=self.exercise(case)
                 self.assertIsNotNone(error)

@@ -70,6 +70,12 @@ admits only an exact successful current-main artifact run. Its controller
 verifies checksums/provider bytes, creates a no-traffic immutable image revision,
 checks image/source identity, then routes exactly that revision. HTTP acceptance
 and post-acceptance identity checks are mandatory. A failed candidate stays red.
+The accepted secure rollback receipt must bind `originIdentity` (project, region,
+service and stable defaultUrl) to `OVDB_DEFAULT_ORIGIN_URL`. That retained
+non-secret identity is probed even when default-URL disabling removes status.url;
+the controller never re-enables the endpoint. TCP startup is pinned to8080;
+inherited liveness/readiness probes are refused for owner review, and both
+candidate and rollback revisions must satisfy that same health contract.
 Rollback requires an independently accepted secure revision and verifies both
 restored identity and HTTP behavior; an old unprotected revision is ineligible.
 
