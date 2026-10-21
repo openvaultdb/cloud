@@ -50,9 +50,11 @@ jobs:
         run: |
           test "$(cat ovdb-cloud.source-sha)" = "${DEPLOY_SHA}"
           sha256sum --check ovdb-cloud.sha256
+          sha256sum --check provider-fixture.tar.sha256
           python3 - <<'PY'
           import hashlib
           import json
+          import tarfile
           from pathlib import Path
 
           def sha256_file(path):
@@ -61,6 +63,16 @@ jobs:
                   while chunk := source.read(1024 * 1024):
                       digest.update(chunk)
               return digest.hexdigest()
+
+          # Accept only regular fixture files/directories; never links or escapes.
+          with tarfile.open("provider-fixture.tar", "r:") as archive:
+              for member in archive.getmembers():
+                  path = Path(member.name)
+                  if (path.is_absolute() or ".." in path.parts
+                          or path.parts[:2] != ("fixture", "output")
+                          or not (member.isfile() or member.isdir())):
+                      raise SystemExit(f"unsafe provider fixture archive entry: {member.name}")
+              archive.extractall(".", filter="data")
 
           fixture = Path("fixture/output")
           inventory = json.loads((fixture / "inventory.json").read_text())
