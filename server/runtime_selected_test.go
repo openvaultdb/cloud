@@ -24,6 +24,20 @@ func selectedInventoryFixture(t *testing.T) (string, []runtimeDatabase) {
 	if err != nil {
 		t.Fatalf("prepare tiny fixtures: %v\n%s", err, output)
 	}
+	// The production preparation step seals its complete output tree. These
+	// synthetic fixtures are mutated below to exercise fail-closed startup
+	// checks, so make this test-owned copy writable after preparation.
+	if err := filepath.Walk(filepath.Join(directory, "output"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return os.Chmod(path, 0o755)
+		}
+		return os.Chmod(path, 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(directory, "output", "inventory.json")
 	providers, err := loadRuntimeInventory(path)
 	if err != nil {

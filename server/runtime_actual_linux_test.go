@@ -113,7 +113,7 @@ func TestActualProductionProbe(t *testing.T) {
 			if err := json.Unmarshal(body, &document); err != nil {
 				t.Fatal(err)
 			}
-			if len(document.Databases) != 8 {
+			if len(document.Databases) != 10 {
 				t.Fatalf("actual executable mounted %d databases", len(document.Databases))
 			}
 			receipt["databases"] = document.Databases
@@ -643,8 +643,8 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		}
 	}()
 	receipt["startup_seconds"] = time.Since(started).Seconds()
-	if len(providers) != 12 {
-		t.Fatalf("shipping image mounted %d providers, want six SQLite plus six PostgreSQL", len(providers))
+	if len(providers) != 16 {
+		t.Fatalf("shipping image mounted %d providers, want nine SQLite, one native inGitDB, plus six PostgreSQL", len(providers))
 	}
 	receipt["provider_count"] = len(providers)
 	var mountedIDs []string
@@ -656,9 +656,10 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 	for _, source := range demoPostgresSources {
 		wantMountedIDs = append(wantMountedIDs, source.databaseID, source.databaseID+"-postgresql")
 	}
+	wantMountedIDs = append(wantMountedIDs, "shipping", "shipping-logs", "geonames", "ror")
 	sort.Strings(wantMountedIDs)
 	if strings.Join(mountedIDs, "\n") != strings.Join(wantMountedIDs, "\n") {
-		t.Fatal("shipping image did not mount the expected six SQLite and six PostgreSQL sources")
+		t.Fatal("shipping image did not mount the expected eight file-backed and six PostgreSQL sources")
 	}
 	receipt["provider_ids"] = mountedIDs
 
@@ -1076,8 +1077,8 @@ func TestActualCapacity(t *testing.T) {
 		}
 	}()
 	receipt["checked_startup_seconds"] = time.Since(started).Seconds()
-	if len(providers) != 8 || time.Since(started) >= 240*time.Second {
-		t.Fatal("full eight-provider checked startup failed probe ceiling")
+	if len(providers) != 10 || time.Since(started) >= 240*time.Second {
+		t.Fatal("full ten-provider checked startup failed probe ceiling")
 	}
 	mounted, err := actualCgroup()
 	if err != nil {

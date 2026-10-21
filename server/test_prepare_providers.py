@@ -17,7 +17,7 @@ class PrepareProvidersTest(unittest.TestCase):
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
-        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [provider["id"] for provider in providers])
+        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [provider["id"] for provider in providers])
         by_id = {provider["id"]: provider for provider in providers}
         self.assertTrue(by_id["adventureworks"]["requirePublishedQuery"])
         self.assertTrue(by_id["employees"]["requirePublishedQuery"])
@@ -35,7 +35,7 @@ class PrepareProvidersTest(unittest.TestCase):
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)
             runtime = json.loads(runtime_path.read_text())
             self.assertEqual(1, runtime["version"])
-            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila"], [database["id"] for database in runtime["databases"]])
+            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [database["id"] for database in runtime["databases"]])
             for database in runtime["databases"]:
                 self.assertTrue((output / database["manifest"]).is_file())
                 self.assertTrue((output / database["license"]).is_file())

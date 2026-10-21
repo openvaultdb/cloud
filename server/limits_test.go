@@ -74,6 +74,8 @@ var measuredProviders = []string{
 	"northwind@e74726515c3833620b54b7a50d1d273276dd23c1",
 	"pubs@6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",
 	"sakila@cb9a81a8cbedcd8831737f281f888d5d584fae85",
+	"shipping-logs@e4a714f915b147c357afdfffe103ca88e917b8cb",
+	"shipping@04128331f0357ca231441cb8e8aaa4a94c659772",
 }
 
 // requestClass is a kind of request an instance may run: how many may run at

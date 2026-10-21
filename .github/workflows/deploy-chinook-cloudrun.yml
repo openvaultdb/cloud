@@ -64,12 +64,24 @@ jobs:
 
           fixture = Path("fixture/output")
           inventory = json.loads((fixture / "inventory.json").read_text())
-          if inventory.get("version") != 1 or not inventory.get("databases"):
+          if inventory.get("version") != 2 or not inventory.get("databases"):
               raise SystemExit("missing generated provider inventory")
           for database in inventory["databases"]:
               source_hash = (fixture / f"{database['id']}.source-sha256").read_text().strip()
-              serving_hash = sha256_file(fixture / f"{database['id']}.sqlite")
               license_hash = sha256_file(fixture / database["license"])
+              if database.get("storageEngine", "sqlite") == "ingitdb":
+                  root = fixture / database["nativeRoot"]
+                  actual = []
+                  for pin in database["nativeFiles"]:
+                      path = root / pin["path"]
+                      if sha256_file(path) != pin["sha256"] or path.stat().st_size != pin["bytes"]:
+                          raise SystemExit(f"native provider receipt mismatch: {database['id']} {pin['path']}")
+                      actual.append(pin["path"])
+                  if len(actual) != 8:
+                      raise SystemExit("native provider inventory must contain exactly eight files")
+                  serving_hash = database["servingSha256"]
+              else:
+                  serving_hash = sha256_file(fixture / f"{database['id']}.sqlite")
               if source_hash != database["sourceSha256"] or serving_hash != database["servingSha256"] or license_hash != database["licenseSha256"]:
                   raise SystemExit(f"provider receipt mismatch: {database['id']}")
           PY
@@ -92,6 +104,21 @@ jobs:
         run: |
           docker build --file server/Dockerfile --tag "${IMAGE}" server
           docker push "${IMAGE}"
+
+      - name: Capture rollback target
+        working-directory: server
+        run: |
+          gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format=json > prior-service.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          service=json.loads(Path("prior-service.json").read_text())
+          status=service.get("status", {})
+          spec=service.get("spec", {}).get("template", {}).get("spec", {})
+          receipt={"priorRevision":status.get("latestReadyRevisionName"),"priorImage":(spec.get("containers") or [{}])[0].get("image")}
+          if not receipt["priorRevision"] or not receipt["priorImage"]: raise SystemExit("rollback target is incomplete")
+          Path("shipping-publication-deploy-receipt.json").write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
+          PY
 
       - name: Deploy the public read-only service
         run: |
@@ -140,6 +167,16 @@ jobs:
           test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
           printf '%s\n' "${SERVICE_URL}" > chinook-run-origin.txt
           printf '%s\n' "${DEPLOY_SHA}" > chinook-deploy-sha.txt
+          REVISION=$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format='value(status.latestReadyRevisionName)')
+          IMAGE_DIGEST=$(gcloud artifacts docker images describe "${IMAGE}" --format='value(image_summary.digest)')
+          python3 - "${DEPLOY_SHA}" "${REVISION}" "${IMAGE}" "${IMAGE_DIGEST}" "${SERVICE_URL}" <<'PY'
+          import json,sys
+          from pathlib import Path
+          path=Path("shipping-publication-deploy-receipt.json")
+          receipt=json.loads(path.read_text()) if path.exists() else {}
+          receipt.update(dict(zip(("mergeSha","deployedRevision","image","imageDigest","serviceOrigin"),sys.argv[1:])))
+          path.write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
+          PY
           echo "origin=${SERVICE_URL}" >> "${GITHUB_OUTPUT}"
 
       # Live HTTP queries remain off until an operator explicitly opts in.
@@ -148,8 +185,10 @@ jobs:
         if: ${{ vars.OVDB_CLOUD_RUN_SMOKE_ENABLED == 'true' }}
         working-directory: server
         env:
-          SERVICE_URL: ${{ steps.deployment.outputs.origin }}
+          SERVICE_URL: https://cloud.openvaultdb.com
+          SERVICE_ORIGIN: ${{ steps.deployment.outputs.origin }}
         run: |
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "${SERVICE_ORIGIN}/ovdb/dbs/chinook")" = 403
           curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
             "${SERVICE_URL}/ovdb/dbs/chinook" > "${RUNNER_TEMP}/chinook-profile.html"
           grep -q 'https://cloud.openvaultdb.com/ovdb/dbs/chinook' "${RUNNER_TEMP}/chinook-profile.html"
@@ -182,15 +221,56 @@ jobs:
           jq -e '(.records | length == 2) and all(.records[]; (.data.id | type == "string") and ((.data.id | length) > 0) and (.key == ("Order Details/" + .data.id)))' "${RUNNER_TEMP}/northwind-result.json"
           grep -iq '^access-control-allow-origin: https://northwind.demodb.dev' "${RUNNER_TEMP}/northwind-headers"
           python3 smoke_inventory.py --origin "${SERVICE_URL}" --inventory fixture/output/inventory.json
+          curl --fail-with-body --silent --show-error --header 'Content-Type: application/json' --data '{"query":"from: {name: requests}\nwhere: {op: ==, left: {field: order_id}, right: {value: 11062}}\nlimit: 1"}' "${SERVICE_URL}/v1/databases/shipping/dtql" | jq -e '.records | length == 1'
+          curl --fail-with-body --silent --show-error --header 'Content-Type: application/json' --data '{"query":"from: {name: baseline}\nlimit: 100"}' "${SERVICE_URL}/v1/databases/shipping-logs/dtql" | jq -e 'any(.records[]; .key == "baseline/attempt-11062-1-e1")'
+          for item in 'recovery11045example attempt-11045-2-e1' 'recovery11062example attempt-11062-2-e1'; do
+            set -- ${item}
+            curl --fail-with-body --silent --show-error "${SERVICE_URL}/v1/databases/shipping-logs/records/$1/$2" | jq -e --arg key "$2" '.data.event_id == $key'
+          done
+          for pair in 'shipping https://shipping.demodb.dev requests' 'shipping-logs https://shipping-logs.demodb.dev baseline'; do
+            set -- ${pair}
+            curl --fail-with-body --silent --show-error --dump-header "${RUNNER_TEMP}/cors-$1" --header "Origin: $2" --header 'Content-Type: application/json' --data "{\"query\":\"from: {name: $3}\\nlimit: 1\"}" "${SERVICE_URL}/v1/databases/$1/dtql" >/dev/null
+            grep -iq "^access-control-allow-origin: $2" "${RUNNER_TEMP}/cors-$1"
+          done
+          test -z "$(curl --silent --dump-header - --output /dev/null --header 'Origin: https://undeclared.invalid' "${SERVICE_URL}/v1/databases/shipping" | grep -i '^access-control-allow-origin:' || true)"
+          python3 - <<'PY'
+          import json,hashlib,os,time
+          from pathlib import Path
+          receipt={"mergeSha":os.environ["DEPLOY_SHA"],"verifiedAt":int(time.time()),"checks":{"inventory":True,"shipping":True,"shippingLogs":True,"establishedProviders":True}}
+          receipt["sha256"]=hashlib.sha256(json.dumps(receipt,sort_keys=True).encode()).hexdigest()
+          Path("shipping-publication-live-receipt.json").write_text(json.dumps(receipt,sort_keys=True,indent=2)+"\n")
+          PY
           REMOTE_MAIN=$(git ls-remote origin refs/heads/main) || exit 1
           test "${REMOTE_MAIN%%[[:space:]]*}" = "${DEPLOY_SHA}"
 
+      - name: Roll back a failed publication
+        if: ${{ failure() && hashFiles('server/shipping-publication-deploy-receipt.json') != '' }}
+        working-directory: server
+        env:
+          SERVICE_URL: https://cloud.openvaultdb.com
+          SERVICE_ORIGIN: ${{ steps.deployment.outputs.origin }}
+        run: |
+          PRIOR_REVISION=$(jq -r .priorRevision shipping-publication-deploy-receipt.json)
+          gcloud run services update-traffic "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --to-revisions="${PRIOR_REVISION}=100" --quiet
+          for provider in adventureworks employees chinook northwind pubs sakila; do
+            curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors "${SERVICE_URL}/ovdb/dbs/${provider}" >/dev/null
+          done
+          for candidate in shipping shipping-logs; do
+            test "$(curl --silent --output /dev/null --write-out '%{http_code}' "${SERVICE_URL}/ovdb/dbs/${candidate}")" = 404
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "${SERVICE_ORIGIN}/ovdb/dbs/chinook")" = 403
+          jq -n --arg trigger failure --arg failedMerge "${DEPLOY_SHA}" --arg restoredRevision "${PRIOR_REVISION}" '{trigger:$trigger,failedMerge:$failedMerge,restoredRevision:$restoredRevision,establishedProvidersVerified:true,candidatesAbsent:true,originSecretBoundaryVerified:true}' > shipping-publication-rollback-receipt.json
+
       - name: Publish deployment metadata for the Worker deploy
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: chinook-cloudrun-deployment
           path: |
             server/chinook-run-origin.txt
             server/chinook-deploy-sha.txt
+            server/shipping-publication-deploy-receipt.json
+            server/shipping-publication-live-receipt.json
+            server/shipping-publication-rollback-receipt.json
           if-no-files-found: error
           retention-days: 7

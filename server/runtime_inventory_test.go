@@ -1,14 +1,81 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
+	directory := t.TempDir()
+	root := filepath.Join(directory, "shipping-logs")
+	definition := []byte(`{"record_file":{"name":"records.jsonl","type":"[]map[string]any","format":"jsonl"},"primary_key":["event_id"],"columns":{"event_id":{"type":"string","required":true,"min_length":1},"kind":{"type":"string","required":true}},"columns_order":["event_id","kind"]}`)
+	files := map[string][]byte{
+		".ingitdb/settings.yaml":         []byte(`{"languages":[{"required":"en"}]}`),
+		".ingitdb/root-collections.yaml": []byte(`{"baseline":"collections/baseline","recovery11045example":"collections/recovery11045example","recovery11062example":"collections/recovery11062example"}`),
+	}
+	for _, id := range []string{"baseline", "recovery11045example", "recovery11062example"} {
+		files["collections/"+id+"/.collection/definition.yaml"] = definition
+		files["collections/"+id+"/records.jsonl"] = []byte(`{"event_id":"` + id + `-e1","kind":"observed"}` + "\n")
+	}
+	var pins []runtimePinnedFile
+	for name, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		pins = append(pins, runtimePinnedFile{Path: name, SHA256: digest(content), Bytes: int64(len(content))})
+	}
+	manifest := []byte("database:\n  id: shipping-logs\n  schema_mode: schemaless\nstorage:\n  engine: ingitdb\n  path: ./shipping-logs\n")
+	license := []byte("CC0")
+	for name, content := range map[string][]byte{"shipping-logs.yaml": manifest, "shipping-logs.source-sha256": []byte(strings.Repeat("a", 64) + "\n"), "license.md": license} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := runtimeDatabase{StorageEngine: "ingitdb", NativeRoot: "shipping-logs", NativeFiles: pins, ManifestSHA256: digest(manifest), ID: "shipping-logs", Manifest: "shipping-logs.yaml", CORSOrigins: []string{"https://shipping-logs.demodb.dev"}, ProviderRepository: "demo-db/shipping-logs", ProviderRevision: strings.Repeat("b", 40), SourceSHA256: strings.Repeat("a", 64), ServingSHA256: strings.Repeat("c", 64), License: "license.md", LicenseSHA256: digest(license), SmokeRecordset: "baseline", SmokeRecordsets: []string{"baseline", "recovery11045example", "recovery11062example"}}
+	data, _ := json.Marshal(runtimeInventory{Version: 2, Databases: []runtimeDatabase{provider}})
+	inventoryPath := filepath.Join(directory, "inventory.json")
+	if err := os.WriteFile(inventoryPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadRuntimeInventory(inventoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, closeDBs, err := newHandlerWithProviders(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := closeDBs(); err != nil {
+			t.Error(err)
+		}
+	})
+	query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: baseline}\nlimit: 10\n")
+	if query.Code != 200 || !strings.Contains(query.Body.String(), "baseline-e1") {
+		t.Fatalf("native query: %d %s", query.Code, query.Body.String())
+	}
+	keyed := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/records/baseline/baseline-e1", "")
+	if keyed.Code != 200 || !strings.Contains(keyed.Body.String(), "observed") {
+		t.Fatalf("native keyed read: %d %s", keyed.Code, keyed.Body.String())
+	}
+	canceled := httptest.NewRequest("POST", "/v1/databases/shipping-logs/dtql", strings.NewReader(`{"query":"from: {name: baseline}"}`)).WithContext(func() context.Context { c, cancel := context.WithCancel(context.Background()); cancel(); return c }())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, canceled)
+	if response.Code == 200 {
+		t.Fatal("canceled native query succeeded")
+	}
+}
 
 func TestLoadRuntimeInventoryVerifiesFixtureAndLicensePins(t *testing.T) {
 	directory := t.TempDir()

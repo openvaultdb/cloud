@@ -40,6 +40,7 @@ type imageEntry struct {
 type protectedImage struct {
 	root           string
 	files          map[string]imageEntry
+	directories    map[string]imageEntry
 	verifiedSQLite map[string]string
 }
 
@@ -114,9 +115,15 @@ func checkProtectedEntry(path string, entry imageEntry, directory bool) error {
 		if !entry.mode.IsDir() || entry.mode.Perm()&0o022 != 0 || entry.mode&os.ModeSymlink != 0 {
 			return fmt.Errorf("protected image directory %q is replaceable or not ordinary", path)
 		}
+		if strings.HasPrefix(path, protectedFixtureRoot+"/shipping-logs") && entry.mode.Perm() != 0o555 {
+			return fmt.Errorf("native inGitDB directory %q must be mode 0555", path)
+		}
 	} else {
 		if !entry.mode.IsRegular() || entry.mode.Perm()&0o222 != 0 || entry.mode&(os.ModeSetuid|os.ModeSetgid) != 0 || entry.links != 1 {
 			return fmt.Errorf("protected image file %q is writable, linked or not regular", path)
+		}
+		if strings.HasPrefix(path, protectedFixtureRoot+"/shipping-logs/") && entry.mode.Perm() != 0o444 {
+			return fmt.Errorf("native inGitDB file %q must be mode 0444", path)
 		}
 		limit := int64(publisherselection.MaxBytes)
 		if strings.HasSuffix(path, ".sqlite") {
@@ -149,7 +156,7 @@ func inspectProtectedTree(root string, inspect func(string) (imageEntry, error),
 			return nil, err
 		}
 	}
-	image := &protectedImage{root: root, files: map[string]imageEntry{}, verifiedSQLite: map[string]string{}}
+	image := &protectedImage{root: root, files: map[string]imageEntry{}, directories: map[string]imageEntry{}, verifiedSQLite: map[string]string{}}
 	count := 0
 	var walk func(string) error
 	walk = func(directory string) error {
@@ -171,6 +178,7 @@ func inspectProtectedTree(root string, inspect func(string) (imageEntry, error),
 				return err
 			}
 			if entry.mode.IsDir() {
+				image.directories[path] = entry
 				if err := walk(path); err != nil {
 					return err
 				}
@@ -232,7 +240,73 @@ func (image *protectedImage) hashSQLite(path string) (hash string, err error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+func (image *protectedImage) verifyPinnedFile(path, hash string, size int64) (err error) {
+	expected, exists := image.files[path]
+	if !exists || expected.size != size {
+		return errors.New("pinned file outside admitted protected image")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	before, err := imageFileEntry(file)
+	if err != nil || before != expected {
+		return errors.New("pinned file identity changed before hashing")
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, io.LimitReader(file, size+1))
+	if err != nil {
+		return err
+	}
+	after, err := imageFileEntry(file)
+	if err != nil || before != after || n != size || hex.EncodeToString(hasher.Sum(nil)) != hash {
+		return errors.New("pinned file identity or digest changed while hashing")
+	}
+	return nil
+}
+
 func mountSelectedImage(provider runtimeDatabase, image *protectedImage) (*core.Database, error) {
+	if provider.StorageEngine == "ingitdb" {
+		if image == nil || filepath.Dir(provider.Manifest) != image.root || provider.NativeRoot != filepath.Join(image.root, provider.ID) {
+			return nil, errors.New("native inGitDB mount lacks verified protected startup identity")
+		}
+		expectedFiles := map[string]bool{}
+		for _, pin := range provider.NativeFiles {
+			path := filepath.Join(provider.NativeRoot, filepath.FromSlash(pin.Path))
+			expectedFiles[path] = true
+			if err := image.verifyPinnedFile(path, pin.SHA256, pin.Bytes); err != nil {
+				return nil, err
+			}
+		}
+		for path := range image.files {
+			if strings.HasPrefix(path, provider.NativeRoot+string(filepath.Separator)) && !expectedFiles[path] {
+				return nil, errors.New("native inGitDB tree contains an extra file")
+			}
+		}
+		expectedDirectories := map[string]bool{provider.NativeRoot: true}
+		for path := range expectedFiles {
+			for parent := filepath.Dir(path); strings.HasPrefix(parent, provider.NativeRoot); parent = filepath.Dir(parent) {
+				expectedDirectories[parent] = true
+				if parent == provider.NativeRoot {
+					break
+				}
+			}
+		}
+		for path := range image.directories {
+			if strings.HasPrefix(path, provider.NativeRoot) && !expectedDirectories[path] {
+				return nil, errors.New("native inGitDB tree contains an extra directory")
+			}
+		}
+		for path := range expectedDirectories {
+			if path != provider.NativeRoot {
+				if _, ok := image.directories[path]; !ok {
+					return nil, errors.New("native inGitDB tree lacks a required directory")
+				}
+			}
+		}
+		return mount.FileWithOptions(provider.Manifest, mount.Options{CatalogueDir: image.root, SkipGitIdentity: true})
+	}
 	if image == nil || filepath.Dir(provider.Manifest) != image.root || image.verifiedSQLite[filepath.Join(image.root, provider.ID+".sqlite")] != provider.ServingSHA256 {
 		return nil, errors.New("selected image mount lacks verified protected startup identity")
 	}

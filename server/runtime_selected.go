@@ -41,6 +41,12 @@ func validateRuntimeMode(p runtimeDatabase, version int) error {
 		if !providerRepositoryPattern.MatchString(p.ProviderRepository) || !providerRevisionPattern.MatchString(p.ProviderRevision) || !providerSHA256Pattern.MatchString(p.SourceSHA256) || !providerSHA256Pattern.MatchString(p.ServingSHA256) {
 			return errors.New("bounded runtime requires immutable provider/source/serving identity")
 		}
+		if p.StorageEngine == "ingitdb" {
+			if p.NativeRoot == "" || len(p.NativeFiles) != 8 {
+				return errors.New("bounded native inGitDB runtime requires its exact eight-file store")
+			}
+			return nil
+		}
 		if p.ServingAdapter != "separate-id/1" || p.RequirePublishedQuery == nil || p.PublisherManifest == nil || p.PublicDescriptor == nil {
 			return errors.New("bounded runtime requires adapter, publisherManifest, publicDescriptor and query flag")
 		}
@@ -218,6 +224,9 @@ func verifySelectedFiles(p runtimeDatabase, base string) (*selectedFiles, error)
 // mounted driver never opens original paths. This trusts the process owner;
 // an adversary with the same OS credentials is outside this startup boundary.
 func mountSelectedSnapshot(p runtimeDatabase) (*core.Database, error) {
+	if p.StorageEngine == "ingitdb" {
+		return mount.FileWithOptions(p.Manifest, mount.Options{CatalogueDir: filepath.Dir(p.Manifest), SkipGitIdentity: true})
+	}
 	base := filepath.Dir(p.Manifest)
 	files, err := verifySelectedFiles(p, base)
 	if err != nil {

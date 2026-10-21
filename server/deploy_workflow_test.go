@@ -61,7 +61,10 @@ git() {
   printf '%s\trefs/heads/main\n' "$SYNTHETIC_MAIN"
   return "$SYNTHETIC_GIT_EXIT"
 }
-curl() { printf 'curl\n' >> "$SYNTHETIC_CALLS"; }
+curl() {
+  printf 'curl\n' >> "$SYNTHETIC_CALLS"
+  case " $* " in *" %{http_code} "*) printf '403' ;; esac
+}
 jq() { :; }
 grep() { :; }
 python3() {
@@ -164,23 +167,31 @@ func TestCloudRunSmokeIsOptInAndDeploymentReceiptSurvives(t *testing.T) {
 	deployIndex, deploy := deploymentStepNamed(t, steps, "Deploy the public read-only service")
 	receiptIndex, receipt := deploymentStepNamed(t, steps, "Record deployed service origin and source")
 	smokeIndex, smoke := deploymentStepNamed(t, steps, "Verify live profile and cacheable DTQL")
+	rollbackIndex, rollback := deploymentStepNamed(t, steps, "Roll back a failed publication")
 	uploadIndex, upload := deploymentStepNamed(t, steps, "Publish deployment metadata for the Worker deploy")
 	if deployIndex >= receiptIndex || receiptIndex >= smokeIndex || smokeIndex >= uploadIndex ||
-		deploy.If != "" || receipt.If != "" || upload.If != "" || receipt.ID != "deployment" ||
+		deploy.If != "" || receipt.If != "" || upload.If != "${{ always() }}" || receipt.ID != "deployment" ||
 		!strings.Contains(deploy.Run, "gcloud run deploy") {
 		t.Fatal("deployment or its unconditional receipt was gated or reordered")
 	}
 	if smoke.If != "${{ vars.OVDB_CLOUD_RUN_SMOKE_ENABLED == 'true' }}" ||
-		smoke.Env["SERVICE_URL"] != "${{ steps.deployment.outputs.origin }}" {
+		smoke.Env["SERVICE_URL"] != "https://cloud.openvaultdb.com" || smoke.Env["SERVICE_ORIGIN"] != "${{ steps.deployment.outputs.origin }}" {
 		t.Fatal("live smoke requires an explicit repository opt-in and validated origin")
 	}
+	if rollback.Env["SERVICE_URL"] != "https://cloud.openvaultdb.com" || rollback.Env["SERVICE_ORIGIN"] != "${{ steps.deployment.outputs.origin }}" ||
+		!strings.Contains(rollback.Run, "adventureworks employees chinook northwind pubs sakila") ||
+		!strings.Contains(rollback.Run, "shipping shipping-logs") ||
+		!strings.Contains(rollback.Run, `= 404`) || !strings.Contains(rollback.Run, `= 403`) ||
+		!strings.Contains(rollback.Run, "candidatesAbsent:true") || !strings.Contains(rollback.Run, "originSecretBoundaryVerified:true") {
+		t.Fatal("rollback acceptance no longer proves old providers, candidate absence, and the origin-secret boundary")
+	}
 	if upload.With["name"] != "chinook-cloudrun-deployment" || upload.With["if-no-files-found"] != "error" ||
-		strings.Join(strings.Fields(upload.With["path"]), ",") != "server/chinook-run-origin.txt,server/chinook-deploy-sha.txt" {
+		strings.Join(strings.Fields(upload.With["path"]), ",") != "server/chinook-run-origin.txt,server/chinook-deploy-sha.txt,server/shipping-publication-deploy-receipt.json,server/shipping-publication-live-receipt.json,server/shipping-publication-rollback-receipt.json" {
 		t.Fatal("downstream deployment artifact contract changed")
 	}
 	// Every live query remains in the gated step, including the inventory script.
 	for i, step := range steps {
-		if (strings.Contains(step.Run, "curl ") || strings.Contains(step.Run, "smoke_inventory.py")) && i != smokeIndex {
+		if (strings.Contains(step.Run, "curl ") || strings.Contains(step.Run, "smoke_inventory.py")) && i != smokeIndex && i != rollbackIndex {
 			t.Fatal("live request escaped the opt-in smoke step")
 		}
 	}
@@ -204,7 +215,7 @@ func TestCloudRunSmokeIsOptInAndDeploymentReceiptSurvives(t *testing.T) {
 			}
 			calls, err := os.ReadFile(filepath.Join(dir, "calls"))
 			if variable == "true" {
-				if err != nil || strings.Count(string(calls), "curl\n") != 6 || strings.Count(string(calls), "inventory\n") != 1 {
+				if err != nil || strings.Count(string(calls), "curl\n") != 14 || strings.Count(string(calls), "inventory\n") != 1 {
 					t.Fatal("enabled smoke positive control did not execute every synthetic request", string(calls), err)
 				}
 			} else if !os.IsNotExist(err) {
