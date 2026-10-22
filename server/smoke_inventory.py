@@ -131,6 +131,32 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def require_publication_discovery(raw, expected_ids):
+    """Validate the central catalogue's published DemoDB alias contract, not its host implementation."""
+    discovery = json.loads(raw)
+    if not isinstance(discovery, dict) or discovery.get("protocol") != "openvaultdb/0.1" or discovery.get("authEnabled") is not False:
+        raise RuntimeError("central discovery protocol/auth contract mismatch")
+    rows = discovery.get("databases")
+    expected = set(expected_ids)
+    if len(expected_ids) != 8 or len(expected) != 8 or not isinstance(rows, list) or len(rows) != 8:
+        raise RuntimeError("central discovery requires the exact eight-provider inventory")
+    found = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"id", "url", "apiUrl", "manifestUrl", "capabilities"}:
+            raise RuntimeError("central discovery database shape mismatch")
+        identifier = row["id"]
+        if not isinstance(identifier, str) or identifier not in expected or identifier in found:
+            raise RuntimeError("central discovery has missing, duplicate or unexpected provider IDs")
+        found.add(identifier)
+        if row["url"] != f"https://demodb.dev/{identifier}/" or row["apiUrl"] != f"https://demodb.dev/ovdb/v1/databases/{identifier}" or row["manifestUrl"] != f"https://demodb.dev/ovdb/db/{identifier}/ovdb-database.json":
+            raise RuntimeError("central discovery canonical branded URL mismatch")
+        capabilities = row["capabilities"]
+        if not isinstance(capabilities, dict) or set(capabilities) != {"read", "query", "write"} or capabilities["read"] is not True or capabilities["query"] is not True or capabilities["write"] is not False:
+            raise RuntimeError("central discovery must declare actual read-only query capabilities")
+    if found != expected:
+        raise RuntimeError("central discovery provider inventory mismatch")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", required=True, help="branded public HTTPS origin")
@@ -327,8 +353,7 @@ def main() -> None:
             if not any(item.get("host") == host and item.get("status") == 403 for item in observed):
                 raise RuntimeError("missing mapped host origin rejection proof")
         _, discovery = require_status("https://demodb.dev", "/.well-known/openvaultdb")
-        if "cloud.openvaultdb.com" not in json.dumps(json.loads(discovery)):
-            raise RuntimeError("central discovery omits the Cloud provider")
+        require_publication_discovery(discovery, [database["id"] for database in databases])
     if args.receipt:
         args.receipt.write_text(json.dumps({"verifiedAt": int(time.time()), "servingIdentity": identity, "providers": [database["id"] for database in databases], "requests": OBSERVATIONS, "requestPolicy": REQUEST_POLICY.settings()}, sort_keys=True, indent=2) + "\n")
 
