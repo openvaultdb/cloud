@@ -644,3 +644,20 @@ admission remain separate downstream gates.
 
 The separate default-off [public-free ECB completion candidate](ECB_PUBLIC.md)
 uses synthetic admission and a bounded authenticated completion gate.
+
+### Smoke request pacing
+
+`smoke_inventory.py` spaces gateway query-class requests by 1.1 seconds by
+default (`--query-interval-seconds`, finite 0–60). OPTIONS and keyed record
+reads use their separate gateway classes. This avoids spending more than 60
+query requests per minute from this controller; another run can still consume
+that actor's quota. Limits are unchanged.
+
+Only an actual HTTP 429 retries the same smoke intent, up to two additional
+attempts (`--rate-limit-retries`, 0–5). The owning gateway's integer
+`Retry-After` delta-seconds must be present and within
+`--max-retry-after-seconds` (default 120, finite 0–300); invalid or excessive
+values fail. Other statuses are never retried. Every response, including a
+429 before a successful retry, retains status/body/hash/headers in the receipt;
+the receipt also records the selected policy. All existing final status,
+data, CORS, cache, provenance and serving-identity assertions still apply.
