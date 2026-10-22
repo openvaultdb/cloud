@@ -544,8 +544,11 @@ providers retain their read/snapshot behavior and existing limits, including the
 48 AdventureWorks decimal fields.
 
 The production `providers.json` and protected image serve the six established
-SQLite providers, the immutable Shipping SQLite provider, and the original
-eight-file Shipping Logs inGitDB store. Shipping Logs is read directly through
+SQLite providers, the immutable Shipping SQLite provider, the Countries
+reference SQLite provider (`demo-db/countries`: ISO codes, currency and dated
+World Bank population, CC BY 4.0), and the original eight-file Shipping Logs
+inGitDB store. The publication smoke reads Countries rows for the demo's ship
+countries, its `USA`/`UK` aliases and the World Bank attribution row. Shipping Logs is read directly through
 the published inGitDB DAL; preparation and runtime do not create a parsed log
 database, cache, or snapshot. Native PostgreSQL is a separate runtime opt-in and
 does not change that inventory. Four-pin HTTP guards, deadline/cache middleware, gateway

@@ -109,8 +109,8 @@ def fetch_metadata(repository, revision, path):
 
 def make_inventory(fetch=fetch_metadata):
     inventory = prepare_providers.read_json(Path("providers.json").read_bytes(), "legacy inventory")
-    if inventory["version"] != 2 or len(inventory["databases"]) != 8:
-        raise ValueError("requires unchanged complete eight-provider inventory")
+    if inventory["version"] != 2 or len(inventory["databases"]) != 9:
+        raise ValueError("requires unchanged complete nine-provider inventory")
     inventory = copy.deepcopy(inventory)
     names = {"manifest": "manifest.json", "contract": "metadata/contract.json",
              "checksums": "metadata/checksums.json", "databaseManifest": "ovdb-database.json",

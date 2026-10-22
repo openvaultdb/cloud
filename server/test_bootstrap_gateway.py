@@ -200,7 +200,7 @@ class BootstrapTest(unittest.TestCase):
         proof={"contract":"ovdb-functional-mapped-acceptance/1","serviceUid":"uid1","identity":self.controller().state["candidate"],"publicHosts":bootstrap.HOSTS,"originRejected":True,"routesAccepted":True,"authenticatedJourneyAccepted":True,"completeIngressInventory":True,"provenance":["root actual independent journey"],"observedAt":int(time.time()),"originIdentity":{**bootstrap.target(),"defaultUrl":"https://service.run.app"},"evidenceSHA256":{key:"f"*64 for key in ("dns","originCertificates","edgeRules","dataPinsStreaming","authenticatedDeviceDatabase")}}
         Path("acceptance.json").write_text(json.dumps(proof))
         Path("fixture/output").mkdir(parents=True)
-        Path("fixture/output/inventory.json").write_text(json.dumps({"databases":[{"id":name} for name in ("adventureworks","employees","chinook","northwind","pubs","sakila","shipping","shipping-logs")]}))
+        Path("fixture/output/inventory.json").write_text(json.dumps({"databases":[{"id":name} for name in ("adventureworks","employees","chinook","northwind","pubs","sakila","shipping","shipping-logs","countries")]}))
     def test_real_external_gates_precede_final_default_retirement(self):
         self.mapped_acceptance_fixture()
         with patch.object(bootstrap.subprocess,"run") as run:

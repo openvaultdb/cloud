@@ -517,6 +517,59 @@
         "https://www.demodb.dev",
         "https://datatug.app"
       ]
+    },
+    {
+      "id": "countries",
+      "repository": "demo-db/countries",
+      "revision": "3554140b054aaadd5b8185492b63fcdf3b360b2d",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "4ecb8dfd20fea6469fcdfd4e0e80980eb83d0000f3cfb78e3f7e82669308069e"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "edb2ef142b998236e12c2a4e83c3d55d1c5ad0d262dcf44a490d777c29798bcf"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "34d010283cead7269d88c399350507094eb817fbd494da8ecc29c89dbf8e57cf"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "8954977ab13bc6ccf0569ba8de9531f6a229649e204762e2ed56389e9a4775ad"
+        },
+        "artifact": {
+          "path": "artifacts/countries.sqlite",
+          "sha256": "c0dcf133a680ed8255ab3c1960f6d3a43631cda66e030c443bc3b843ff8844db",
+          "bytes": 81920
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "dc4f2a5b65ffc64d400a884687055650323e268423ebb926e1be8dbf57485097"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "country_aliases",
+        "countries",
+        "sources"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "country_aliases",
+          "sourceField": "country_iso2",
+          "targetRecordset": "countries",
+          "targetField": "iso2"
+        }
+      ],
+      "corsOrigins": [
+        "https://countries.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
     }
   ]
 }

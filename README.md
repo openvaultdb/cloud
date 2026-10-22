@@ -158,7 +158,7 @@ public hosts, retained originIdentity, genuine origin/routes/auth acceptance and
 complete ingress inventory, with separate DNS/origin-certificate/edge-rule/
 data-pin-streaming/authenticated-device-database evidence SHA256s and provenance.
 It re-reads both mapping readiness generations, repeats current public/origin/data
-probes with all eight native providers, then disables default and verifies closure
+probes with all nine native providers, then disables default and verifies closure
 again. The state records only the external proof digest; it never fabricates the
 first ordinary-mode functional proof. Natural certificate renewal remains pending
 until observed, independently of this source and initial acceptance.

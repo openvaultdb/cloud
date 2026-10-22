@@ -24,8 +24,8 @@ func TestCloudDataTugCORS(t *testing.T) {
 	if err := json.Unmarshal(data, &declared); err != nil {
 		t.Fatal(err)
 	}
-	if len(declared.Databases) != 8 {
-		t.Fatalf("expected eight declared providers, got %d", len(declared.Databases))
+	if len(declared.Databases) != 9 {
+		t.Fatalf("expected nine declared providers, got %d", len(declared.Databases))
 	}
 	var origins []string
 	for _, provider := range declared.Databases {

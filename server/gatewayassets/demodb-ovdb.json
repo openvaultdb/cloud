@@ -62,6 +62,13 @@
         "serverDbBaseUrl": "https://demodb.dev/ovdb/db/shipping-logs/",
         "manifestUrl": "https://demodb.dev/ovdb/db/shipping-logs/ovdb-database.json",
         "apiUrl": "https://demodb.dev/ovdb/v1/databases/shipping-logs"
+      },
+      {
+        "id": "https://demodb.dev/countries/",
+        "localId": "countries",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/countries/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/countries/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/countries"
       }
     ]
   },
@@ -73,6 +80,7 @@
     "adventureworks": true,
     "employees": true,
     "shipping": true,
-    "shipping-logs": true
+    "shipping-logs": true,
+    "countries": true
   }
 }

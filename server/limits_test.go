@@ -67,13 +67,16 @@ const (
 )
 
 // measuredProviders is the catalogue the measurements were taken on.
-// The metadata-only Shipping activation was remeasured on 2026-10-22 with
-// TestCloudMeasureSingleCollectionReads and TestCloudMeasureExactMoneyAggregates
-// against all eight verified fixtures. Existing conservative allowances remain;
-// the separate actual Linux candidate experiment still gates publication.
+// The Countries reference provider (252 + 25 + 3 rows) was remeasured on
+// 2026-10-22 with TestCloudMeasureSingleCollectionReads and
+// TestCloudMeasureExactMoneyAggregates against all nine verified fixtures: the
+// heaviest reads are unchanged AdventureWorks ones, so the existing conservative
+// allowances remain; the separate actual Linux candidate experiment still gates
+// publication.
 var measuredProviders = []string{
 	"adventureworks@5028a27189b487d6fd8025fafc1307aada707fd2",
 	"chinook@26e852cca00101f53a84ef8ee1f1ae389067f5cf",
+	"countries@3554140b054aaadd5b8185492b63fcdf3b360b2d",
 	"employees@2069e26e8fdb60bdb16507f75569a579cf3da7cf",
 	"northwind@e74726515c3833620b54b7a50d1d273276dd23c1",
 	"pubs@6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",

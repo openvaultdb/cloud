@@ -506,8 +506,8 @@ class Bootstrap:
         # current origin/public-data probes before final default retirement.
         subprocess.run(["python3", "gateway_probe.py", "--phase", "mapped", "--default-url", os.environ["OVDB_DEFAULT_ORIGIN_URL"], "--receipt", "bootstrap-mapped-origin-receipt.json"], check=True, timeout=180)
         inventory = json.loads(Path("fixture/output/inventory.json").read_text())
-        if {item["id"] for item in inventory.get("databases", [])} != {"adventureworks","employees","chinook","northwind","pubs","sakila","shipping","shipping-logs"}:
-            raise RuntimeError("all eight native providers required before acceptance")
+        if {item["id"] for item in inventory.get("databases", [])} != {"adventureworks","employees","chinook","northwind","pubs","sakila","shipping","shipping-logs","countries"}:
+            raise RuntimeError("all nine native providers required before acceptance")
         subprocess.run(["python3", "smoke_inventory.py", "--origin", "https://cloud.openvaultdb.com", "--inventory", "fixture/output/inventory.json", "--receipt", "bootstrap-mapped-data-receipt.json"], check=True, timeout=300)
         self.protected(self.current())
         self.state["functionalAcceptanceReceiptSHA256"] = digest(proof)

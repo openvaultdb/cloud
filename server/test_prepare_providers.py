@@ -61,13 +61,15 @@ class PrepareProvidersTest(unittest.TestCase):
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
-        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [provider["id"] for provider in providers])
+        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"], [provider["id"] for provider in providers])
         by_id = {provider["id"]: provider for provider in providers}
         self.assertTrue(by_id["adventureworks"]["requirePublishedQuery"])
         self.assertTrue(by_id["employees"]["requirePublishedQuery"])
         self.assertTrue(by_id["pubs"].get("requirePublishedQuery", True))
         self.assertTrue(by_id["sakila"]["requirePublishedQuery"])
         self.assertIn("film_actor", by_id["sakila"]["smokeRecordsets"])
+        self.assertEqual(["country_aliases", "countries", "sources"], by_id["countries"]["smokeRecordsets"])
+        self.assertEqual([{"sourceRecordset": "country_aliases", "sourceField": "country_iso2", "targetRecordset": "countries", "targetField": "iso2"}], by_id["countries"]["foreignKeySmoke"])
         self.assertEqual(["dbo.DatabaseLog", "dbo.ErrorLog"], by_id["adventureworks"]["emptyRecordsets"])
         self.assertEqual({"Production.ProductPhoto": ["ThumbNailPhoto", "LargePhoto"]}, by_id["adventureworks"]["blobSmokeFields"])
         if not all((providers_root / provider["repository"]).is_dir() for provider in providers):
@@ -79,7 +81,7 @@ class PrepareProvidersTest(unittest.TestCase):
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)
             runtime = json.loads(runtime_path.read_text())
             self.assertEqual(2, runtime["version"])
-            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [database["id"] for database in runtime["databases"]])
+            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"], [database["id"] for database in runtime["databases"]])
             for database in runtime["databases"]:
                 self.assertTrue((output / database["manifest"]).is_file())
                 self.assertTrue((output / database["license"]).is_file())
