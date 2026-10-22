@@ -67,6 +67,10 @@ const (
 )
 
 // measuredProviders is the catalogue the measurements were taken on.
+// The metadata-only Shipping activation was remeasured on 2026-10-22 with
+// TestCloudMeasureSingleCollectionReads and TestCloudMeasureExactMoneyAggregates
+// against all eight verified fixtures. Existing conservative allowances remain;
+// the separate actual Linux candidate experiment still gates publication.
 var measuredProviders = []string{
 	"adventureworks@5028a27189b487d6fd8025fafc1307aada707fd2",
 	"chinook@26e852cca00101f53a84ef8ee1f1ae389067f5cf",
@@ -74,8 +78,8 @@ var measuredProviders = []string{
 	"northwind@e74726515c3833620b54b7a50d1d273276dd23c1",
 	"pubs@6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",
 	"sakila@cb9a81a8cbedcd8831737f281f888d5d584fae85",
-	"shipping-logs@e4a714f915b147c357afdfffe103ca88e917b8cb",
-	"shipping@04128331f0357ca231441cb8e8aaa4a94c659772",
+	"shipping-logs@9534639578f13791dc023ad8553604533dadb716",
+	"shipping@ea71228bc4aceb845075fc7ef79e868debe3149f",
 }
 
 // requestClass is a kind of request an instance may run: how many may run at
