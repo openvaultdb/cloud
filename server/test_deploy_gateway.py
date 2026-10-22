@@ -10,6 +10,17 @@ import deploy_gateway as deploy
 SHA="a"*40
 IMAGE="registry.example/server@sha256:"+"a"*64
 class GatewayDeploymentTest(unittest.TestCase):
+    def test_regional_mapping_inventory_uses_supported_beta_track(self):
+        with patch.dict(os.environ, {"PROJECT_ID": "openvaultdb", "REGION": "europe-west1"}), patch.object(deploy.subprocess, "check_output", return_value="[]") as output:
+            self.assertEqual(deploy.cloud("run", "domain-mappings", "list", "--platform=managed"), [])
+            output.assert_called_once_with(["gcloud", "beta", "run", "domain-mappings", "list", "--platform=managed", "--project=openvaultdb", "--region=europe-west1", "--format=json"], text=True)
+
+    def test_service_inventory_keeps_stable_track_and_failure_propagates(self):
+        with patch.dict(os.environ, {"PROJECT_ID": "openvaultdb", "REGION": "europe-west1"}), patch.object(deploy.subprocess, "check_output", side_effect=RuntimeError("inventory unavailable")) as output:
+            with self.assertRaisesRegex(RuntimeError, "inventory unavailable"):
+                deploy.cloud("run", "services", "describe", "chinook-ovdb")
+            output.assert_called_once_with(["gcloud", "run", "services", "describe", "chinook-ovdb", "--project=openvaultdb", "--region=europe-west1", "--format=json"], text=True)
+
     def exercise(self, scenario="ok", phase="mapped", proof=True):
         calls=[]
         state={"revision":"prior"}
