@@ -17,7 +17,10 @@ BINDING = re.compile(r"[a-zA-Z0-9_-]+:[1-9][0-9]*")
 
 
 def cloud(*args):
-    return json.loads(subprocess.check_output(["gcloud", *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
+    # Regional domain mappings are available only on the beta release track.
+    # Keep ordinary service/revision commands on their existing stable track.
+    track = ["beta"] if args[:2] == ("run", "domain-mappings") else []
+    return json.loads(subprocess.check_output(["gcloud", *track, *args, "--project="+os.environ["PROJECT_ID"], "--region="+os.environ["REGION"], "--format=json"], text=True))
 
 
 def require_current_main(sha):
