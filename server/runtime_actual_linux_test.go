@@ -95,7 +95,11 @@ func TestActualProductionProbe(t *testing.T) {
 	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	defer client.CloseIdleConnections()
 	for time.Since(started) < 225*time.Second {
-		response, err := client.Get("http://127.0.0.1:8080/v1/databases")
+		request, err := actualProductionRequest("/v1/databases", []string{os.Getenv(originSecretEnv)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(request)
 		if err == nil {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 			closeErr := response.Body.Close()
@@ -116,6 +120,26 @@ func TestActualProductionProbe(t *testing.T) {
 			if len(document.Databases) != 10 {
 				t.Fatalf("actual executable mounted %d databases", len(document.Databases))
 			}
+			// Known data/auth/static paths must reject absent, wrong and
+			// duplicate credentials on the real protected executable.
+			for _, path := range []string{"/v1/databases", "/api/devices", "/device/"} {
+				for _, values := range [][]string{nil, {"invalid-job-credential"}, {os.Getenv(originSecretEnv), os.Getenv(originSecretEnv)}} {
+					denied, requestErr := actualProductionRequest(path, values)
+					if requestErr != nil {
+						t.Fatal(requestErr)
+					}
+					answer, requestErr := client.Do(denied)
+					if requestErr != nil {
+						t.Fatal("protected rejection probe transport failed")
+					}
+					denial, readErr := io.ReadAll(io.LimitReader(answer.Body, 4096))
+					closeErr := answer.Body.Close()
+					if readErr != nil || closeErr != nil || answer.StatusCode != http.StatusForbidden || strings.Contains(string(denial), os.Getenv(originSecretEnv)) || strings.Contains(string(denial), os.Getenv("OVDB_DEVICE_AUTH_PROXY_SECRET")) {
+						t.Fatal("protected executable rejection/no-secret contract failed")
+					}
+				}
+			}
+			receipt["protected_origin_rejections"] = 9
 			receipt["databases"] = document.Databases
 			receipt["observer_ready_seconds"] = time.Since(started).Seconds()
 			metrics, err := actualCgroup()

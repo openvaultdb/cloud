@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import signal
 import sqlite3
@@ -16,6 +17,42 @@ import test_actual_runtime as actual
 
 
 class ActualHarnessTest(unittest.TestCase):
+    def test_candidate_credentials_are_ephemeral_bounded_and_override_ambient_values(self):
+        commands = actual.Commands({"commands": []}, time.monotonic()+100)
+        with patch.dict(os.environ, {"OVDB_ORIGIN_SECRET":"ambient-do-not-use", "OVDB_DEVICE_AUTH_PROXY_SECRET":"ambient-do-not-use", "SNEAT_API_ORIGIN":"https://production.invalid"}):
+            first = actual.candidate_gateway_environment(commands)
+            second = actual.candidate_gateway_environment(commands)
+        for key in ("OVDB_ORIGIN_SECRET", "OVDB_DEVICE_AUTH_PROXY_SECRET"):
+            self.assertRegex(first[key], r"^[a-f0-9]{64}$")
+            self.assertNotEqual(first[key], second[key])
+        self.assertNotEqual(first["OVDB_ORIGIN_SECRET"], first["OVDB_DEVICE_AUTH_PROXY_SECRET"])
+        self.assertEqual(second["SNEAT_API_ORIGIN"], "https://sneat.invalid")
+        self.assertEqual(commands.redactions, (second["OVDB_ORIGIN_SECRET"], second["OVDB_DEVICE_AUTH_PROXY_SECRET"]))
+
+    def test_candidate_inspect_and_failure_output_never_retain_test_credentials(self):
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code):
+                receipt={"commands": []}
+                commands=actual.Commands(receipt,time.monotonic()+100)
+                environment=actual.candidate_gateway_environment(commands)
+                values=commands.redactions
+                def launch(argv, **kwargs):
+                    self.assertEqual(kwargs["env"], environment)
+                    self.assertFalse(any(value in str(argv) for value in values))
+                    kwargs["stdout"].write(json.dumps({"Config":{"Env":["OVDB_ORIGIN_SECRET="+values[0],"OVDB_DEVICE_AUTH_PROXY_SECRET="+values[1]]}}).encode())
+                    process=Mock();process.wait.return_value=exit_code
+                    return process
+                captured=io.StringIO()
+                with patch.object(actual.subprocess,"Popen",side_effect=launch),contextlib.redirect_stdout(captured):
+                    if exit_code:
+                        with self.assertRaises(RuntimeError): commands.run(["docker","inspect","owned"],environment=environment)
+                    else:
+                        returned=commands.run(["docker","inspect","owned"],environment=environment)
+                        self.assertIn("[REDACTED-TEST-CREDENTIAL]",returned)
+                for value in values:
+                    self.assertNotIn(value,json.dumps(receipt))
+                    self.assertNotIn(value,captured.getvalue())
+
     def test_deadline_reserves_cleanup_and_refuses_insufficient_real_expiry(self):
         commands = actual.Commands({"commands": []}, 1000)
         with patch.object(actual.time, "monotonic", return_value=500):

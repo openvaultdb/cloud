@@ -1,7 +1,7 @@
 """Manual full-corpus Linux experiment, never a cold Cloud capacity acceptance.
 
 Run from server/ with an existing Linux Docker engine. No daemon creation, host
-ports, credentials or deploy. The hard 18-minute deadline reserves two minutes
+ports, production credentials or deploy. The hard 18-minute deadline reserves two minutes
 of the 20-minute job for cleanup/upload. Host preparation may need 4 GiB disk;
 only container memory is capacity evidence. All temporary artifacts are owned.
 """
@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -39,6 +40,7 @@ class Commands:
     """Finite process groups, individual exit receipts, bounded output tails."""
     def __init__(self, receipt, deadline):
         self.receipt, self.deadline = receipt, deadline
+        self.redactions = ()
 
     def budget(self, maximum, minimum=1, cleanup=False):
         remaining = self.deadline - time.monotonic() - (0 if cleanup else CLEANUP_SECONDS)
@@ -72,10 +74,27 @@ class Commands:
                 command["seconds"] = time.monotonic() - started
                 output.seek(0, 2)
                 command["output_bytes"] = output.tell()
-                output.seek(max(0, command["output_bytes"] - MAX_LOG_BYTES))
-                command["output_tail"] = output.read().decode(errors="replace")
+                output.seek(max(0, command["output_bytes"] - MAX_LOG_BYTES - 128))
+                tail = output.read().decode(errors="replace")
+                for token in self.redactions:
+                    tail = tail.replace(token, "[REDACTED-TEST-CREDENTIAL]")
+                command["output_tail"] = tail[-MAX_LOG_BYTES:]
                 print(command["output_tail"], end="", flush=True)
         return command["output_tail"]
+
+
+def candidate_gateway_environment(commands):
+    """Private job-only credentials, passed by environment name, never argv.
+
+    Docker inspect contains Config.Env: Commands redacts these values before
+    printing, returning or retaining any captured Docker output/receipt.
+    """
+    origin, proxy = secrets.token_hex(32), secrets.token_hex(32)
+    commands.redactions = (origin, proxy)
+    return {**os.environ, "OVDB_ORIGIN_SECRET": origin,
+            "OVDB_ORIGIN_SECRET_HEADER": "X-OVDB-Origin-Secret",
+            "OVDB_DEVICE_AUTH_PROXY_SECRET": proxy,
+            "SNEAT_API_ORIGIN": "https://sneat.invalid"}
 
 
 def ballast_bytes(retained):
@@ -282,7 +301,11 @@ def experiment(commands, directory, receipt, prefix, containers, images):
     containers.append(production)
     receipt["owned_containers"].append(production)
     started = time.monotonic()
-    commands.run(["docker", "run", "-d", "--name", production, *limits, test], timeout=10)
+    gateway_environment = candidate_gateway_environment(commands)
+    commands.run(["docker", "run", "-d", "--name", production, *limits,
+                  "-e", "OVDB_ORIGIN_SECRET", "-e", "OVDB_ORIGIN_SECRET_HEADER",
+                  "-e", "OVDB_DEVICE_AUTH_PROXY_SECRET", "-e", "SNEAT_API_ORIGIN", test],
+                 timeout=10, environment=gateway_environment)
     receipt["production_start_identity"] = json.loads(commands.run(["docker", "inspect", production], timeout=10))[0]
     probe = commands.run(["docker", "exec", "-e", "OVDB_ACTUAL_PROBE=1", production,
                           "/srv/actual-test", "-test.run=^TestActualProductionProbe$", "-test.v", "-test.timeout=230s"], timeout=230)

@@ -75,31 +75,10 @@ It uses the stable `openvaultdb-cloud` rights identity and the library's
 `ecb-public-free/1` request profile. Request Host, query data and command-line
 flags cannot select this composition.
 
-The Cloudflare Worker has a separate exact route,
-`POST /ecb/v1/databases/ecb/dtql`. It requires `ECB_ENABLED=true` and
-`ECB_RUN_ORIGIN` set to an HTTPS root origin under `.run.app`, with no port,
-credentials, query or fragment. The origin must exactly match the existing
-`CHINOOK_RUN_ORIGIN` binding for that same Go service. `ECB_PROXY_SECRET` must
-hold the same secret as the Go service. The Worker sends it in a dedicated upstream header;
-client-supplied values are discarded. The Go route returns 404 before provider
-I/O when the secret is missing, wrong or duplicated. The Worker forwards the query to the fixed Go path
-through the no-retention proxy, using `cache: no-store` and a `no-store`
-response. It also requires an independent 32 to 128 character
-`ECB_OPERATOR_TOKEN` secret and exact `X-OVDB-ECB-Operator-Token` request
-header. Missing, wrong or duplicated tokens return 404 before upstream I/O,
-and the token is never forwarded. This selected route is only for controlled
-free operator requests. These ECB bindings are absent from `wrangler.jsonc`;
-no production configuration or deployment is changed by this code.
-
-Synthetic tests enter `configuredHandler` and `createWorker().fetch` with
-invented XML and an injected transport. They do not contact ECB. The opt-in
-`TestECBSelectedCrossRuntimeChain` starts a loopback Go HTTP server and runs a
-Worker test through it. It covers a bounded row, refusal before provider I/O,
-and a marker-bearing provider panic across the selected path. The preparatory
-B1 proposal is never a runtime input. B1 completion requires an actual
-operator-reviewed decision and remains unclaimed by these tests. B2 and B3
-remain open; Cloud Run, browser and operational sink evidence is still absent. Directory
-registration and public activation remain blocked.
+The public Go gateway refuses ECB and IANA routes with 503 regardless of
+operator environment flags. Existing native admission, integrity and redaction
+suites remain available for the separate default-off components. No public
+activation or operator admission is granted by the gateway port.
 
 The separate [IANA operator query component](IANA.md) is also default off and
 synthetic-only. It requires its own reviewed admission and credentials; this ECB
@@ -143,13 +122,12 @@ published schema metadata and exports.
 
 ## Origin secret
 
-When `OVDB_ORIGIN_SECRET` is set (32-128 characters of `A-Za-z0-9_-`), every
-request must carry it in the header named by `OVDB_ORIGIN_SECRET_HEADER`
-(default `X-OVDB-Origin-Secret`, must start with `X-`), or it is answered `403`;
-the header is removed before the request reaches the library. The Worker adds it
-from its own `OVDB_ORIGIN_SECRET` secret, so direct `*.run.app` calls cannot
-bypass the Worker's rate limits. Unset, nothing changes. Rollout order and the
-smoke-step caveat are in the [root README](../README.md#public-ovdb-routes-rate-limits-and-the-cloud-run-origin).
+Production gateway startup requires `OVDB_ORIGIN_SECRET` (32–128 characters of
+`A-Za-z0-9_-`). Every request must carry exactly one matching header named by
+`OVDB_ORIGIN_SECRET_HEADER` (default `X-OVDB-Origin-Secret`), otherwise 403.
+The edge must overwrite that header for both admitted hosts; the constant-time
+validator removes it before inner handlers/proxies. No HTTP health bypass exists.
+See the root README for the source-only mapped-domain cutover and future gates.
 
 ## Optional DemoDB PostgreSQL editions
 
@@ -484,18 +462,12 @@ not branch on database IDs. A new or re-pinned provider also changes the memory
 the limits were measured against: re-measure as described in
 [`limits.go`](limits.go) and update it together with `limits_test.go`.
 
-The CI job builds and tests the Linux binary with all pinned fixtures, then
-publishes that exact binary plus the verified fixture directory. The Cloud Run
-deploy job checks the binary and every provider receipt, deploys the existing
-service, and publishes the validated service-origin and source-SHA metadata
-consumed by the Cloudflare Worker deploy. Live profile, collection, query, CORS,
-and read-only checks run only when the repository variable
-`OVDB_CLOUD_RUN_SMOKE_ENABLED` is `true`; an unset variable skips those HTTP
-checks while retaining deployment and metadata publication. This metadata alone
-does not prove live query behavior. Deployment keeps the existing Cloud Run
-service, region, memory and CPU, Worker origin, and compatibility environment
-variables; the per-instance concurrency, which the memory arithmetic depends on, is
-written out in the deploy command.
+The CI job builds and tests the Linux binary with pinned fixtures and embeds
+its gateway assets. Deployment checks the binary and complete native archive,
+creates a no-traffic revision, verifies its exact image/source identity and routes
+that immutable name. Live acceptance is mandatory; rollback requires a separately
+accepted secure revision and HTTP rechecks. Resource limits remain 512 MiB,
+1 CPU and concurrency 2. See the root README for the manual two-stage controller.
 
 ## Offline opt-in preparation
 
@@ -576,7 +548,7 @@ SQLite providers, the immutable Shipping SQLite provider, and the original
 eight-file Shipping Logs inGitDB store. Shipping Logs is read directly through
 the published inGitDB DAL; preparation and runtime do not create a parsed log
 database, cache, or snapshot. Native PostgreSQL is a separate runtime opt-in and
-does not change that inventory. Four-pin HTTP guards, deadline/cache middleware, Worker
+does not change that inventory. Four-pin HTTP guards, deadline/cache middleware, gateway
 propagation, public descriptor routes, attribution downloads, deploy verification
 and smoke, actual Geo/ROR preparation and all-key proof, six-plus-two capacity and
 live journeys, final wrapper repins, Directory and App admission remain downstream
@@ -599,9 +571,8 @@ Focused synthetic verification (no provider corpus download or service start):
 wb run -- python3 -m unittest discover -s server -p 'test_*.py' -v
 ```
 
-Successful Cloud Worker CI on `main` triggers the existing production deployment
-workflows. PR validation does not deploy; the landing owner controls when to
-merge this offline change.
+Cloud Go CI builds an artifact; explicit manual deployment selects its exact
+successful current-main run. PR validation does not deploy.
 
 ### Explicit selected storage at startup
 

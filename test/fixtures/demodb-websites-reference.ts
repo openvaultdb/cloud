@@ -6,7 +6,7 @@
 // src/demodb-ovdb.json. Do not "fix" this file: it records what clients got.
 /* eslint-disable */
 // @ts-nocheck
-import demodbOVDB from "../../src/demodb-ovdb.json";
+import demodbOVDB from "../../server/gatewayassets/demodb-ovdb.json";
 
 type OVDBManifest = { localId: string; capabilities: { query: boolean } };
 const ovdbIndex = { server: demodbOVDB.server };

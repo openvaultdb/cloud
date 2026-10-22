@@ -1,5 +1,14 @@
 # Default-off IANA operator query component
 
+**Gateway retirement boundary:** the public Go gateway refuses these routes.
+The former OVDB Worker implementation/bindings and cross-runtime bridge tests
+have been removed. Native provider admission/completion/redaction tests remain;
+no real source rights, public activation or deployed acceptance are claimed.
+Worker-specific configuration below describes the retired candidate design and
+is not an operator instruction for the current gateway. Any future activation
+needs a separately reviewed current boundary.
+
+
 This component prepares the fixed IANA HTTP Status Codes CSV path for independently
 admitted operator requests. It ships no accepted operator decision, publisher
 definition evidence, decoder digest, rights digest, source response, or production

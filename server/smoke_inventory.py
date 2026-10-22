@@ -82,7 +82,7 @@ def quote_identifier(identifier: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--origin", required=True, help="deployed Cloud Run HTTPS origin")
+    parser.add_argument("--origin", required=True, help="branded public HTTPS origin")
     parser.add_argument("--inventory", type=Path, required=True, help="verified generated runtime inventory")
     parser.add_argument("--receipt", type=Path, help="write actual public HTTP status/body/hash evidence")
     parser.add_argument("--publication-receipt", type=Path, help="require full Shipping publication checks bound to serving identity")
@@ -260,7 +260,13 @@ def main() -> None:
             raise RuntimeError("publication receipt lacks verified serving identity")
         if {database["id"] for database in databases} != {"adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"}:
             raise RuntimeError("publication acceptance requires all eight providers")
-        require_status(identity["serviceOrigin"], "/ovdb/dbs/chinook", expected=403)
+        boundary = json.loads(Path(identity["originBoundaryReceipt"]).read_text())
+        observed = boundary.get("originObservations", [])
+        if not observed or any(item.get("status") not in (403, 404) for item in observed):
+            raise RuntimeError("missing direct origin rejection proof")
+        for host in ("cloud.openvaultdb.com", "ovdb.demodb.dev"):
+            if not any(item.get("host") == host and item.get("status") == 403 for item in observed):
+                raise RuntimeError("missing mapped host origin rejection proof")
         _, discovery = require_status("https://demodb.dev", "/.well-known/openvaultdb")
         if "cloud.openvaultdb.com" not in json.dumps(json.loads(discovery)):
             raise RuntimeError("central discovery omits the Cloud provider")
