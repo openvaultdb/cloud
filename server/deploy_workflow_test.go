@@ -10,6 +10,7 @@ import (
 )
 
 type deploymentStep struct {
+	If   string
 	Name string
 	Run  string
 	Env  map[string]string
@@ -54,5 +55,45 @@ func TestCloudRunExactSHAGuardExecutesAuthoritativeLookup(t *testing.T) {
 				t.Fatalf("guard=%v: %s", err, out)
 			}
 		})
+	}
+}
+
+// Image assembly uses the normal immutable artifact gates but must not enter
+// service mutation or require a rollback receipt before the first bootstrap.
+func TestCloudRunImageOnlyRetainsArtifactGatesAndSkipsDeployment(t *testing.T) {
+	required := map[string]bool{
+		"Verify exact successful main artifact run": false,
+		"Reject stale main":                         false,
+		"Verify binary identity and checksum":       false,
+		"Record verified image identity":            false,
+		"Build the exact verified image":            false,
+	}
+	deployment := map[string]bool{
+		"Load independently validated secure rollback receipt": false,
+		"Deploy and verify named Go gateway revision":          false,
+	}
+	for _, step := range deploymentSteps(t) {
+		if _, ok := required[step.Name]; ok {
+			if step.If != "" {
+				t.Fatalf("image artifact gate became conditional: %s", step.Name)
+			}
+			required[step.Name] = true
+		}
+		if _, ok := deployment[step.Name]; ok {
+			if step.If != "inputs.phase != 'build-image'" {
+				t.Fatalf("image-only phase enters deployment: %s", step.Name)
+			}
+			deployment[step.Name] = true
+		}
+	}
+	for name, found := range required {
+		if !found {
+			t.Fatalf("missing image gate: %s", name)
+		}
+	}
+	for name, found := range deployment {
+		if !found {
+			t.Fatalf("missing guarded deployment step: %s", name)
+		}
 	}
 }
