@@ -363,19 +363,19 @@
     {
       "id": "shipping",
       "repository": "demo-db/shipping",
-      "revision": "04128331f0357ca231441cb8e8aaa4a94c659772",
+      "revision": "ea71228bc4aceb845075fc7ef79e868debe3149f",
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "e0a2dcfbf7ae271783d4454aac069d58417268fff642a4eb5692131793e54d21"
+          "sha256": "8ce51fd281b125ba0f5c0cb3c482d89fec29efd83267db66b3a3a9ecc90b735f"
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "dc65dc97d01e8e5ed0afbc959e6a98bc04a2469df6cf9db43c4cc2c2be34234d"
+          "sha256": "2e999268b742987804c2c5af44f9b0f64e8900a32e96acf53bb32a0607907fdd"
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "f0bc7e5cded6eaace0a140042976cf230eab8e3500e721f2e89baeacab379ba2"
+          "sha256": "36d13f15e805fb40c2cf199a3398742463cd860442234657f4bbec68b6eeb090"
         },
         "databaseManifest": {
           "path": "ovdb-database.json",
@@ -416,7 +416,7 @@
     {
       "id": "shipping-logs",
       "repository": "demo-db/shipping-logs",
-      "revision": "e4a714f915b147c357afdfffe103ca88e917b8cb",
+      "revision": "9534639578f13791dc023ad8553604533dadb716",
       "recordKeyFormat": "natural",
       "requirePublishedQuery": true,
       "storageEngine": "ingitdb",
@@ -428,17 +428,17 @@
       "files": {
         "manifest": {
           "path": "manifest.json",
-          "sha256": "bd42a5b9dd9e93ab4b2e348746a6f82f0b0727d9f9fceed1eb9b95c246fc4931",
-          "bytes": 3985
+          "sha256": "516f884cc2c90187a5d7a83d759703e40208586636fb526b448d44dcd299e80b",
+          "bytes": 3984
         },
         "contract": {
           "path": "metadata/contract.json",
-          "sha256": "1934ff898e78fe860c05e4d3cd0140d13ace30fd0466dc454bb4d19cbb5e2b06",
-          "bytes": 14367
+          "sha256": "d320c763e6de85399a256498cba30c414f02d068674c78030e1d9bb7267c1d7f",
+          "bytes": 14366
         },
         "checksums": {
           "path": "metadata/checksums.json",
-          "sha256": "729b482701c8507527f0a7e6bb12b6f736840b74081cbae11aa2aa5d746bcb2c",
+          "sha256": "c38b87bab43e3f0d256f9dca8fb826ee55a599ca83e4b3cc9dbf342e5e812bc6",
           "bytes": 3029
         },
         "databaseManifest": {

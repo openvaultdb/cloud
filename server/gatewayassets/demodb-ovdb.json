@@ -48,6 +48,20 @@
         "serverDbBaseUrl": "https://demodb.dev/ovdb/db/employees/",
         "manifestUrl": "https://demodb.dev/ovdb/db/employees/ovdb-database.json",
         "apiUrl": "https://demodb.dev/ovdb/v1/databases/employees"
+      },
+      {
+        "id": "https://demodb.dev/shipping/",
+        "localId": "shipping",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/shipping/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/shipping/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/shipping"
+      },
+      {
+        "id": "https://demodb.dev/shipping-logs/",
+        "localId": "shipping-logs",
+        "serverDbBaseUrl": "https://demodb.dev/ovdb/db/shipping-logs/",
+        "manifestUrl": "https://demodb.dev/ovdb/db/shipping-logs/ovdb-database.json",
+        "apiUrl": "https://demodb.dev/ovdb/v1/databases/shipping-logs"
       }
     ]
   },
@@ -57,6 +71,8 @@
     "pubs": true,
     "sakila": true,
     "adventureworks": true,
-    "employees": true
+    "employees": true,
+    "shipping": true,
+    "shipping-logs": true
   }
 }

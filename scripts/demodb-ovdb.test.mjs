@@ -43,3 +43,12 @@ test("the committed allowlist is valid and canonically formatted", async () => {
   validateDemoDBOVDB(committed);
   assert.equal(serialise(committed), text);
 });
+
+
+test("the activated DemoDB catalogue admits exactly its eight published read-only providers", async () => {
+  const committed = JSON.parse(await readFile(COMMITTED_PATH, "utf8"));
+  const ids = ["adventureworks", "chinook", "employees", "northwind", "pubs", "sakila", "shipping", "shipping-logs"];
+  assert.deepEqual(committed.server.databases.map(({ localId }) => localId).sort(), ids);
+  assert.deepEqual(Object.keys(committed.query).sort(), ids);
+  for (const id of ids) assert.equal(committed.query[id], true, id);
+});
