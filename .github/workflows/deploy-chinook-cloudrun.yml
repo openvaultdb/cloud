@@ -8,7 +8,7 @@ on:
         required: true
       phase:
         type: choice
-        options: [protect-origin, mapped]
+        options: [build-image, protect-origin, mapped]
         required: true
 
 permissions:
@@ -148,13 +148,32 @@ jobs:
           docker build --label "org.opencontainers.image.revision=${DEPLOY_SHA}" --file server/Dockerfile --tag "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${DEPLOY_SHA}" server
           docker push "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${DEPLOY_SHA}"
 
+      - name: Record verified image identity
+        env:
+          DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          gcloud artifacts docker images describe "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server:${DEPLOY_SHA}" --format='value(image_summary.digest)' > server/image-digest.txt
+          python3 - <<'PYIMAGE'
+          import json, os, re
+          from pathlib import Path
+          sha = os.environ["DEPLOY_SHA"]
+          digest = Path("server/image-digest.txt").read_text().strip()
+          if not re.fullmatch("[0-9a-f]{40}", sha) or not re.fullmatch("sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("verified image identity unavailable")
+          receipt = {"sourceSHA": sha, "ciRunId": int(os.environ["CI_RUN_ID"]), "image": "europe-west1-docker.pkg.dev/openvaultdb/chinook-ovdb/server@" + digest}
+          Path("server/verified-image-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PYIMAGE
+
       - name: Load independently validated secure rollback receipt
+        if: inputs.phase != 'build-image'
         env:
           ROLLBACK_RECEIPT: ${{ vars.OVDB_SECURE_ROLLBACK_RECEIPT }}
         run: |
           printf '%s' "${ROLLBACK_RECEIPT}" > server/secure-rollback-acceptance.json
 
       - name: Deploy and verify named Go gateway revision
+        if: inputs.phase != 'build-image'
         working-directory: server
         env:
           DEPLOY_SHA: ${{ steps.ci.outputs.sha }}
