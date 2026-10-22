@@ -42,8 +42,8 @@ func validateRuntimeMode(p runtimeDatabase, version int) error {
 			return errors.New("bounded runtime requires immutable provider/source/serving identity")
 		}
 		if p.StorageEngine == "ingitdb" {
-			if p.NativeRoot == "" || len(p.NativeFiles) != 8 {
-				return errors.New("bounded native inGitDB runtime requires its exact eight-file store")
+			if p.NativeRoot == "" || len(p.NativeFiles) != nativeStoreFiles {
+				return errors.New("bounded native inGitDB runtime requires its exact native file store")
 			}
 			return nil
 		}

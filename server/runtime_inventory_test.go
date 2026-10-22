@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -21,10 +22,14 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 	root := filepath.Join(directory, "shipping-logs")
 	definition := []byte(`{"record_file":{"name":"records.jsonl","type":"[]map[string]any","format":"jsonl"},"primary_key":["event_id"],"columns":{"event_id":{"type":"string","required":true,"min_length":1},"kind":{"type":"string","required":true}},"columns_order":["event_id","kind"]}`)
 	files := map[string][]byte{
-		".ingitdb/settings.yaml":         []byte(`{"languages":[{"required":"en"}]}`),
-		".ingitdb/root-collections.yaml": []byte(`{"baseline":"collections/baseline","recovery11045example":"collections/recovery11045example","recovery11062example":"collections/recovery11062example"}`),
+		".ingitdb/settings.yaml": []byte(`{"languages":[{"required":"en"}]}`),
 	}
-	for _, id := range []string{"baseline", "recovery11045example", "recovery11062example"} {
+	var roots []string
+	for _, id := range nativeCollections {
+		roots = append(roots, `"`+id+`":"collections/`+id+`"`)
+	}
+	files[".ingitdb/root-collections.yaml"] = []byte("{" + strings.Join(roots, ",") + "}")
+	for _, id := range nativeCollections {
 		files["collections/"+id+"/.collection/definition.yaml"] = definition
 		files["collections/"+id+"/records.jsonl"] = []byte(`{"event_id":"` + id + `-e1","kind":"observed"}` + "\n")
 	}
@@ -46,7 +51,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	provider := runtimeDatabase{StorageEngine: "ingitdb", NativeRoot: "shipping-logs", NativeFiles: pins, ManifestSHA256: digest(manifest), ID: "shipping-logs", Manifest: "shipping-logs.yaml", CORSOrigins: []string{"https://shipping-logs.demodb.dev"}, ProviderRepository: "demo-db/shipping-logs", ProviderRevision: strings.Repeat("b", 40), SourceSHA256: strings.Repeat("a", 64), ServingSHA256: strings.Repeat("c", 64), License: "license.md", LicenseSHA256: digest(license), SmokeRecordset: "baseline", SmokeRecordsets: []string{"baseline", "recovery11045example", "recovery11062example"}}
+	provider := runtimeDatabase{StorageEngine: "ingitdb", NativeRoot: "shipping-logs", NativeFiles: pins, ManifestSHA256: digest(manifest), ID: "shipping-logs", Manifest: "shipping-logs.yaml", CORSOrigins: []string{"https://shipping-logs.demodb.dev"}, ProviderRepository: "demo-db/shipping-logs", ProviderRevision: strings.Repeat("b", 40), SourceSHA256: strings.Repeat("a", 64), ServingSHA256: strings.Repeat("c", 64), License: "license.md", LicenseSHA256: digest(license), SmokeRecordset: "baseline", SmokeRecordsets: nativeCollections}
 	data, _ := json.Marshal(runtimeInventory{Version: 2, Databases: []runtimeDatabase{provider}})
 	inventoryPath := filepath.Join(directory, "inventory.json")
 	if err := os.WriteFile(inventoryPath, data, 0o600); err != nil {
@@ -76,7 +81,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 			t.Fatalf("native %s: %q want %q", name, got, want)
 		}
 	}
-	for _, collection := range []string{"baseline", "recovery11045example", "recovery11062example"} {
+	for _, collection := range nativeCollections {
 		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 10\n")
 		if query.Code != 200 || !strings.Contains(query.Body.String(), collection+"-e1") {
 			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())
@@ -224,7 +229,8 @@ func TestLoadRuntimeInventoryRejectsUnsafeAndDuplicateProviderIDs(t *testing.T) 
 // The native root map is the public identity boundary, not its physical directories.
 func assertNativeCollectionDiscovery(t *testing.T, handler http.Handler) {
 	t.Helper()
-	expected := []string{"baseline", "recovery11045example", "recovery11062example"}
+	expected := slices.Clone(nativeCollections)
+	sort.Strings(expected)
 	for _, prefix := range []string{"/v1/databases/", "/ovdb/dbs/"} {
 		profile := selectedRequest(handler, "GET", prefix+"shipping-logs", "")
 		if profile.Code != http.StatusOK {
@@ -274,7 +280,7 @@ func TestActualNativeCollectionDiscoveryAndReads(t *testing.T) {
 		}
 	})
 	assertNativeCollectionDiscovery(t, handler)
-	for collection, key := range map[string]string{"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1"} {
+	for collection, key := range map[string]string{"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1", "carrierGateway": "attempt-11038-1-c1", "carrierGatewayRecovery11045example": "attempt-11045-2-c1", "carrierGatewayRecovery11062example": "attempt-11062-2-c1"} {
 		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 100\n")
 		if query.Code != http.StatusOK {
 			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())

@@ -18,6 +18,17 @@ import (
 
 const defaultRuntimeInventoryPath = "/srv/fixture/inventory.json"
 
+// nativeCollections are the public collection IDs of the closed native Shipping
+// Logs inGitDB store: baseline streams and their separately stored recovery
+// examples. The store is its settings, its root map, and a definition plus a
+// records file per collection.
+var nativeCollections = []string{
+	"baseline", "recovery11045example", "recovery11062example",
+	"carrierGateway", "carrierGatewayRecovery11045example", "carrierGatewayRecovery11062example",
+}
+
+var nativeStoreFiles = 2 + 2*len(nativeCollections)
+
 var runtimeDatabaseIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var providerRepositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var providerRevisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -125,8 +136,8 @@ func loadRuntimeInventoryWithImage(path string, image *protectedImage) ([]runtim
 			return nil, fmt.Errorf("runtime provider %q has unsupported storage engine %q", database.ID, database.StorageEngine)
 		}
 		if database.StorageEngine == "ingitdb" {
-			if !safeInventoryFilename(database.NativeRoot) || len(database.NativeFiles) != 8 {
-				return nil, fmt.Errorf("runtime provider %q must pin the exact native inGitDB root and eight files", database.ID)
+			if !safeInventoryFilename(database.NativeRoot) || len(database.NativeFiles) != nativeStoreFiles {
+				return nil, fmt.Errorf("runtime provider %q must pin the exact native inGitDB root and %d files", database.ID, nativeStoreFiles)
 			}
 			seenNative := map[string]struct{}{}
 			for _, pin := range database.NativeFiles {

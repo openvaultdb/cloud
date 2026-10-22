@@ -72,7 +72,8 @@ const (
 // TestCloudMeasureExactMoneyAggregates against all nine verified fixtures: the
 // heaviest reads are unchanged AdventureWorks ones, so the existing conservative
 // allowances remain; the separate actual Linux candidate experiment still gates
-// publication.
+// publication. The same run covered the repinned Shipping (5eff414) and the
+// six-collection Shipping Logs store (78bc3e5); exact Money peaked at 77.7 MiB.
 var measuredProviders = []string{
 	"adventureworks@5028a27189b487d6fd8025fafc1307aada707fd2",
 	"chinook@26e852cca00101f53a84ef8ee1f1ae389067f5cf",
@@ -81,8 +82,8 @@ var measuredProviders = []string{
 	"northwind@e74726515c3833620b54b7a50d1d273276dd23c1",
 	"pubs@6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",
 	"sakila@cb9a81a8cbedcd8831737f281f888d5d584fae85",
-	"shipping-logs@9534639578f13791dc023ad8553604533dadb716",
-	"shipping@ea71228bc4aceb845075fc7ef79e868debe3149f",
+	"shipping-logs@78bc3e52fa535c68ead96eb2a8d4c25d5d072c86",
+	"shipping@5eff414052ea417502549c5f80b92b558804305f",
 }
 
 // requestClass is a kind of request an instance may run: how many may run at

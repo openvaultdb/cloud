@@ -134,6 +134,22 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+# One original event per public Shipping Logs collection; baseline streams and
+# their future recovery examples are separate collections.
+SHIPPING_LOGS_REPRESENTATIVE_EVENTS = {
+    "baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1",
+    "carrierGateway": "attempt-11038-1-c1", "carrierGatewayRecovery11045example": "attempt-11045-2-c1", "carrierGatewayRecovery11062example": "attempt-11062-2-c1",
+}
+SHIPPING_LOGS_BASELINES = ("baseline", "carrierGateway")
+
+
+def require_recovery_separation(event_ids):
+    """No recovery-example event may appear in a baseline view."""
+    recovery = set().union(*(ids for name, ids in event_ids.items() if name not in SHIPPING_LOGS_BASELINES))
+    for name in SHIPPING_LOGS_BASELINES:
+        if event_ids.get(name, set()) & recovery:
+            raise RuntimeError(f"Shipping Logs baseline {name} contains recovery-example events")
+
 # The public-demo rows the Countries reference provider must resolve, by ISO alpha-2 key:
 # alpha-3 code and currency, and a World Bank population with its year and source.
 COUNTRIES_EXPECTED = {"CA": ("CAN", "CAD"), "IT": ("ITA", "EUR"), "BE": ("BEL", "EUR"), "US": ("USA", "USD"), "VE": ("VEN", "VES")}
@@ -308,17 +324,20 @@ def main() -> None:
             if keyed.get("data") != row["data"]:
                 raise RuntimeError("Shipping order 11062 keyed read differs")
         if args.publication_receipt and database["id"] == "shipping-logs":
-            expected = {"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1"}
+            expected = SHIPPING_LOGS_REPRESENTATIVE_EVENTS
             if set(recordsets) != set(expected) or set(json.loads(api_profile).get("collections", [])) != set(expected):
                 raise RuntimeError("Shipping Logs collection IDs differ")
+            event_ids = {}
             for collection, key in expected.items():
                 query = f"from: {{name: {collection}}}\nlimit: 100"
                 rows = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1]).get("records", [])
                 if not rows or not all(row["key"].startswith(collection + "/") for row in rows) or not any(row["data"].get("event_id") == key for row in rows):
                     raise RuntimeError(f"Shipping Logs separate collection query failed: {collection}")
+                event_ids[collection] = {row["data"].get("event_id") for row in rows}
                 keyed = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/records/{collection}/{key}")[1])
                 if keyed.get("data", {}).get("event_id") != key:
                     raise RuntimeError(f"Shipping Logs representative keyed read failed: {collection}")
+            require_recovery_separation(event_ids)
 
         if args.publication_receipt and database["id"] == "countries":
             require_countries_reference(args.origin, database_id, recordsets, api_profile)

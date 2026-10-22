@@ -57,4 +57,16 @@ class PublicationDiscoveryTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):smoke.require_publication_discovery(json.dumps(value),IDS)
 
 
+    def test_recovery_examples_never_appear_in_baseline_views(self):
+        clean = {"baseline": {"attempt-11062-1-e1"}, "carrierGateway": {"attempt-11038-1-c1"},
+                 "recovery11045example": {"attempt-11045-2-e1"}, "carrierGatewayRecovery11045example": {"attempt-11045-2-c1"}}
+        smoke.require_recovery_separation(clean)
+        self.assertEqual(set(smoke.SHIPPING_LOGS_REPRESENTATIVE_EVENTS), {"baseline", "recovery11045example", "recovery11062example", "carrierGateway", "carrierGatewayRecovery11045example", "carrierGatewayRecovery11062example"})
+        for baseline, leaked in [("baseline", "attempt-11045-2-e1"), ("carrierGateway", "attempt-11045-2-c1")]:
+            value = {name: set(ids) for name, ids in clean.items()}
+            value[baseline].add(leaked)
+            with self.subTest(baseline=baseline), self.assertRaises(RuntimeError):
+                smoke.require_recovery_separation(value)
+
+
 if __name__ == "__main__": unittest.main()

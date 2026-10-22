@@ -546,8 +546,9 @@ providers retain their read/snapshot behavior and existing limits, including the
 The production `providers.json` and protected image serve the six established
 SQLite providers, the immutable Shipping SQLite provider, the Countries
 reference SQLite provider (`demo-db/countries`: ISO codes, currency and dated
-World Bank population, CC BY 4.0), and the original eight-file Shipping Logs
-inGitDB store. The publication smoke reads Countries rows for the demo's ship
+World Bank population, CC BY 4.0), and the original fourteen-file Shipping Logs
+inGitDB store (six collections: baseline and carrier-gateway streams, each with
+their separately stored 11045/11062 recovery examples). The publication smoke reads Countries rows for the demo's ship
 countries, its `USA`/`UK` aliases and the World Bank attribution row. Shipping Logs is read directly through
 the published inGitDB DAL; preparation and runtime do not create a parsed log
 database, cache, or snapshot. Native PostgreSQL is a separate runtime opt-in and
