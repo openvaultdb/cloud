@@ -117,7 +117,7 @@ func TestActualProductionProbe(t *testing.T) {
 			if err := json.Unmarshal(body, &document); err != nil {
 				t.Fatal(err)
 			}
-			if len(document.Databases) != 10 {
+			if len(document.Databases) != 11 {
 				t.Fatalf("actual executable mounted %d databases", len(document.Databases))
 			}
 			// Known data/auth/static paths must reject absent, wrong and
@@ -1101,8 +1101,8 @@ func TestActualCapacity(t *testing.T) {
 		}
 	}()
 	receipt["checked_startup_seconds"] = time.Since(started).Seconds()
-	if len(providers) != 10 || time.Since(started) >= 240*time.Second {
-		t.Fatal("full ten-provider checked startup failed probe ceiling")
+	if len(providers) != 11 || time.Since(started) >= 240*time.Second {
+		t.Fatal("full eleven-provider checked startup failed probe ceiling")
 	}
 	mounted, err := actualCgroup()
 	if err != nil {
