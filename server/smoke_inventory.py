@@ -5,6 +5,8 @@ import argparse
 import base64
 import json
 import hashlib
+import math
+import re
 import time
 from pathlib import Path
 import sqlite3
@@ -16,20 +18,69 @@ from urllib.request import Request, urlopen
 OBSERVATIONS = []
 
 def observe(origin, path, method, status, headers, body):
-    OBSERVATIONS.append({"origin": origin, "path": path, "method": method, "status": status, "bodyBytes": len(body), "bodySha256": hashlib.sha256(body).hexdigest(), "bodyBase64": base64.b64encode(body).decode(), "headers": {name: headers.get(name) for name in ("Access-Control-Allow-Origin", "Cache-Control", "OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256")}})
+    OBSERVATIONS.append({"origin": origin, "path": path, "method": method, "status": status, "bodyBytes": len(body), "bodySha256": hashlib.sha256(body).hexdigest(), "bodyBase64": base64.b64encode(body).decode(), "headers": {name: headers.get(name) for name in ("Access-Control-Allow-Origin", "Cache-Control", "OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256", "Retry-After")}})
     return status, headers, body
 
+def query_request(path, method):
+    """Match the gateway query class after canonical path decoding; OPTIONS is separate."""
+    canonical = unquote(urlsplit(path).path)
+    return method != "OPTIONS" and (canonical in ("/v1/dtql", "/v1/dtql/")
+        or re.fullmatch(r"/v1/databases/[^/]+/(dtql|query|batch|read)/?", canonical) is not None)
+
+
+class SmokeRequestPolicy:
+    def __init__(self, query_interval=1.1, retries=2, max_retry_after=120,
+                 clock=None, sleep=None, transport=None):
+        if not math.isfinite(query_interval) or not 0 <= query_interval <= 60:
+            raise ValueError("query interval must be finite and between 0 and 60 seconds")
+        if type(retries) is not int or not 0 <= retries <= 5:
+            raise ValueError("rate limit retries must be an integer between 0 and 5")
+        if not math.isfinite(max_retry_after) or not 0 <= max_retry_after <= 300:
+            raise ValueError("maximum Retry-After must be finite and between 0 and 300 seconds")
+        self.query_interval, self.retries, self.max_retry_after = query_interval, retries, max_retry_after
+        self.clock, self.sleep, self.transport = clock or time.monotonic, sleep or time.sleep, transport or urlopen
+        self.last_query = None
+
+    def settings(self):
+        return {"queryIntervalSeconds": self.query_interval, "rateLimitRetries": self.retries,
+                "maxRetryAfterSeconds": self.max_retry_after}
+
+    def request(self, origin, path, method="GET", body=None, headers=None):
+        request_headers = {"User-Agent": "DemoDB-cloud-smoke/1"}
+        request_headers.update(headers or {})
+        for attempt in range(self.retries + 1):
+            if query_request(path, method):
+                if self.last_query is not None:
+                    delay = self.query_interval - (self.clock() - self.last_query)
+                    if delay > 0:
+                        self.sleep(delay)
+                self.last_query = self.clock()
+            req = Request(origin.rstrip("/") + path, data=body, headers=request_headers, method=method)
+            try:
+                with self.transport(req, timeout=20) as response:
+                    result = observe(origin, path, method, response.status, response.headers, response.read())
+            except HTTPError as error:
+                with error:
+                    result = observe(origin, path, method, error.code, error.headers, error.read())
+            except URLError as error:
+                raise RuntimeError(f"request {method} {path} failed: {error}") from error
+            if result[0] != 429 or attempt == self.retries:
+                return result
+            retry_after = result[1].get("Retry-After", "")
+            # The owning gateway emits delta-seconds. Reject other syntax and excessive waits.
+            if not re.fullmatch(r"[0-9]+", retry_after) or len(retry_after) > 6:
+                raise RuntimeError("HTTP 429 has no valid bounded delta-seconds Retry-After")
+            delay = int(retry_after)
+            if delay > self.max_retry_after:
+                raise RuntimeError("HTTP 429 Retry-After exceeds the configured bound")
+            self.sleep(delay)
+
+
+REQUEST_POLICY = SmokeRequestPolicy()
+
+
 def request(origin: str, path: str, method: str = "GET", body: bytes | None = None, headers: dict[str, str] | None = None):
-    request_headers = {"User-Agent": "DemoDB-cloud-smoke/1"}
-    request_headers.update(headers or {})
-    req = Request(origin.rstrip("/") + path, data=body, headers=request_headers, method=method)
-    try:
-        with urlopen(req, timeout=20) as response:
-            return observe(origin, path, method, response.status, response.headers, response.read())
-    except HTTPError as error:
-        return observe(origin, path, method, error.code, error.headers, error.read())
-    except URLError as error:
-        raise RuntimeError(f"request {method} {path} failed: {error}") from error
+    return REQUEST_POLICY.request(origin, path, method, body, headers)
 
 
 def require_status(origin: str, path: str, expected: int = 200, **kwargs):
@@ -86,7 +137,15 @@ def main() -> None:
     parser.add_argument("--inventory", type=Path, required=True, help="verified generated runtime inventory")
     parser.add_argument("--receipt", type=Path, help="write actual public HTTP status/body/hash evidence")
     parser.add_argument("--publication-receipt", type=Path, help="require full Shipping publication checks bound to serving identity")
+    parser.add_argument("--query-interval-seconds", type=float, default=1.1, help="minimum query-class spacing (0..60 seconds; default 1.1)")
+    parser.add_argument("--rate-limit-retries", type=int, default=2, help="additional attempts on HTTP429 only (0..5)")
+    parser.add_argument("--max-retry-after-seconds", type=float, default=120, help="maximum accepted gateway delta-seconds Retry-After (0..300)")
     args = parser.parse_args()
+    global REQUEST_POLICY
+    try:
+        REQUEST_POLICY = SmokeRequestPolicy(args.query_interval_seconds, args.rate_limit_retries, args.max_retry_after_seconds)
+    except ValueError as error:
+        parser.error(str(error))
     OBSERVATIONS.clear()
     inventory = json.loads(args.inventory.read_text(encoding="utf-8"))
     databases = inventory.get("databases")
@@ -271,7 +330,7 @@ def main() -> None:
         if "cloud.openvaultdb.com" not in json.dumps(json.loads(discovery)):
             raise RuntimeError("central discovery omits the Cloud provider")
     if args.receipt:
-        args.receipt.write_text(json.dumps({"verifiedAt": int(time.time()), "servingIdentity": identity, "providers": [database["id"] for database in databases], "requests": OBSERVATIONS}, sort_keys=True, indent=2) + "\n")
+        args.receipt.write_text(json.dumps({"verifiedAt": int(time.time()), "servingIdentity": identity, "providers": [database["id"] for database in databases], "requests": OBSERVATIONS, "requestPolicy": REQUEST_POLICY.settings()}, sort_keys=True, indent=2) + "\n")
 
 
 if __name__ == "__main__":

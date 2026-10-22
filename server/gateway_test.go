@@ -336,3 +336,39 @@ func TestGatewayEmbeddedPolicyMatchesHTTPAndRedirects(t *testing.T) {
 		t.Fatal(w.Code, w.Header())
 	}
 }
+
+func TestGatewayDeclaredCompanionOriginsAcrossMethods(t *testing.T) {
+	for _, origin := range []string{"https://shipping.demodb.dev", "https://shipping-logs.demodb.dev", "https://undeclared.invalid"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodOptions} {
+			t.Run(origin+"/"+method, func(t *testing.T) {
+				calls := 0
+				h := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+					w.WriteHeader(http.StatusOK)
+				}), nil)
+				r := httptest.NewRequest(method, "https://"+cloudHost+"/v1/databases/shipping/dtql", strings.NewReader(`{"query":"from rows"}`))
+				r.Header.Set(defaultOriginSecretHeader, gatewayTestSecret)
+				r.Header.Set("Origin", origin)
+				r.Header.Set("Access-Control-Request-Method", "POST")
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				wantStatus, wantCalls := http.StatusOK, 1
+				if method == http.MethodOptions {
+					wantStatus, wantCalls = http.StatusNoContent, 0
+				}
+				wantOrigin := origin
+				if origin == "https://undeclared.invalid" {
+					wantOrigin = ""
+				}
+				if w.Code != wantStatus || calls != wantCalls || w.Header().Get("Access-Control-Allow-Origin") != wantOrigin || w.Header().Get("Access-Control-Allow-Credentials") != "" || w.Header().Get("Vary") != "Origin" {
+					t.Fatal(w.Code, calls, w.Header())
+				}
+				if !strings.Contains(w.Header().Get("Access-Control-Allow-Methods"), "POST") || !strings.Contains(w.Header().Get("Access-Control-Allow-Headers"), "OVDB-Page-Token") {
+					t.Fatal(w.Header())
+				}
+			})
+		}
+	}
+}

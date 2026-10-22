@@ -35,7 +35,7 @@ var publicQueryPath = regexp.MustCompile(`^/v1/databases/[^/]+/(dtql|query|batch
 var demoDBPath = regexp.MustCompile(`^/v1/databases/([a-z][a-z0-9-]{0,39})(/.*)?$`)
 var demoRecordPath = regexp.MustCompile(`^/records/[^/]+(/[^/]+)+$`)
 var gatewayDatabaseID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-var gatewayAllowedOrigins = strings.Fields("https://adventureworks.demodb.dev https://chinook.demodb.dev https://chinookdb.com https://datatug.app https://demodb.dev https://employees.demodb.dev https://northwind.demodb.dev https://pubs.demodb.dev https://sakila.demodb.dev https://www.chinookdb.com https://www.demodb.dev")
+var gatewayAllowedOrigins = strings.Fields("https://adventureworks.demodb.dev https://chinook.demodb.dev https://chinookdb.com https://datatug.app https://demodb.dev https://employees.demodb.dev https://northwind.demodb.dev https://pubs.demodb.dev https://sakila.demodb.dev https://shipping.demodb.dev https://shipping-logs.demodb.dev https://www.chinookdb.com https://www.demodb.dev")
 
 // Limits are independent per process/revision, not a global distributed quota.
 // Keys expire in one minute; exhausted key capacity refuses new keys.
