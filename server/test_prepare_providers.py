@@ -61,13 +61,15 @@ class PrepareProvidersTest(unittest.TestCase):
     def test_pinned_provider_repositories_prepare_a_runtime_inventory(self) -> None:
         providers_root = PROJECTS_ROOT
         providers = prepare_providers.load_inventory(INVENTORY)
-        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [provider["id"] for provider in providers])
+        self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"], [provider["id"] for provider in providers])
         by_id = {provider["id"]: provider for provider in providers}
         self.assertTrue(by_id["adventureworks"]["requirePublishedQuery"])
         self.assertTrue(by_id["employees"]["requirePublishedQuery"])
         self.assertTrue(by_id["pubs"].get("requirePublishedQuery", True))
         self.assertTrue(by_id["sakila"]["requirePublishedQuery"])
         self.assertIn("film_actor", by_id["sakila"]["smokeRecordsets"])
+        self.assertEqual(["country_aliases", "countries", "sources"], by_id["countries"]["smokeRecordsets"])
+        self.assertEqual([{"sourceRecordset": "country_aliases", "sourceField": "country_iso2", "targetRecordset": "countries", "targetField": "iso2"}], by_id["countries"]["foreignKeySmoke"])
         self.assertEqual(["dbo.DatabaseLog", "dbo.ErrorLog"], by_id["adventureworks"]["emptyRecordsets"])
         self.assertEqual({"Production.ProductPhoto": ["ThumbNailPhoto", "LargePhoto"]}, by_id["adventureworks"]["blobSmokeFields"])
         if not all((providers_root / provider["repository"]).is_dir() for provider in providers):
@@ -79,7 +81,7 @@ class PrepareProvidersTest(unittest.TestCase):
             runtime_path = prepare_providers.prepare_inventory(INVENTORY, output, providers_root)
             runtime = json.loads(runtime_path.read_text())
             self.assertEqual(2, runtime["version"])
-            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"], [database["id"] for database in runtime["databases"]])
+            self.assertEqual(["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"], [database["id"] for database in runtime["databases"]])
             for database in runtime["databases"]:
                 self.assertTrue((output / database["manifest"]).is_file())
                 self.assertTrue((output / database["license"]).is_file())
@@ -133,7 +135,7 @@ class PrepareProvidersTest(unittest.TestCase):
                         smoke_inventory.require_query_cache_control(provider, value)
 
     def native_fixture(self):
-        ids = ("baseline", "recovery11045example", "recovery11062example")
+        ids = tuple(prepare_providers.NATIVE_COLLECTIONS)
         root = {name: f"collections/{name}" for name in ids}
         columns = {"event_id": {"type": "string", "required": True, "min_length": 1},
                    "kind": {"type": "string", "required": True, "min_length": 2},
@@ -141,21 +143,22 @@ class PrepareProvidersTest(unittest.TestCase):
         definition = {"record_file": {"name": "records.jsonl", "type": "[]map[string]any", "format": "jsonl"},
                       "primary_key": ["event_id"], "columns": columns, "columns_order": list(columns)}
         blobs = {"ingitdb/.ingitdb/settings.yaml": b"{}", "ingitdb/.ingitdb/root-collections.yaml": json.dumps(root).encode()}
-        tables, files, logs = [], {}, []
+        tables, files, logs, gateway_logs = [], {}, [], []
         for name in ids:
             blobs[f"ingitdb/collections/{name}/.collection/definition.yaml"] = json.dumps(definition).encode()
             path = f"ingitdb/collections/{name}/records.jsonl"
             rows = [{"event_id": f"{name}-{n}", "kind": "observed", "sequence": n, "synthetic": True} for n in range(2)]
             blobs[path] = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
             pin = {"sha256": hashlib.sha256(blobs[path]).hexdigest(), "bytes": len(blobs[path])}
-            files[name] = {"path": path, "sourcePath": f"fixture/logs/{name}.jsonl", "classification": "baseline" if name == "baseline" else "recovery-example", "rowCount": 2, **pin}
-            logs.append({"path": f"logs/{name}.jsonl", **pin})
+            files[name] = {"path": path, "sourcePath": f"fixture/logs/{name}.jsonl", "classification": prepare_providers.NATIVE_COLLECTIONS[name], "rowCount": 2, **pin}
+            # The original fixture lists carrier-gateway logs apart from event logs.
+            (gateway_logs if name.startswith("carrierGateway") else logs).append({"path": f"logs/{name}.jsonl", **pin})
             tables.append({"name": name, "rowCount": 2, "columns": [{"name": key, "type": value["type"], "nullable": False} for key, value in columns.items()]})
         fetched = {"manifest": json.dumps({"id": "shipping-logs", "storage": {"engine": "ingitdb", "path": "ingitdb"}, "source": {"path": "fixture/manifest.json", "files": files}}).encode(),
                    "contract": json.dumps({"schema": {"database": {"id": "shipping-logs"}, "tables": tables}}).encode(),
                    "databaseManifest": json.dumps({"localId": "shipping-logs", "capabilities": {"read": True, "query": True, "write": False}}).encode()}
         blobs["metadata/schema.json"] = json.dumps({"database": {"id": "shipping-logs"}, "tables": tables}).encode()
-        blobs["source-manifest.json"] = json.dumps({"logs": logs}).encode()
+        blobs["source-manifest.json"] = json.dumps({"logs": logs, "carrierGatewayLogs": gateway_logs}).encode()
         return blobs, fetched
 
     def test_native_semantic_corruption_with_consistent_updated_pins(self) -> None:
@@ -187,6 +190,9 @@ class PrepareProvidersTest(unittest.TestCase):
             "source hash": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(sha256="0" * 64)),
             "source length": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(bytes=0)),
             "source alias": lambda b: change_json(b, "source-manifest.json", lambda v: v["logs"][0].update(path=v["logs"][1]["path"])),
+            "gateway log missing": lambda b: change_json(b, "source-manifest.json", lambda v: v["carrierGatewayLogs"].pop()),
+            "gateway source hash": lambda b: change_json(b, "source-manifest.json", lambda v: v["carrierGatewayLogs"][0].update(sha256="0" * 64)),
+            "required flag type": lambda b: change_json(b, definition_path, lambda v: v["columns"]["kind"].update(required="yes")),
         }
         for name, mutate in mutations.items():
             with self.subTest(mutation=name):
@@ -202,7 +208,8 @@ class PrepareProvidersTest(unittest.TestCase):
                 provider = {"id": "shipping-logs", "repository": "demo-db/shipping-logs", "revision": "a" * 40, "nativeFiles": native_pins, "metadataFiles": metadata_pins}
                 validate = lambda: prepare_providers.validate_native_provider(provider, lambda repo, revision, path: blobs[path], copy.deepcopy(fetched))
                 if name == "valid":
-                    self.assertEqual(8, len(validate()["nativeFiles"]))
+                    self.assertEqual(prepare_providers.NATIVE_STORE_FILES, len(validate()["nativeFiles"]))
+                    self.assertEqual(14, prepare_providers.NATIVE_STORE_FILES)
                 else:
                     with self.assertRaises(ValueError):
                         validate()

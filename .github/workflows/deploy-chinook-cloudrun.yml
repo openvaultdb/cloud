@@ -116,8 +116,8 @@ jobs:
                       if sha256_file(path) != pin["sha256"] or path.stat().st_size != pin["bytes"]:
                           raise SystemExit(f"native provider receipt mismatch: {database['id']} {pin['path']}")
                       actual.append(pin["path"])
-                  if len(actual) != 8:
-                      raise SystemExit("native provider inventory must contain exactly eight files")
+                  if len(actual) != 14:
+                      raise SystemExit("native provider inventory must contain exactly fourteen files")
                   serving_hash = database["servingSha256"]
               else:
                   serving_hash = sha256_file(fixture / f"{database['id']}.sqlite")

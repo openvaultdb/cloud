@@ -17,6 +17,9 @@ from urllib.request import Request, urlopen
 
 OBSERVATIONS = []
 
+# The published DemoDB catalogue: central discovery and publication acceptance require exactly these providers.
+PUBLISHED_PROVIDERS = frozenset({"adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"})
+
 def observe(origin, path, method, status, headers, body):
     OBSERVATIONS.append({"origin": origin, "path": path, "method": method, "status": status, "bodyBytes": len(body), "bodySha256": hashlib.sha256(body).hexdigest(), "bodyBase64": base64.b64encode(body).decode(), "headers": {name: headers.get(name) for name in ("Access-Control-Allow-Origin", "Cache-Control", "OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256", "Retry-After")}})
     return status, headers, body
@@ -131,6 +134,49 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+# One original event per public Shipping Logs collection; baseline streams and
+# their future recovery examples are separate collections.
+SHIPPING_LOGS_REPRESENTATIVE_EVENTS = {
+    "baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1",
+    "carrierGateway": "attempt-11038-1-c1", "carrierGatewayRecovery11045example": "attempt-11045-2-c1", "carrierGatewayRecovery11062example": "attempt-11062-2-c1",
+}
+SHIPPING_LOGS_BASELINES = ("baseline", "carrierGateway")
+
+
+def require_recovery_separation(event_ids):
+    """No recovery-example event may appear in a baseline view."""
+    recovery = set().union(*(ids for name, ids in event_ids.items() if name not in SHIPPING_LOGS_BASELINES))
+    for name in SHIPPING_LOGS_BASELINES:
+        if event_ids.get(name, set()) & recovery:
+            raise RuntimeError(f"Shipping Logs baseline {name} contains recovery-example events")
+
+# The public-demo rows the Countries reference provider must resolve, by ISO alpha-2 key:
+# alpha-3 code and currency, and a World Bank population with its year and source.
+COUNTRIES_EXPECTED = {"CA": ("CAN", "CAD"), "IT": ("ITA", "EUR"), "BE": ("BEL", "EUR"), "US": ("USA", "USD"), "VE": ("VEN", "VES")}
+COUNTRIES_ALIASES = {"USA": "US", "UK": "GB"}
+
+
+def require_countries_reference(origin, database_id, recordsets, api_profile):
+    """Countries resolves the demo's ship countries by code and alias, with attributed populations."""
+    if set(recordsets) != {"countries", "country_aliases", "sources"}:
+        raise RuntimeError("Countries smoke recordsets differ")
+    if not {"countries", "country_aliases", "sources"} <= set(json.loads(api_profile).get("collections", [])):
+        raise RuntimeError("Countries public profile omits a recordset")
+    for iso2, (iso3, currency) in COUNTRIES_EXPECTED.items():
+        row = json.loads(require_status(origin, f"/v1/databases/{database_id}/records/countries/{iso2}")[1]).get("data", {})
+        population, year = row.get("population"), row.get("population_year")
+        if (row.get("iso2"), row.get("iso3"), row.get("currency_code")) != (iso2, iso3, currency) or type(population) is not int or population <= 0 or type(year) is not int or year < 1960 or row.get("population_source_id") != "worldbank-sp-pop-totl":
+            raise RuntimeError(f"Countries {iso2} lacks its codes, currency or attributed population")
+    for alias, iso2 in COUNTRIES_ALIASES.items():
+        query = f"from: {{name: country_aliases}}\nwhere: {{op: ==, left: {{field: alias}}, right: {{value: {alias}}}}}\nlimit: 1"
+        rows = json.loads(require_status(origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1]).get("records", [])
+        if len(rows) != 1 or rows[0].get("data", {}).get("country_iso2") != iso2:
+            raise RuntimeError(f"Countries alias {alias} does not resolve to {iso2}")
+    source = json.loads(require_status(origin, f"/v1/databases/{database_id}/records/sources/worldbank-sp-pop-totl")[1]).get("data", {})
+    if source.get("publisher") != "The World Bank" or source.get("licence") != "CC-BY-4.0" or "SP.POP.TOTL" not in source.get("attribution", ""):
+        raise RuntimeError("Countries World Bank attribution differs")
+
+
 def require_publication_discovery(raw, expected_ids):
     """Validate the central catalogue's published DemoDB alias contract, not its host implementation."""
     discovery = json.loads(raw)
@@ -138,8 +184,8 @@ def require_publication_discovery(raw, expected_ids):
         raise RuntimeError("central discovery protocol/auth contract mismatch")
     rows = discovery.get("databases")
     expected = set(expected_ids)
-    if len(expected_ids) != 8 or len(expected) != 8 or not isinstance(rows, list) or len(rows) != 8:
-        raise RuntimeError("central discovery requires the exact eight-provider inventory")
+    if len(expected_ids) != len(PUBLISHED_PROVIDERS) or expected != PUBLISHED_PROVIDERS or not isinstance(rows, list) or len(rows) != len(PUBLISHED_PROVIDERS):
+        raise RuntimeError("central discovery requires the exact nine-provider inventory")
     found = set()
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"id", "url", "apiUrl", "manifestUrl", "capabilities"}:
@@ -278,17 +324,23 @@ def main() -> None:
             if keyed.get("data") != row["data"]:
                 raise RuntimeError("Shipping order 11062 keyed read differs")
         if args.publication_receipt and database["id"] == "shipping-logs":
-            expected = {"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1"}
+            expected = SHIPPING_LOGS_REPRESENTATIVE_EVENTS
             if set(recordsets) != set(expected) or set(json.loads(api_profile).get("collections", [])) != set(expected):
                 raise RuntimeError("Shipping Logs collection IDs differ")
+            event_ids = {}
             for collection, key in expected.items():
                 query = f"from: {{name: {collection}}}\nlimit: 100"
                 rows = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1]).get("records", [])
                 if not rows or not all(row["key"].startswith(collection + "/") for row in rows) or not any(row["data"].get("event_id") == key for row in rows):
                     raise RuntimeError(f"Shipping Logs separate collection query failed: {collection}")
+                event_ids[collection] = {row["data"].get("event_id") for row in rows}
                 keyed = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/records/{collection}/{key}")[1])
                 if keyed.get("data", {}).get("event_id") != key:
                     raise RuntimeError(f"Shipping Logs representative keyed read failed: {collection}")
+            require_recovery_separation(event_ids)
+
+        if args.publication_receipt and database["id"] == "countries":
+            require_countries_reference(args.origin, database_id, recordsets, api_profile)
 
         for relationship in database.get("foreignKeySmoke", []):
             source = queried_rows.get(relationship["sourceRecordset"])
@@ -343,8 +395,8 @@ def main() -> None:
         identity = json.loads(args.publication_receipt.read_text())
         if identity.get("mergeSha") != identity.get("deployedSourceSha") or identity.get("candidateImage") != identity.get("deployedImage") or not identity.get("deployedRevision"):
             raise RuntimeError("publication receipt lacks verified serving identity")
-        if {database["id"] for database in databases} != {"adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"}:
-            raise RuntimeError("publication acceptance requires all eight providers")
+        if {database["id"] for database in databases} != PUBLISHED_PROVIDERS:
+            raise RuntimeError("publication acceptance requires all nine providers")
         boundary = json.loads(Path(identity["originBoundaryReceipt"]).read_text())
         observed = boundary.get("originObservations", [])
         if not observed or any(item.get("status") not in (403, 404) for item in observed):

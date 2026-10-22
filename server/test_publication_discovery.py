@@ -5,7 +5,7 @@ import unittest
 import smoke_inventory as smoke
 
 
-IDS = ["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs"]
+IDS = ["adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"]
 
 
 def catalogue():
@@ -26,9 +26,9 @@ class PublicationDiscoveryTest(unittest.TestCase):
         smoke.require_publication_discovery(json.dumps(value), IDS)
 
     def test_incomplete_duplicate_or_extra_inventory_refused(self):
-        for mode in ["six", "duplicate", "extra", "missing-field", "extra-field"]:
+        for mode in ["eight", "duplicate", "extra", "missing-field", "extra-field"]:
             value = catalogue()
-            if mode == "six":value["databases"] = value["databases"][:6]
+            if mode == "eight":value["databases"] = value["databases"][:8]
             if mode == "duplicate":value["databases"][-1] = copy.deepcopy(value["databases"][0])
             if mode == "extra":value["databases"][-1]["id"] = "unpublished"
             if mode == "missing-field":value["databases"][0].pop("manifestUrl")
@@ -55,6 +55,18 @@ class PublicationDiscoveryTest(unittest.TestCase):
         for field, invalid in [("protocol","other"),("authEnabled",True),("authEnabled",0)]:
             value=catalogue();value[field]=invalid
             with self.assertRaises(RuntimeError):smoke.require_publication_discovery(json.dumps(value),IDS)
+
+
+    def test_recovery_examples_never_appear_in_baseline_views(self):
+        clean = {"baseline": {"attempt-11062-1-e1"}, "carrierGateway": {"attempt-11038-1-c1"},
+                 "recovery11045example": {"attempt-11045-2-e1"}, "carrierGatewayRecovery11045example": {"attempt-11045-2-c1"}}
+        smoke.require_recovery_separation(clean)
+        self.assertEqual(set(smoke.SHIPPING_LOGS_REPRESENTATIVE_EVENTS), {"baseline", "recovery11045example", "recovery11062example", "carrierGateway", "carrierGatewayRecovery11045example", "carrierGatewayRecovery11062example"})
+        for baseline, leaked in [("baseline", "attempt-11045-2-e1"), ("carrierGateway", "attempt-11045-2-c1")]:
+            value = {name: set(ids) for name, ids in clean.items()}
+            value[baseline].add(leaked)
+            with self.subTest(baseline=baseline), self.assertRaises(RuntimeError):
+                smoke.require_recovery_separation(value)
 
 
 if __name__ == "__main__": unittest.main()

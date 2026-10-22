@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -323,6 +324,15 @@ func TestRecordDataMatchesNormalizesOnlyMissingNullableValues(t *testing.T) {
 // responses over stdio, without a network listener or substituted verifier.
 func runActualInventorySmoke(t *testing.T, handler http.Handler, inventory string) {
 	t.Helper()
+	runSmokeBridge(t, handler, `sys.argv=["smoke_inventory.py","--origin","https://cloud.openvaultdb.com","--inventory",sys.argv[1]]
+with contextlib.redirect_stdout(sys.stderr): smoke.main()
+`, inventory)
+}
+
+// runSmokeBridge runs a smoke_inventory.py call whose requests are answered by
+// handler.ServeHTTP; argument is passed as sys.argv[1].
+func runSmokeBridge(t *testing.T, handler http.Handler, call, argument string) {
+	t.Helper()
 	script := `import base64, contextlib, email.message, json, sys
 import smoke_inventory as smoke
 wire=sys.stdout
@@ -333,10 +343,8 @@ def request(origin,path,method="GET",body=None,headers=None):
   for value in values: h[name]=value
  return smoke.observe(origin,path,method,response["status"],h,base64.b64decode(response["body"] or ""))
 smoke.request=request
-sys.argv=["smoke_inventory.py","--origin","https://cloud.openvaultdb.com","--inventory",sys.argv[1]]
-with contextlib.redirect_stdout(sys.stderr): smoke.main()
-`
-	command := exec.Command("python3", "-c", script, inventory)
+` + call
+	command := exec.Command("python3", "-c", script, argument)
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -381,6 +389,10 @@ with contextlib.redirect_stdout(sys.stderr): smoke.main()
 	t.Log(diagnostic.String())
 }
 
+// rollbackCandidates are the providers this catalogue adds; rollback to the
+// previously published catalogue must serve everything else and 404 these.
+var rollbackCandidates = []string{"countries"}
+
 func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	inventory := os.Getenv("SAMPLE_DATABASES_INVENTORY")
 	if inventory == "" {
@@ -400,7 +412,7 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 		}
 	})
 	runActualInventorySmoke(t, handler, inventory)
-	// Rollback uses these same six entries; retain fixture-relative paths.
+	// Rollback serves the previously published entries without the new candidate; retain fixture-relative paths.
 	var prior runtimeInventory
 	content, err := os.ReadFile(inventory)
 	if err != nil {
@@ -411,7 +423,7 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	}
 	old := prior.Databases[:0]
 	for _, provider := range prior.Databases {
-		if provider.ID != "shipping" && provider.ID != "shipping-logs" {
+		if !slices.Contains(rollbackCandidates, provider.ID) {
 			old = append(old, provider)
 		}
 	}
@@ -438,7 +450,7 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 	})
 	var rollbackProviders []runtimeDatabase
 	for _, provider := range providers {
-		if provider.ID != "shipping" && provider.ID != "shipping-logs" {
+		if !slices.Contains(rollbackCandidates, provider.ID) {
 			rollbackProviders = append(rollbackProviders, provider)
 		}
 	}
@@ -452,10 +464,21 @@ func TestActualHandlerDeploymentSmoke(t *testing.T) {
 		}
 	})
 	runActualInventorySmoke(t, rollbackHandler, rollbackPath)
-	for _, id := range []string{"shipping", "shipping-logs"} {
+	for _, id := range rollbackCandidates {
 		response := selectedRequest(rollbackHandler, http.MethodGet, "/v1/databases/"+id, "")
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("rollback candidate %s: %d", id, response.Code)
 		}
 	}
+}
+
+// TestCloudCountriesReferenceSmoke runs the Countries publication checks against the
+// real prepared provider: demo ship countries by code, currency and attributed
+// World Bank population, the USA and UK aliases, and the source attribution row.
+func TestCloudCountriesReferenceSmoke(t *testing.T) {
+	handler := cloudTestHandler(t, "countries")
+	runSmokeBridge(t, handler, `with contextlib.redirect_stdout(sys.stderr):
+ _, profile = smoke.require_status("https://cloud.openvaultdb.com", "/v1/databases/countries")
+ smoke.require_countries_reference("https://cloud.openvaultdb.com", "countries", ["country_aliases", "countries", "sources"], profile)
+`, "countries")
 }
