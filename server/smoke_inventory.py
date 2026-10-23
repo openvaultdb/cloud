@@ -19,6 +19,10 @@ OBSERVATIONS = []
 
 # The published DemoDB catalogue: central discovery and publication acceptance require exactly these providers.
 PUBLISHED_PROVIDERS = frozenset({"adventureworks", "employees", "chinook", "northwind", "pubs", "sakila", "shipping", "shipping-logs", "countries"})
+# Providers the central demodb.dev catalogue (demo-db/websites) must list. It lists only datasets that
+# have a demodb.dev host; Countries is served here but has no demodb.dev host, so the catalogue may omit it.
+CATALOGUE_PROVIDERS = PUBLISHED_PROVIDERS - {"countries"}
+PIN_FIELDS = (("OVDB-Provider-Revision", "providerRevision"), ("OVDB-Source-SHA256", "sourceSha256"), ("OVDB-Serving-SHA256", "servingSha256"), ("OVDB-Manifest-SHA256", "manifestSha256"))
 
 def observe(origin, path, method, status, headers, body):
     OBSERVATIONS.append({"origin": origin, "path": path, "method": method, "status": status, "bodyBytes": len(body), "bodySha256": hashlib.sha256(body).hexdigest(), "bodyBase64": base64.b64encode(body).decode(), "headers": {name: headers.get(name) for name in ("Access-Control-Allow-Origin", "Cache-Control", "OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256", "Retry-After")}})
@@ -185,8 +189,10 @@ def require_publication_discovery(raw, expected_ids):
         raise RuntimeError("central discovery protocol/auth contract mismatch")
     rows = discovery.get("databases")
     expected = set(expected_ids)
-    if len(expected_ids) != len(PUBLISHED_PROVIDERS) or expected != PUBLISHED_PROVIDERS or not isinstance(rows, list) or len(rows) != len(PUBLISHED_PROVIDERS):
+    if len(expected_ids) != len(PUBLISHED_PROVIDERS) or expected != PUBLISHED_PROVIDERS:
         raise RuntimeError("central discovery requires the exact nine-provider inventory")
+    if not isinstance(rows, list) or not len(CATALOGUE_PROVIDERS) <= len(rows) <= len(PUBLISHED_PROVIDERS):
+        raise RuntimeError("central discovery must list the catalogue providers")
     found = set()
     for row in rows:
         if not isinstance(row, dict) or set(row) != {"id", "url", "apiUrl", "manifestUrl", "capabilities"}:
@@ -200,7 +206,7 @@ def require_publication_discovery(raw, expected_ids):
         capabilities = row["capabilities"]
         if not isinstance(capabilities, dict) or set(capabilities) != {"read", "query", "write"} or capabilities["read"] is not True or capabilities["query"] is not True or capabilities["write"] is not False:
             raise RuntimeError("central discovery must declare actual read-only query capabilities")
-    if found != expected:
+    if not CATALOGUE_PROVIDERS <= found:
         raise RuntimeError("central discovery provider inventory mismatch")
 
 
@@ -210,10 +216,13 @@ def main() -> None:
     parser.add_argument("--inventory", type=Path, required=True, help="verified generated runtime inventory")
     parser.add_argument("--receipt", type=Path, help="write actual public HTTP status/body/hash evidence")
     parser.add_argument("--publication-receipt", type=Path, help="require full Shipping publication checks bound to serving identity")
+    parser.add_argument("--rollback-acceptance", action="store_true", help="accept an older immutable rollback revision: fully smoke providers whose four pins match, record absent or differently pinned ones")
     parser.add_argument("--query-interval-seconds", type=float, default=1.1, help="minimum query-class spacing (0..60 seconds; default 1.1)")
     parser.add_argument("--rate-limit-retries", type=int, default=2, help="additional attempts on HTTP429 only (0..5)")
     parser.add_argument("--max-retry-after-seconds", type=float, default=120, help="maximum accepted gateway delta-seconds Retry-After (0..300)")
     args = parser.parse_args()
+    if args.rollback_acceptance and args.publication_receipt:
+        parser.error("--rollback-acceptance cannot accept a publication")
     global REQUEST_POLICY
     try:
         REQUEST_POLICY = SmokeRequestPolicy(args.query_interval_seconds, args.rate_limit_retries, args.max_retry_after_seconds)
@@ -225,15 +234,28 @@ def main() -> None:
     if inventory.get("version") not in (1, 2) or not isinstance(databases, list) or not databases:
         raise RuntimeError("runtime inventory must contain at least one database")
 
+    unverified = []
     for database in databases:
         database_id = quote(database["id"], safe="")
         cors_origin = database["corsOrigins"][0]
+        if args.rollback_acceptance:
+            # The rollback revision is bound by image digest and predates this inventory; this
+            # inventory's content checks apply only to providers it serves at identical pins.
+            status, headers, _ = request(args.origin, f"/v1/databases/{database_id}")
+            if status == 404:
+                unverified.append({"id": database["id"], "reason": "absent"})
+                continue
+            if status != 200:
+                raise RuntimeError(f"{database['id']} rollback profile returned {status}")
+            if any(headers.get(header) != database.get(field) for header, field in PIN_FIELDS):
+                unverified.append({"id": database["id"], "reason": "different-pins", "providerRevision": headers.get("OVDB-Provider-Revision")})
+                continue
         _, profile = require_status(args.origin, f"/ovdb/dbs/{database_id}")
         if f"https://cloud.openvaultdb.com/ovdb/dbs/{database_id}".encode() not in profile:
             raise RuntimeError(f"{database['id']} human profile omitted its public cloud URL")
         profile_headers, api_profile = require_status(args.origin, f"/v1/databases/{database_id}")
         if args.publication_receipt or all(field in database for field in ("providerRevision", "sourceSha256", "servingSha256", "manifestSha256")):
-            for header, field in (("OVDB-Provider-Revision", "providerRevision"), ("OVDB-Source-SHA256", "sourceSha256"), ("OVDB-Serving-SHA256", "servingSha256"), ("OVDB-Manifest-SHA256", "manifestSha256")):
+            for header, field in PIN_FIELDS:
                 if profile_headers.get(header) != database[field]:
                     raise RuntimeError(f"{database['id']} public proxy pin mismatch: {header}")
         # Every provider must refuse undeclared CORS origins on reads and preflight.
@@ -391,6 +413,8 @@ def main() -> None:
             raise RuntimeError(f"{database['id']} write was not rejected as read-only: {status} {body[:400]!r}")
         print(f"verified {database['id']}: {len(recordsets)} populated queries, {len(empty_recordsets)} empty tables, record lookup, CORS, and read-only")
 
+    if args.rollback_acceptance and len(unverified) == len(databases):
+        raise RuntimeError("rollback revision serves no provider at this inventory's pins")
     identity = None
     if args.publication_receipt:
         identity = json.loads(args.publication_receipt.read_text())
@@ -408,7 +432,7 @@ def main() -> None:
         _, discovery = require_status("https://demodb.dev", "/.well-known/openvaultdb")
         require_publication_discovery(discovery, [database["id"] for database in databases])
     if args.receipt:
-        args.receipt.write_text(json.dumps({"verifiedAt": int(time.time()), "servingIdentity": identity, "providers": [database["id"] for database in databases], "requests": OBSERVATIONS, "requestPolicy": REQUEST_POLICY.settings()}, sort_keys=True, indent=2) + "\n")
+        args.receipt.write_text(json.dumps({"verifiedAt": int(time.time()), "servingIdentity": identity, "providers": [database["id"] for database in databases if database["id"] not in {item["id"] for item in unverified}], "unverifiedProviders": unverified, "requests": OBSERVATIONS, "requestPolicy": REQUEST_POLICY.settings()}, sort_keys=True, indent=2) + "\n")
 
 
 if __name__ == "__main__":

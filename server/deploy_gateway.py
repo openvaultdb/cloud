@@ -225,7 +225,7 @@ def main():
                 rollback_probe += ["--default-url", default_origin]
                 subprocess.run(rollback_probe, check=True)
                 if args.phase == "mapped":
-                    subprocess.run(["python3", "smoke_inventory.py", "--origin", "https://cloud.openvaultdb.com", "--inventory", "fixture/output/inventory.json", "--receipt", "shipping-publication-rollback-live-receipt.json"], check=True)
+                    subprocess.run(["python3", "smoke_inventory.py", "--origin", "https://cloud.openvaultdb.com", "--inventory", "fixture/output/inventory.json", "--rollback-acceptance", "--receipt", "shipping-publication-rollback-live-receipt.json"], check=True)
                 live = traffic(cloud("run", "services", "describe", service)) == [{"revisionName": rollback["revision"], "percent": 100}] and secure_revision(rollback["revision"], origin_binding) == rollback
             except Exception:
                 live = False
