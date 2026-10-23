@@ -583,7 +583,12 @@ reference SQLite provider (`demo-db/countries`: ISO codes, currency and dated
 World Bank population, CC BY 4.0), and the original fourteen-file Shipping Logs
 inGitDB store (six collections: baseline and carrier-gateway streams, each with
 their separately stored 11045/11062 recovery examples). The publication smoke reads Countries rows for the demo's ship
-countries, its `USA`/`UK` aliases and the World Bank attribution row. Shipping Logs is read directly through
+countries, its `USA`/`UK` aliases and the World Bank attribution row. The central
+`https://demodb.dev/.well-known/openvaultdb` catalogue (demo-db/websites) lists only
+datasets with a demodb.dev host, so it must list the other eight and may omit Countries.
+After a failed deploy, the rollback smoke (`--rollback-acceptance`) fully checks only the
+providers the older rollback image serves at this inventory's four pins, and records
+absent or differently pinned ones in its receipt. Shipping Logs is read directly through
 the published inGitDB DAL; preparation and runtime do not create a parsed log
 database, cache, or snapshot. Native PostgreSQL is a separate runtime opt-in and
 does not change that inventory. Four-pin HTTP guards, deadline/cache middleware, gateway
