@@ -115,7 +115,7 @@ class PrepareProvidersTest(unittest.TestCase):
                     if "/collections/" in path and engine == "ingitdb":
                         self.fail("native engine has no SQLite collection HTML profile")
                     result = {"key": "key1", "data": data}
-                    if "/dtql?" in path:
+                    if "/tugql?" in path:
                         result = {"records": [result]}
                     return 200, response_headers, json.dumps(result).encode()
                 with patch.object(sys, "argv", ["smoke_inventory.py", "--origin", "https://cloud.test", "--inventory", str(inventory)]), patch.object(smoke_inventory, "request", request):

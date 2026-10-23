@@ -146,7 +146,7 @@ func TestSharedEndpointLargestWork(t *testing.T) {
  }
  for _, fixture := range fixtures {
   name := fixture.provider+"/"+fixture.table
-  selection.add(fixture.provider, fixture.rows, actualWork{name:name, path:"/v1/databases/"+fixture.provider+"/dtql", body:name+"-body", want:200})
+  selection.add(fixture.provider, fixture.rows, actualWork{name:name, path:"/v1/databases/"+fixture.provider+"/tugql", body:name+"-body", want:200})
  }
  if len(selection.works)!=len(fixtures) { t.Fatalf("shared endpoints dropped selected works: %d",len(selection.works)) }
  largest:=selection.largest()
@@ -239,11 +239,11 @@ func TestActualQueryConformance(t *testing.T) {
  }
  if len(expectedWireQueries)!=0 { t.Fatalf("wire query inventory is incomplete: %+v",expectedWireQueries) }
  for _, doc := range docs {
-  if _,err := dtql.Deserialize([]byte(doc)); err!=nil { t.Fatalf("actual workload fails pinned parser: %v\n%s",err,doc) }
+  if _,err := tugql.Deserialize([]byte(doc)); err!=nil { t.Fatalf("actual workload fails pinned parser: %v\n%s",err,doc) }
  }
  // Keep a control reproducing the hosted scalar orderBy rejection.
  invalid := "from: {name: table_00}\norderBy: ['native_key']\nlimit: 1000\n"
- if _,err:=dtql.Deserialize([]byte(invalid)); err==nil { t.Fatal("scalar orderBy unexpectedly accepted") }
+ if _,err:=tugql.Deserialize([]byte(invalid)); err==nil { t.Fatal("scalar orderBy unexpectedly accepted") }
  _, providers:=selectedInventoryFixture(t)
  var final []runtimeDatabase
  for _, p:=range providers { if p.ID=="final" { final=append(final,p) } }
@@ -252,9 +252,9 @@ func TestActualQueryConformance(t *testing.T) {
  defer func(){ if err:=closeDBs();err!=nil { t.Error(err) } }()
  for _, table:=range final[0].SmokeRecordsets {
   query:=actualSelectedQuery(table)
-  parsed,err:=dtql.Deserialize([]byte(query))
+  parsed,err:=tugql.Deserialize([]byte(query))
   if err!=nil || parsed.Limit()!=1000 || len(parsed.OrderBy())!=0 { t.Fatalf("selected workload bounds/order changed: %v",err) }
-  response:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/dtql",query)
+  response:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/tugql",query)
   var page northwindQueryPage
   if response.Code!=200 || json.Unmarshal(response.Body.Bytes(),&page)!=nil || len(page.Records)!=5 { t.Fatalf("selected workload fails tiny real handler: %d %s",response.Code,response.Body.String()) }
   var expected []string
@@ -270,18 +270,18 @@ func TestActualQueryConformance(t *testing.T) {
   for rows.Next() { var key string; if err:=rows.Scan(&key);err!=nil { t.Fatal(err) }; expected=append(expected,record.NewKeyWithID(table,key).String()) }
   if err:=rows.Err();err!=nil { t.Fatal(err) }; if err:=rows.Close();err!=nil { t.Fatal(err) }; if err:=raw.Close();err!=nil { t.Fatal(err) }
   if err:=actualCheckOrderedKeys(response.Body.Bytes(),expected);err!=nil { t.Fatal(err) }
-  refusal:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/dtql",actualCallerOrderQuery(table,"native_key"))
+  refusal:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/tugql",actualCallerOrderQuery(table,"native_key"))
   if refusal.Code!=400 || !strings.Contains(refusal.Body.String(),"ordering_unsupported") { t.Fatalf("caller order accepted: %d %s",refusal.Code,refusal.Body.String()) }
-  for _, diagnostic:=range actualDiagnosticQueries("hidden_table",table) { answer:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/dtql",diagnostic); if answer.Code<400 || answer.Code>=500 || strings.Contains(answer.Body.String(),"unknown comparison operator") { t.Fatalf("diagnostic builder failure: %d %s",answer.Code,answer.Body.String()) } }
-  ordinary:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/dtql",actualOrdinaryQuery(table,1))
+  for _, diagnostic:=range actualDiagnosticQueries("hidden_table",table) { answer:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/tugql",diagnostic); if answer.Code<400 || answer.Code>=500 || strings.Contains(answer.Body.String(),"unknown comparison operator") { t.Fatalf("diagnostic builder failure: %d %s",answer.Code,answer.Body.String()) } }
+  ordinary:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/tugql",actualOrdinaryQuery(table,1))
   if ordinary.Code!=200 { t.Fatalf("ordinary builder: %d %s",ordinary.Code,ordinary.Body.String()) }
  }
- response:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/dtql",invalid)
- if response.Code!=400 || !strings.Contains(response.Body.String(),"invalid_dtql") { t.Fatalf("invalid scalar order not rejected before reads: %d %s",response.Code,response.Body.String()) }
+ response:=selectedRequest(handler,http.MethodPost,"/v1/databases/final/tugql",invalid)
+ if response.Code!=400 || !strings.Contains(response.Body.String(),"invalid_tugql") { t.Fatalf("invalid scalar order not rejected before reads: %d %s",response.Code,response.Body.String()) }
 }
 '''
         self._run_go_overlay("ActualQueryConformance", helpers, 'import ("fmt"; "strings"; "encoding/json")', regression,
-                             'import ("testing"; "strings"; "encoding/json"; "net/http"; "github.com/dal-go/dalgo/dtql"; "github.com/openvaultdb/openvaultdb-go/pkg/core"; "database/sql"; "os"; "path/filepath"; "github.com/openvaultdb/openvaultdb-go/pkg/manifest"; "github.com/dal-go/record")')
+                             'import ("testing"; "strings"; "encoding/json"; "net/http"; "github.com/dal-go/dalgo/tugql"; "github.com/openvaultdb/openvaultdb-go/pkg/core"; "database/sql"; "os"; "path/filepath"; "github.com/openvaultdb/openvaultdb-go/pkg/manifest"; "github.com/dal-go/record")')
 
     def test_exact_workflow_head_refuses_merge_head_before_docker(self):
         with tempfile.TemporaryDirectory() as temporary:

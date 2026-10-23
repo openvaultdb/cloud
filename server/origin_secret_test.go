@@ -51,7 +51,7 @@ func TestOriginSecretRequiresTheWorkerHeader(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/dtql", nil)
+			request := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/tugql", nil)
 			for name, values := range c.send {
 				for _, value := range values {
 					request.Header.Add(name, value)

@@ -43,13 +43,16 @@ function serverApiIndex(request: Request): Response {
   return new Response(request.method === 'HEAD' ? null : body, { headers: { ...readonlyCorsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300', ...securityHeaders() } });
 }
 
+// Pre-rename query route, removed in TugQL cutover step 9.
+const LEGACY_DTQL_SUFFIX = '/dtql';
+
 async function proxyOVDB(request: Request, url: URL): Promise<Response> {
   const match = /^\/ovdb\/v1\/databases\/([a-z][a-z0-9-]{0,39})(\/.*)?$/.exec(url.pathname);
   const database = match && ovdbDatabases.get(match[1]);
   if (!database) return notFound();
   const suffix = match[2] ?? '';
   if (suffix === '' || suffix === '/') return databaseApiIndex(request, database);
-  const query = suffix === '/dtql' || suffix === '/query';
+  const query = suffix === '/tugql' || suffix === LEGACY_DTQL_SUFFIX || suffix === '/query';
   const recordRead = /^\/records\/[^/]+(?:\/[^/]+)+$/.test(suffix);
   const readPath = suffix === '/read' || suffix === '/inferred-schema' || recordRead;
   if (!query && !readPath) return notFound();
@@ -117,11 +120,16 @@ async function fetchDatabaseMetadata(request: Request, database: OVDBManifest): 
     for (const [name, value] of Object.entries({ ...readonlyCorsHeaders(), 'Access-Control-Expose-Headers': 'Cache-Control, ETag, Last-Modified, Link, Vary', ...securityHeaders() })) outputHeaders.set(name, value);
     if (request.method === 'HEAD' || !upstream.ok) return new Response(request.method === 'HEAD' ? null : upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: outputHeaders });
 
-    const metadata = await upstream.json() as { id?: unknown; endpoints?: { dtql?: unknown }; [key: string]: unknown };
-    if (!metadata || metadata.id !== database.localId || typeof metadata.endpoints?.dtql !== 'string') return new Response('The OVDB backend returned invalid database metadata', { status: 502, headers: { ...readonlyCorsHeaders(), ...securityHeaders() } });
-    const expectedBackendEndpoint = `https://cloud.openvaultdb.com/v1/databases/${database.localId}/dtql`;
-    if (metadata.endpoints.dtql !== expectedBackendEndpoint) return new Response('The OVDB backend returned an unexpected query endpoint', { status: 502, headers: { ...readonlyCorsHeaders(), ...securityHeaders() } });
-    metadata.endpoints.dtql = `https://demodb.dev/ovdb/v1/databases/${database.localId}/dtql`;
+    const metadata = await upstream.json() as { id?: unknown; endpoints?: { tugql?: unknown; dtql?: unknown }; [key: string]: unknown };
+    if (!metadata || metadata.id !== database.localId || typeof metadata.endpoints?.tugql !== 'string') return new Response('The OVDB backend returned invalid database metadata', { status: 502, headers: { ...readonlyCorsHeaders(), ...securityHeaders() } });
+    const expectedBackendEndpoint = `https://cloud.openvaultdb.com/v1/databases/${database.localId}/tugql`;
+    if (metadata.endpoints.tugql !== expectedBackendEndpoint) return new Response('The OVDB backend returned an unexpected query endpoint', { status: 502, headers: { ...readonlyCorsHeaders(), ...securityHeaders() } });
+    metadata.endpoints.tugql = `https://demodb.dev/ovdb/v1/databases/${database.localId}/tugql`;
+    // The legacy key is advertised by the backend until TugQL cutover step 9; deployed browser clients still read it.
+    if (metadata.endpoints.dtql !== undefined) {
+      if (metadata.endpoints.dtql !== `https://cloud.openvaultdb.com/v1/databases/${database.localId}${LEGACY_DTQL_SUFFIX}`) return new Response('The OVDB backend returned an unexpected query endpoint', { status: 502, headers: { ...readonlyCorsHeaders(), ...securityHeaders() } });
+      metadata.endpoints.dtql = `https://demodb.dev/ovdb/v1/databases/${database.localId}${LEGACY_DTQL_SUFFIX}`;
+    }
     outputHeaders.set('Content-Type', 'application/json; charset=utf-8');
     outputHeaders.delete('ETag');
     return new Response(JSON.stringify(metadata), { status: upstream.status, statusText: upstream.statusText, headers: outputHeaders });

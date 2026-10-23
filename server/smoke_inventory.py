@@ -27,8 +27,9 @@ def observe(origin, path, method, status, headers, body):
 def query_request(path, method):
     """Match the gateway query class after canonical path decoding; OPTIONS is separate."""
     canonical = unquote(urlsplit(path).path)
-    return method != "OPTIONS" and (canonical in ("/v1/dtql", "/v1/dtql/")
-        or re.fullmatch(r"/v1/databases/[^/]+/(dtql|query|batch|read)/?", canonical) is not None)
+    # The legacy dtql route mirrors the gateway until TugQL cutover step 9 removes it.
+    return method != "OPTIONS" and (canonical in ("/v1/tugql", "/v1/tugql/", "/v1/dtql", "/v1/dtql/")
+        or re.fullmatch(r"/v1/databases/[^/]+/(tugql|dtql|query|batch|read)/?", canonical) is not None)
 
 
 class SmokeRequestPolicy:
@@ -112,11 +113,11 @@ def require_cors(origin: str, database_id: str, cors_origin: str, query_path: st
         if "origin" not in {value.strip().lower() for value in headers.get("Vary", "").split(",")}:
             raise RuntimeError(f"{database_id} {path} omitted Vary: Origin")
     query = parse_qs(urlsplit(query_path).query)["q"][0]
-    headers, _ = require_status(origin, f"/v1/databases/{database_id}/dtql", method="POST", body=json.dumps({"query": query}).encode(), headers={"Origin": cors_origin, "Content-Type": "application/json"})
+    headers, _ = require_status(origin, f"/v1/databases/{database_id}/tugql", method="POST", body=json.dumps({"query": query}).encode(), headers={"Origin": cors_origin, "Content-Type": "application/json"})
     if headers.get("Access-Control-Allow-Origin") != cors_origin:
         raise RuntimeError(f"{database_id} POST query omitted allowed CORS origin {cors_origin}")
     headers, _ = require_status(
-        origin, f"/v1/databases/{database_id}/dtql", expected=204, method="OPTIONS",
+        origin, f"/v1/databases/{database_id}/tugql", expected=204, method="OPTIONS",
         headers={"Origin": cors_origin, "Access-Control-Request-Method": "POST",
                  "Access-Control-Request-Headers": "Content-Type,OVDB-Page-Size,OVDB-Page-Token,OVDB-Page-Close"},
     )
@@ -169,7 +170,7 @@ def require_countries_reference(origin, database_id, recordsets, api_profile):
             raise RuntimeError(f"Countries {iso2} lacks its codes, currency or attributed population")
     for alias, iso2 in COUNTRIES_ALIASES.items():
         query = f"from: {{name: country_aliases}}\nwhere: {{op: ==, left: {{field: alias}}, right: {{value: {alias}}}}}\nlimit: 1"
-        rows = json.loads(require_status(origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1]).get("records", [])
+        rows = json.loads(require_status(origin, f"/v1/databases/{database_id}/tugql?" + urlencode({"q": query}))[1]).get("records", [])
         if len(rows) != 1 or rows[0].get("data", {}).get("country_iso2") != iso2:
             raise RuntimeError(f"Countries alias {alias} does not resolve to {iso2}")
     source = json.loads(require_status(origin, f"/v1/databases/{database_id}/records/sources/worldbank-sp-pop-totl")[1]).get("data", {})
@@ -236,14 +237,14 @@ def main() -> None:
                 if profile_headers.get(header) != database[field]:
                     raise RuntimeError(f"{database['id']} public proxy pin mismatch: {header}")
         # Every provider must refuse undeclared CORS origins on reads and preflight.
-        for method, denied_path in (("GET", f"/v1/databases/{database_id}"), ("OPTIONS", f"/v1/databases/{database_id}/dtql")):
+        for method, denied_path in (("GET", f"/v1/databases/{database_id}"), ("OPTIONS", f"/v1/databases/{database_id}/tugql")):
             status, denied_headers, _ = request(args.origin, denied_path, method=method, headers={"Origin": "https://undeclared.invalid", "Access-Control-Request-Method": "POST"})
             if status not in (200, 204, 403) or denied_headers.get("Access-Control-Allow-Origin"):
                 raise RuntimeError(f"{database['id']} granted undeclared origin")
         recordsets = database.get("smokeRecordsets") or [database["smokeRecordset"]]
         first_name = recordsets[0].replace("'", "''")
         cors_query = f"from: {{name: '{first_name}'}}\nlimit: 1\n"
-        cors_query_path = f"/v1/databases/{database_id}/dtql?{urlencode({'q': cors_query})}"
+        cors_query_path = f"/v1/databases/{database_id}/tugql?{urlencode({'q': cors_query})}"
         for declared_origin in database["corsOrigins"]:
             require_cors(args.origin, database_id, declared_origin, cors_query_path)
         queried_rows = {}
@@ -253,7 +254,7 @@ def main() -> None:
                 require_status(args.origin, f"/ovdb/dbs/{database_id}/collections/{collection_path}")
             query_name = collection.replace("'", "''")
             query = f"from: {{name: '{query_name}'}}\nlimit: 1\n"
-            query_path = f"/v1/databases/{database_id}/dtql?{urlencode({'q': query})}"
+            query_path = f"/v1/databases/{database_id}/tugql?{urlencode({'q': query})}"
             headers, result_bytes = require_status(
                 args.origin,
                 query_path,
@@ -292,7 +293,7 @@ def main() -> None:
                 raise RuntimeError(f"{database['id']} record lookup for {collection!r}/{record_id!r} returned {record_status}: {record_bytes[:400]!r}")
             fetched_record = json.loads(record_bytes)
             if fetched_record.get("key") != record_key or fetched_record.get("data") != first_record["data"]:
-                raise RuntimeError(f"{database['id']} record lookup differs from DTQL result for {collection!r}/{record_id!r}")
+                raise RuntimeError(f"{database['id']} record lookup differs from TugQL result for {collection!r}/{record_id!r}")
             for field in database.get("blobSmokeFields", {}).get(collection, []):
                 blob_value = first_record["data"].get(field)
                 if not isinstance(blob_value, str) or not blob_value:
@@ -315,7 +316,7 @@ def main() -> None:
             if "requests" not in schema:
                 raise RuntimeError("Shipping public schema omits requests")
             query = "from: {name: requests}\nwhere: {op: ==, left: {field: order_id}, right: {value: 11062}}\nlimit: 1"
-            result = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1])
+            result = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/tugql?" + urlencode({"q": query}))[1])
             rows = result.get("records", [])
             if len(rows) != 1 or rows[0].get("data", {}).get("order_id") != 11062:
                 raise RuntimeError("Shipping order 11062 query failed")
@@ -330,7 +331,7 @@ def main() -> None:
             event_ids = {}
             for collection, key in expected.items():
                 query = f"from: {{name: {collection}}}\nlimit: 100"
-                rows = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/dtql?" + urlencode({"q": query}))[1]).get("records", [])
+                rows = json.loads(require_status(args.origin, f"/v1/databases/{database_id}/tugql?" + urlencode({"q": query}))[1]).get("records", [])
                 if not rows or not all(row["key"].startswith(collection + "/") for row in rows) or not any(row["data"].get("event_id") == key for row in rows):
                     raise RuntimeError(f"Shipping Logs separate collection query failed: {collection}")
                 event_ids[collection] = {row["data"].get("event_id") for row in rows}
@@ -353,7 +354,7 @@ def main() -> None:
                 f"where: {{op: '==', left: {{field: '{target_field.replace(chr(39), chr(39) * 2)}'}}, right: {{param: 'foreignKey'}}}}\n"
                 "limit: 1\n"
             )
-            query_path = f"/v1/databases/{database_id}/dtql?{urlencode({'q': query, 'parameters': json.dumps({'foreignKey': source[relationship['sourceField']]}, separators=(',', ':'))})}"
+            query_path = f"/v1/databases/{database_id}/tugql?{urlencode({'q': query, 'parameters': json.dumps({'foreignKey': source[relationship['sourceField']]}, separators=(',', ':'))})}"
             _, target_bytes = require_status(args.origin, query_path)
             target_result = json.loads(target_bytes)
             target_records = target_result.get("records")
@@ -372,7 +373,7 @@ def main() -> None:
             query = f"from: {{name: '{query_name}'}}\nlimit: 1\n"
             result = json.loads(require_status(
                 args.origin,
-                f"/v1/databases/{database_id}/dtql?{urlencode({'q': query})}",
+                f"/v1/databases/{database_id}/tugql?{urlencode({'q': query})}",
                 headers={"Origin": cors_origin},
             )[1])
             if result.get("records") != []:

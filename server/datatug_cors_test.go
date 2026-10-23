@@ -56,7 +56,7 @@ func TestCloudDataTugCORS(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	queryPath := "/v1/databases/final/dtql"
+	queryPath := "/v1/databases/final/tugql"
 	collection := providers[0].SmokeRecordset
 	query := "from: {name: " + collection + "}\nlimit: 1\n"
 	call := func(method, path, origin, body string) *httptest.ResponseRecorder {
@@ -118,7 +118,7 @@ func TestCloudDataTugCORS(t *testing.T) {
 	}
 	response := call(http.MethodPost, queryPath, appOrigin, query)
 	if response.Code != http.StatusOK {
-		t.Fatalf("bounded DTQL: %d %s", response.Code, response.Body.String())
+		t.Fatalf("bounded TugQL: %d %s", response.Code, response.Body.String())
 	}
 	assertOrigin(response, appOrigin)
 	for _, pin := range pins {

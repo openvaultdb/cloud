@@ -80,7 +80,7 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 				if profile.Code != http.StatusOK {
 					t.Fatalf("schema/metadata: %d %s", profile.Code, profile.Body.String())
 				}
-				response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", "from: {name: "+table+"}\nlimit: 100\n")
+				response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", "from: {name: "+table+"}\nlimit: 100\n")
 				var page northwindQueryPage
 				if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &page) != nil || len(page.Records) != 5 {
 					t.Fatalf("ordinary read: %d %s", response.Code, response.Body.String())
@@ -140,7 +140,7 @@ func TestProtectedImageLinuxJourney(t *testing.T) {
 				t.Fatal("diagnostic metadata exposed")
 			}
 			for _, query := range []string{"from: {name: " + table + "}\nlimit: 1\n", "from: {name: table_00}\nwhere: {op: in, left: {field: native_key}, right: {query: {from: {name: " + table + "}}}}\nlimit: 1\n"} {
-				if response := selectedRequest(handler, http.MethodPost, "/v1/databases/candidate/dtql", query); response.Code == 200 {
+				if response := selectedRequest(handler, http.MethodPost, "/v1/databases/candidate/tugql", query); response.Code == 200 {
 					t.Fatal("diagnostic ordinary/nested query exposed")
 				}
 			}

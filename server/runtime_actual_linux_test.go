@@ -242,7 +242,7 @@ type actualSnapshot struct {
 func actualCapture(t *testing.T, handler http.Handler, database, query string) actualSnapshot {
 	t.Helper()
 	started := time.Now()
-	response := actualRequest(handler, http.MethodPost, "/v1/databases/"+database+"/dtql", query, map[string]string{"OVDB-Page-Size": "2"}, context.Background())
+	response := actualRequest(handler, http.MethodPost, "/v1/databases/"+database+"/tugql", query, map[string]string{"OVDB-Page-Size": "2"}, context.Background())
 	var snapshot actualSnapshot
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &snapshot) != nil || snapshot.Token == "" || snapshot.Next == "" {
 		t.Fatalf("natural capture failed: %d %s", response.Code, response.Body.String())
@@ -255,7 +255,7 @@ func actualCapture(t *testing.T, handler http.Handler, database, query string) a
 }
 func actualClose(t *testing.T, handler http.Handler, database, query string, snapshot actualSnapshot) {
 	t.Helper()
-	response := actualRequest(handler, http.MethodPost, "/v1/databases/"+database+"/dtql", query,
+	response := actualRequest(handler, http.MethodPost, "/v1/databases/"+database+"/tugql", query,
 		map[string]string{"OVDB-Page-Size": "2", "OVDB-Page-Token": snapshot.Token, "OVDB-Page-Close": "true"}, context.Background())
 	if response.Code != 204 {
 		t.Fatalf("snapshot close %d %s", response.Code, response.Body.String())
@@ -272,7 +272,7 @@ func actualCancel(t *testing.T, handler http.Handler) map[string]any {
 	defer cancel()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/dtql", actualSpoolQuery,
+		done <- actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/tugql", actualSpoolQuery,
 			map[string]string{"OVDB-Page-Size": "2"}, ctx)
 	}()
 	deadline := time.Now().Add(10 * time.Second)
@@ -543,11 +543,11 @@ func actualLegacyWorks() []actualWork {
 	return []actualWork{
 		{name: "heaviest-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Sales.SalesOrderHeaderSalesReason"}`, want: 200, accept: "application/vnd.openvaultdb.query-stream+json"},
 		{name: "oversized-ungated", path: "/v1/databases/adventureworks/query", body: `{"collection":"Production.TransactionHistory"}`, want: 200, accept: "application/vnd.openvaultdb.query-stream+json", incompleteBudget: "response_bytes"},
-		{name: "database-photo-join", path: "/v1/databases/adventureworks/dtql", body: photo, want: 200, route: "database"},
-		{name: "database-ordinary", path: "/v1/databases/adventureworks/dtql", body: "from: {name: Person.Person}\nlimit: 1000\n", want: 200},
-		{name: "in-memory-grouping", path: "/v1/dtql", body: grouped, want: 200, route: "in-memory"},
-		{name: "money-grouping", path: "/v1/databases/adventureworks/dtql", body: adventureWorksHeaderMoneyGroupingQuery, want: 200},
-		{name: "money-budget-refusal", path: "/v1/databases/adventureworks/dtql", body: adventureWorksSalesBudgetMoneyQuery, want: 422, errorCode: "query_budget_exceeded"},
+		{name: "database-photo-join", path: "/v1/databases/adventureworks/tugql", body: photo, want: 200, route: "database"},
+		{name: "database-ordinary", path: "/v1/databases/adventureworks/tugql", body: "from: {name: Person.Person}\nlimit: 1000\n", want: 200},
+		{name: "in-memory-grouping", path: "/v1/tugql", body: grouped, want: 200, route: "in-memory"},
+		{name: "money-grouping", path: "/v1/databases/adventureworks/tugql", body: adventureWorksHeaderMoneyGroupingQuery, want: 200},
+		{name: "money-budget-refusal", path: "/v1/databases/adventureworks/tugql", body: adventureWorksSalesBudgetMoneyQuery, want: 422, errorCode: "query_budget_exceeded"},
 	}
 }
 
@@ -717,8 +717,8 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 			} `json:"schemas"`
 		}
 		if json.Unmarshal(descriptorResponse.Body.Bytes(), &descriptor) != nil ||
-			descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] ||
-			!descriptor.Capabilities["dtqlStreaming"] || !descriptor.Capabilities["dtqlStreamingErrors"] ||
+			descriptor.Capabilities["query"] || !descriptor.Capabilities["tugql"] || descriptor.Capabilities["write"] ||
+			!descriptor.Capabilities["tugqlStreaming"] || !descriptor.Capabilities["tugqlStreamingErrors"] ||
 			len(descriptor.Collections) == 0 || strings.Contains(descriptorResponse.Body.String(), "_import_manifest") {
 			t.Fatalf("native PostgreSQL descriptor was incomplete or advertised unsupported behavior for %s", source.databaseID)
 		}
@@ -763,7 +763,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		base := fmt.Sprintf("from: {schema: %s, name: %s}\n", strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name))
 		read := actualWork{
 			name: source.databaseID + "-native-read",
-			path: "/v1/databases/" + id + "/dtql",
+			path: "/v1/databases/" + id + "/tugql",
 			body: base + fmt.Sprintf("columns: [{field: %s}]\nlimit: 1\n", strconv.Quote(selectedField)),
 			want: http.StatusOK, expectedRows: 1, noSourceRights: true,
 		}
@@ -774,7 +774,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 		workloads = append(workloads, entry)
 		join := actualWork{
 			name: source.databaseID + "-native-self-join",
-			path: "/v1/databases/" + id + "/dtql",
+			path: "/v1/databases/" + id + "/tugql",
 			body: fmt.Sprintf("from:\n  schema: %s\n  name: %s\n  alias: l\n  joins:\n    - type: inner\n      from: {schema: %s, name: %s, alias: r}\n      on:\n        - {left: {field: %s, source: l}, op: '==', right: {field: %s, source: r}}\ncolumns: [{field: %s, source: l}]\nlimit: 1\n",
 				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
 				strconv.Quote(collection.Source.Schema), strconv.Quote(collection.Source.Name),
@@ -793,7 +793,7 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 	}{{"Artist", 275}, {"Album", 347}, {"Track", 3503}} {
 		work := actualWork{
 			name:           "chinook-postgresql-full-" + strings.ToLower(table.name),
-			path:           "/v1/databases/chinook-postgresql/dtql",
+			path:           "/v1/databases/chinook-postgresql/tugql",
 			body:           fmt.Sprintf("from: {schema: %s, name: %s}\nlimit: 4000\n", strconv.Quote("chinook"), strconv.Quote(table.name)),
 			want:           http.StatusOK,
 			expectedRows:   table.rows,
@@ -807,11 +807,11 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 	}
 	concurrentWorks := []actualWork{
 		{
-			name: "chinook-postgresql-concurrent-track-read", path: "/v1/databases/chinook-postgresql/dtql",
+			name: "chinook-postgresql-concurrent-track-read", path: "/v1/databases/chinook-postgresql/tugql",
 			body: "from: {schema: chinook, name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000, noSourceRights: true,
 		},
 		{
-			name: "chinook-sqlite-concurrent-track-read", path: "/v1/databases/chinook/dtql",
+			name: "chinook-sqlite-concurrent-track-read", path: "/v1/databases/chinook/tugql",
 			body: "from: {name: Track}\nlimit: 1000\n", want: http.StatusOK, expectedRows: 1000,
 		},
 	}
@@ -874,7 +874,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 	for _, provider := range providers {
 		// Six legacy fixtures also get actual schema and ordinary-read checks.
 		if provider.ReadProfile == "" {
-			result := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", actualOrdinaryQuery(provider.SmokeRecordset, 1), nil, context.Background())
+			result := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", actualOrdinaryQuery(provider.SmokeRecordset, 1), nil, context.Background())
 			if result.Code != 200 {
 				t.Fatalf("legacy %s: %d %s", provider.ID, result.Code, result.Body.String())
 			}
@@ -951,7 +951,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 			if orderField == "" {
 				t.Fatal("selected native schema has no ordering field")
 			}
-			work := actualWork{name: provider.ID + "/" + table, path: "/v1/databases/" + provider.ID + "/dtql", body: actualSelectedQuery(table), want: 200}
+			work := actualWork{name: provider.ID + "/" + table, path: "/v1/databases/" + provider.ID + "/tugql", body: actualSelectedQuery(table), want: 200}
 			response := actualRequest(handler, http.MethodPost, work.path, work.body, nil, context.Background())
 			if response.Code != 200 {
 				t.Fatalf("%s: %d %s", work.name, response.Code, response.Body.String())
@@ -1019,7 +1019,7 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 				}
 			}
 			for _, query := range actualDiagnosticQueries(table, publisher.Recordsets[0]) {
-				if response := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", query, nil, context.Background()); response.Code < 400 || response.Code >= 500 {
+				if response := actualRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", query, nil, context.Background()); response.Code < 400 || response.Code >= 500 {
 					t.Fatal("diagnostic ordinary/nested query did not fail closed")
 				}
 			}
@@ -1118,13 +1118,13 @@ func TestActualCapacity(t *testing.T) {
 	monitor.setPhase("natural-spools")
 	first := actualCapture(t, handler, "adventureworks", actualSpoolQuery)
 	second := actualCapture(t, handler, "adventureworks", actualSpoolQuery)
-	full := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/dtql", actualSpoolQuery, map[string]string{"OVDB-Page-Size": "2"}, context.Background())
+	full := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/tugql", actualSpoolQuery, map[string]string{"OVDB-Page-Size": "2"}, context.Background())
 	if full.Code != 503 || !strings.Contains(full.Body.String(), "snapshot_capacity") {
 		t.Fatalf("full natural slots: %d %s", full.Code, full.Body.String())
 	}
 	headers := map[string]string{"OVDB-Page-Size": "2", "OVDB-Page-Token": second.Next}
-	retry1 := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/dtql", actualSpoolQuery, headers, context.Background())
-	retry2 := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/dtql", actualSpoolQuery, headers, context.Background())
+	retry1 := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/tugql", actualSpoolQuery, headers, context.Background())
+	retry2 := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/tugql", actualSpoolQuery, headers, context.Background())
 	if retry1.Code != 200 || retry2.Code != 200 || retry1.Body.String() != retry2.Body.String() {
 		t.Fatal("natural continuation is not retryable")
 	}
@@ -1207,7 +1207,7 @@ func TestActualCapacity(t *testing.T) {
 	if err != nil || count != 0 || bytes != 0 {
 		t.Fatalf("real idle expiry left spools %d/%d: %v", count, bytes, err)
 	}
-	expired := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/dtql", actualSpoolQuery, map[string]string{"OVDB-Page-Size": "2", "OVDB-Page-Token": reused.Next}, context.Background())
+	expired := actualRequest(handler, http.MethodPost, "/v1/databases/adventureworks/tugql", actualSpoolQuery, map[string]string{"OVDB-Page-Size": "2", "OVDB-Page-Token": reused.Next}, context.Background())
 	if expired.Code != 410 || !strings.Contains(expired.Body.String(), "snapshot_expired") {
 		t.Fatalf("expired token %d %s", expired.Code, expired.Body.String())
 	}

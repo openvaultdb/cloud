@@ -93,7 +93,7 @@ func syntheticECBMountWithTransport(t *testing.T, transport http.RoundTripper) e
 }
 
 func ecbRequest(h http.Handler, query string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodPost, "/v1/databases/ecb/dtql", strings.NewReader(query))
+	r := httptest.NewRequest(http.MethodPost, "/v1/databases/ecb/tugql", strings.NewReader(query))
 	r.Header.Set(server.ProviderExecutionIDHeader, strings.Repeat("a", 32))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

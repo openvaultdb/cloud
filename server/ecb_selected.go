@@ -12,7 +12,14 @@ import (
 	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
 )
 
-const ecbQueryPath = "/v1/databases/ecb/dtql"
+const ecbQueryPath = "/v1/databases/ecb/tugql"
+
+// legacyECBQueryPath is the pre-rename path that existing digest-pinned operator
+// admissions and the deployed Worker still name. Removed in TugQL cutover step 9.
+const legacyECBQueryPath = "/v1/databases/ecb/" + legacyDTQLSegment
+
+func isECBQueryPath(path string) bool { return path == ecbQueryPath || path == legacyECBQueryPath }
+
 const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret"
 
 func validECBProxySecret(value string) bool {
@@ -71,7 +78,7 @@ func configuredHandlerWithECB(startup runtimeStartup) ([]runtimeDatabase, http.H
 		return startup.providers, samples, closeSamples, nil
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.EscapedPath() != ecbQueryPath {
+		if !isECBQueryPath(r.URL.EscapedPath()) {
 			samples.ServeHTTP(w, r)
 			return
 		}

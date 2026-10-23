@@ -37,7 +37,7 @@ import (
 // this service bounds the number of such reads but the concurrency of the instance:
 // at 3 the worst case is 442 MiB, over the 435 MiB (85%) that
 // TestCloudLimitsFitTheInstance allows. Reads with a row limit of 1,000, by that
-// endpoint or by DTQL, held 22.4 MiB at most; if the library applied a row limit to
+// endpoint or by TugQL, held 22.4 MiB at most; if the library applied a row limit to
 // the query endpoint, the same arithmetic would allow 5 requests at once.
 //
 // The library bounds a join to 10,000 rows and 16 MiB and a grouping to 100,000

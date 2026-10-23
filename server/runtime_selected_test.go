@@ -84,7 +84,7 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 		}
 		for _, table := range provider.SmokeRecordsets {
 			query := "from: {name: " + table + "}\nlimit: 100\n"
-			response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", query)
+			response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", query)
 			if response.Code != 200 {
 				t.Fatalf("%s.%s %d %s", provider.ID, table, response.Code, response.Body.String())
 			}
@@ -122,7 +122,7 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 					t.Fatalf("unproved key %q", key)
 				}
 			}
-			projected := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", "from: {name: "+table+"}\ncolumns: [{field: native_key}]\nlimit: 100\n")
+			projected := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", "from: {name: "+table+"}\ncolumns: [{field: native_key}]\nlimit: 100\n")
 			var projection northwindQueryPage
 			if err := json.Unmarshal(projected.Body.Bytes(), &projection); err != nil || projected.Code != 200 || len(projection.Records) != len(keys) {
 				t.Fatal(projected.Body.String())
@@ -144,7 +144,7 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 			}
 		}
 		for _, query := range []string{"from: {name: " + table + "}\nlimit: 1\n", "from: {name: table_00}\njoins: [{type: inner, from: {name: " + table + "}, on: {op: '==', left: {field: native_key}, right: {field: native_key}}}]\nlimit: 1\n", "from: {name: table_00}\nwhere: {op: in, left: {field: native_key}, right: {query: {from: {name: " + table + "}}}}\nlimit: 1\n"} {
-			response := selectedRequest(handler, http.MethodPost, "/v1/databases/candidate/dtql", query)
+			response := selectedRequest(handler, http.MethodPost, "/v1/databases/candidate/tugql", query)
 			if response.Code == 200 {
 				t.Fatalf("diagnostic query leaked: %s", response.Body.String())
 			}
@@ -154,7 +154,7 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 		}
 	}
 	for _, id := range []string{"candidate", "final"} {
-		ordered := selectedRequest(handler, http.MethodPost, "/v1/databases/"+id+"/dtql", "from: {name: table_00}\norderBy: [{field: id}]\nlimit: 1\n")
+		ordered := selectedRequest(handler, http.MethodPost, "/v1/databases/"+id+"/tugql", "from: {name: table_00}\norderBy: [{field: id}]\nlimit: 1\n")
 		if ordered.Code != 400 || !strings.Contains(ordered.Body.String(), "ordering_unsupported") {
 			t.Fatal("bounded ordering not enforced", ordered.Body.String())
 		}
@@ -195,7 +195,7 @@ func TestSelectedRuntimeOriginalPathReplacementAndCleanup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", "from: {name: table_00}\nlimit: 1\n")
+	response := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/tugql", "from: {name: table_00}\nlimit: 1\n")
 	if response.Code != 200 {
 		t.Fatal("original path replacement changed mounted bytes", response.Body.String())
 	}

@@ -49,20 +49,22 @@ class SmokeRequestPolicyTest(unittest.TestCase):
         headers = Message()
         if retry_after is not None:
             headers['Retry-After'] = retry_after
-        return HTTPError('https://cloud.test/v1/dtql', 429, 'limited', headers, io.BytesIO(b'quota exhausted'))
+        return HTTPError('https://cloud.test/v1/tugql', 429, 'limited', headers, io.BytesIO(b'quota exhausted'))
 
     def test_gateway_classes_and_actual_spacing(self):
-        for path in ['/v1/dtql', '/v1/dtql/', '/v1/databases/a/dtql?q=x',
+        for path in ['/v1/dtql', '/v1/databases/a/dtql']:  # legacy, removed in cutover step 9
+            self.assertTrue(smoke.query_request(path, 'POST'), path)
+        for path in ['/v1/tugql', '/v1/tugql/', '/v1/databases/a/tugql?q=x',
                      '/v1/databases/a/query', '/v1/databases/a/batch/', '/v1/databases/a/read',
-                     '/v1/databases/a/d%74ql']:
+                     '/v1/databases/a/tug%71l']:
             self.assertTrue(smoke.query_request(path, 'GET'), path)
             self.assertTrue(smoke.query_request(path, 'POST'), path)
             self.assertFalse(smoke.query_request(path, 'OPTIONS'), path)
         for path in ['/v1', '/ovdb/dbs/a', '/v1/databases/a', '/v1/databases/a/records/rows/1',
-                     '/v1/databases/a/dtql/extra']:
+                     '/v1/databases/a/tugql/extra']:
             self.assertFalse(smoke.query_request(path, 'GET'), path)
         policy = self.policy([Response() for _ in range(5)])
-        for path, method in [('/v1/dtql', 'GET'), ('/v1/databases/a/dtql', 'OPTIONS'),
+        for path, method in [('/v1/tugql', 'GET'), ('/v1/databases/a/tugql', 'OPTIONS'),
                              ('/v1/databases/a/records/rows/1', 'GET'),
                              ('/v1/databases/a/read', 'POST'), ('/v1/databases/a/query', 'GET')]:
             policy.request('https://cloud.test', path, method)
@@ -70,7 +72,7 @@ class SmokeRequestPolicyTest(unittest.TestCase):
 
     def test_429_retries_identical_read_intent_retains_both_responses(self):
         policy = self.policy([self.limited(), Response(b'actual row')])
-        status, _, body = policy.request('https://cloud.test', '/v1/databases/a/dtql', 'POST',
+        status, _, body = policy.request('https://cloud.test', '/v1/databases/a/tugql', 'POST',
                                         b'{"query":"from rows"}', {'Origin': 'https://site.test'})
         self.assertEqual((200, b'actual row'), (status, body))
         self.assertEqual([60], self.clock.waits)
@@ -86,7 +88,7 @@ class SmokeRequestPolicyTest(unittest.TestCase):
         policy = self.policy([self.limited('1') for _ in range(3)])
         with patch.object(smoke, 'REQUEST_POLICY', policy):
             with self.assertRaisesRegex(RuntimeError, 'returned 429, expected 200'):
-                smoke.require_status('https://cloud.test', '/v1/dtql')
+                smoke.require_status('https://cloud.test', '/v1/tugql')
         self.assertEqual(3, len(self.calls))
         self.assertEqual([429, 429, 429], [entry['status'] for entry in smoke.OBSERVATIONS])
 
@@ -96,21 +98,21 @@ class SmokeRequestPolicyTest(unittest.TestCase):
                 self.calls.clear()
                 policy = self.policy([self.limited(value)])
                 with self.assertRaisesRegex(RuntimeError, 'Retry-After'):
-                    policy.request('https://cloud.test', '/v1/dtql')
+                    policy.request('https://cloud.test', '/v1/tugql')
                 self.assertEqual(1, len(self.calls))
 
     def test_non_429_is_never_retried_and_readonly_probe_stays_403(self):
         for status in [401, 403, 404, 500, 503]:
             with self.subTest(status=status):
                 self.calls.clear()
-                error = HTTPError('https://cloud.test/v1/dtql', status, 'denied', Message(), io.BytesIO(b'denied'))
+                error = HTTPError('https://cloud.test/v1/tugql', status, 'denied', Message(), io.BytesIO(b'denied'))
                 policy = self.policy([error])
                 with patch.object(smoke, 'REQUEST_POLICY', policy):
                     if status == 403:
                         smoke.require_status('https://cloud.test', '/v1/databases/a/records/x/1', expected=403, method='PUT')
                     else:
                         with self.assertRaisesRegex(RuntimeError, f'returned {status}'):
-                            smoke.require_status('https://cloud.test', '/v1/dtql')
+                            smoke.require_status('https://cloud.test', '/v1/tugql')
                 self.assertEqual(1, len(self.calls))
 
     def test_parameters_are_finite_bounded_and_zero_retries_does_not_wait(self):
@@ -121,7 +123,7 @@ class SmokeRequestPolicyTest(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.policy(**kwargs)
         policy = self.policy([self.limited()], retries=0)
-        self.assertEqual(429, policy.request('https://cloud.test', '/v1/dtql')[0])
+        self.assertEqual(429, policy.request('https://cloud.test', '/v1/tugql')[0])
         self.assertEqual([], self.clock.waits)
         fresh = self.policy([Response()])
         self.assertEqual(None, fresh.last_query)
@@ -130,7 +132,7 @@ class SmokeRequestPolicyTest(unittest.TestCase):
 
     def test_zero_retry_after_still_obeys_query_spacing(self):
         policy = self.policy([self.limited('0'), Response()])
-        self.assertEqual(200, policy.request('https://cloud.test', '/v1/dtql')[0])
+        self.assertEqual(200, policy.request('https://cloud.test', '/v1/tugql')[0])
         self.assertEqual([0, 1.1], [at for _, at, _ in self.calls])
         self.assertEqual([429, 200], [entry['status'] for entry in smoke.OBSERVATIONS])
 

@@ -227,10 +227,10 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 
 	for _, source := range demoPostgresSources {
 		id := source.databaseID + "-postgresql"
-		dtqlPath := "/v1/databases/" + id + "/dtql"
-		preflight := postgreSQLRequest(t, handler, http.MethodOptions, dtqlPath, "", "https://datatug.app")
+		tugqlPath := "/v1/databases/" + id + "/tugql"
+		preflight := postgreSQLRequest(t, handler, http.MethodOptions, tugqlPath, "", "https://datatug.app")
 		if preflight.Code != http.StatusNoContent || preflight.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app" || !strings.Contains(preflight.Header().Get("Access-Control-Allow-Methods"), "POST") || !strings.Contains(strings.ToLower(preflight.Header().Get("Access-Control-Allow-Headers")), "content-type") {
-			t.Fatalf("%s DataTug DTQL preflight: %d headers=%v body=%s", id, preflight.Code, preflight.Header(), preflight.Body.String())
+			t.Fatalf("%s DataTug TugQL preflight: %d headers=%v body=%s", id, preflight.Code, preflight.Header(), preflight.Body.String())
 		}
 		descriptorResponse := postgreSQLRequest(t, handler, http.MethodGet, "/v1/databases/"+id, "")
 		if descriptorResponse.Code != http.StatusOK {
@@ -254,11 +254,11 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 		if err := json.Unmarshal(descriptorResponse.Body.Bytes(), &descriptor); err != nil {
 			t.Fatalf("%s descriptor JSON: %v", id, err)
 		}
-		if descriptor.Capabilities["query"] || !descriptor.Capabilities["dtql"] || descriptor.Capabilities["write"] {
+		if descriptor.Capabilities["query"] || !descriptor.Capabilities["tugql"] || descriptor.Capabilities["write"] {
 			t.Fatalf("%s advertised unsupported native capabilities: %+v", id, descriptor.Capabilities)
 		}
-		if !descriptor.Capabilities["dtqlStreaming"] || !descriptor.Capabilities["dtqlStreamingErrors"] {
-			t.Fatalf("%s did not advertise its negotiated streaming DTQL capabilities", id)
+		if !descriptor.Capabilities["tugqlStreaming"] || !descriptor.Capabilities["tugqlStreamingErrors"] {
+			t.Fatalf("%s did not advertise its negotiated streaming TugQL capabilities", id)
 		}
 		if len(descriptor.Collections) == 0 {
 			t.Fatalf("%s has no discovered native relations", id)
@@ -294,7 +294,7 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 			}
 			read++
 			query := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: %s}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(fieldNames[0]))
-			response := postgreSQLStreamRequest(t, handler, dtqlPath, query, "https://datatug.app")
+			response := postgreSQLStreamRequest(t, handler, tugqlPath, query, "https://datatug.app")
 			var streamed struct {
 				Complete bool `json:"complete"`
 			}
@@ -303,11 +303,11 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 				failed[schemaName+"."+tableName] = fmt.Sprintf("%d %s", response.Code, strings.TrimSpace(response.Body.String()))
 				continue
 			case response.Header().Get("Content-Type") != "application/vnd.openvaultdb.query-stream+json":
-				t.Fatalf("%s opted-in DTQL Content-Type = %q", id, response.Header().Get("Content-Type"))
+				t.Fatalf("%s opted-in TugQL Content-Type = %q", id, response.Header().Get("Content-Type"))
 			case !strings.Contains(strings.Join(response.Header().Values("Vary"), ", "), "Accept"):
-				t.Fatalf("%s opted-in DTQL Vary = %q, want Accept", id, response.Header().Values("Vary"))
+				t.Fatalf("%s opted-in TugQL Vary = %q, want Accept", id, response.Header().Values("Vary"))
 			case response.Header().Get("Access-Control-Allow-Origin") != "https://datatug.app":
-				t.Fatalf("%s DTQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
+				t.Fatalf("%s TugQL response ACAO=%q, want DataTug origin", id, response.Header().Get("Access-Control-Allow-Origin"))
 			case json.Unmarshal(response.Body.Bytes(), &streamed) != nil || !streamed.Complete:
 				failed[schemaName+"."+tableName] = "stream did not complete: " + strings.TrimSpace(response.Body.String())
 				continue
@@ -330,12 +330,12 @@ func TestDemoPostgresReadOnlyPublicJourney(t *testing.T) {
 			t.Fatal(err)
 		}
 		joinQuery := fmt.Sprintf("from:\n  schema: %s\n  name: %s\n  alias: l\n  joins:\n    - type: inner\n      from: {schema: %s, name: %s, alias: r}\n      on:\n        - {left: {field: %s, source: l}, op: '==', right: {field: %s, source: r}}\ncolumns: [{field: %s, source: l}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(source.databaseID), strconv.Quote(tableName), strconv.Quote(joinField), strconv.Quote(joinField), strconv.Quote(joinField))
-		joinResponse := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/dtql", joinQuery)
+		joinResponse := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/tugql", joinQuery)
 		if joinResponse.Code != http.StatusOK {
 			t.Fatalf("%s bounded self-join from collection %q: %d %s", id, joinCollectionID, joinResponse.Code, joinResponse.Body.String())
 		}
 		hiddenQuery := fmt.Sprintf("from: {schema: %s, name: %s}\ncolumns: [{field: source}]\nlimit: 1\n", strconv.Quote(source.databaseID), strconv.Quote("_import_manifest"))
-		hiddenResponse := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/dtql", hiddenQuery)
+		hiddenResponse := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+id+"/tugql", hiddenQuery)
 		if hiddenResponse.Code != http.StatusNotFound {
 			t.Fatalf("%s hidden provenance query = %d %s, want 404", id, hiddenResponse.Code, hiddenResponse.Body.String())
 		}
@@ -449,14 +449,14 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// TestNativePostgresMountExposesFullPublicDTQL states, by behaviour, what turning
+// TestNativePostgresMountExposesFullPublicTugQL states, by behaviour, what turning
 // on OVDB_DEMODB_POSTGRES_ENABLED publishes. The library's preview switch is not
 // involved: a native read-only mount answers core.CanQuery() itself, so discovery
-// adds postgres to the join engines, and the public gets full DTQL (filters,
+// adds postgres to the join engines, and the public gets full TugQL (filters,
 // ordering, equality joins, grouping with HAVING, subqueries). Single-source reads
 // and joins run inside PostgreSQL; a document with a subquery runs in the
 // server's in-memory engine. Writes and the legacy /query route stay refused.
-func TestNativePostgresMountExposesFullPublicDTQL(t *testing.T) {
+func TestNativePostgresMountExposesFullPublicTugQL(t *testing.T) {
 	if os.Getenv("OVDB_PG_CHINOOK_DSN") == "" {
 		t.Skip("set OVDB_PG_CHINOOK_DSN to a read-only role on a loaded chinook schema")
 	}
@@ -495,7 +495,7 @@ func TestNativePostgresMountExposesFullPublicDTQL(t *testing.T) {
 		{"IN subquery", "from: {schema: chinook, name: Artist, alias: r}\nwhere:\n  op: In\n  left: {field: ArtistId, source: r}\n  right:\n    query:\n      from: {schema: chinook, name: Album, alias: a}\n      where: {op: '==', left: {field: AlbumId, source: a}, right: {value: 1}}\n      columns: [{field: ArtistId, source: a}]\ncolumns: [{field: Name, source: r}]\n", "in-memory", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+db+"/dtql", c.doc)
+			response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/"+db+"/tugql", c.doc)
 			if response.Code != http.StatusOK {
 				t.Fatalf("%d %s", response.Code, response.Body.String())
 			}

@@ -35,7 +35,7 @@ The admission is a closed JSON object bounded to 4 KiB. Its required fields are:
 | `hostConfigSHA256` | Exact raw host JSON SHA-256 |
 | `definitionSHA256`, `decoderSHA256`, `rightsSHA256` | Independently reviewed definition, decoder and canonical source-right digests |
 | `executorId`, `resourceId` | `openvaultdb-cloud`, `iana-http-status-codes` |
-| `method`, `path` | `POST`, `/v1/databases/iana-http-status/dtql` |
+| `method`, `path` | `POST`, `/v1/databases/iana-http-status/tugql` |
 | `maxReadsPerExecution`, `maxRows` | `1`, `50` |
 | `publicAccess`, `paidAccess` | `false`, `false` |
 
@@ -78,9 +78,9 @@ to fill admission blanks.
 
 ## Selected request boundary
 
-Only `POST /v1/databases/iana-http-status/dtql`, with no query string and exactly one
+Only `POST /v1/databases/iana-http-status/tugql`, with no query string and exactly one
 valid `X-OVDB-IANA-Proxy-Secret`, reaches the Go IANA handler. The Worker exposes
-only `POST /iana/v1/databases/iana-http-status/dtql` when `IANA_ENABLED=true`.
+only `POST /iana/v1/databases/iana-http-status/tugql` when `IANA_ENABLED=true`.
 It additionally requires `IANA_RUN_ORIGIN`, equal to `CHINOOK_RUN_ORIGIN`, a
 canonical root HTTPS `*.run.app` origin without credentials, explicit ports or URL
 parameters; `IANA_PROXY_SECRET`; and a separate `IANA_OPERATOR_TOKEN` with the same

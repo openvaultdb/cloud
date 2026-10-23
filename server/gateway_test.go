@@ -88,16 +88,16 @@ func TestGatewayCanonicalMethodsAndBodies(t *testing.T) {
 	calls := 0
 	var gotPath string
 	h := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; gotPath = r.URL.Path; w.WriteHeader(200) }), nil)
-	for _, p := range []string{"/v1//dtql", "/v1/%2e%2e/ovdb", "/v1/databases/chinook/dtql;foo", "/v1/%2Fdtql", "/v1/%5cdtql", "/v1/%3Bdtql"} {
+	for _, p := range []string{"/v1//tugql", "/v1/%2e%2e/ovdb", "/v1/databases/chinook/tugql;foo", "/v1/%2Ftugql", "/v1/%5ctugql", "/v1/%3Btugql"} {
 		if got := gatewayRequest(t, h, "GET", cloudHost, p, nil).Code; got != 400 {
 			t.Errorf("%s: %d", p, got)
 		}
 	}
-	if got := gatewayRequest(t, h, "POST", cloudHost, "/v1/databases/chinook/d%74ql", strings.NewReader("{}")).Code; got != 200 || gotPath != "/v1/databases/chinook/dtql" {
+	if got := gatewayRequest(t, h, "POST", cloudHost, "/v1/databases/chinook/tug%71l", strings.NewReader("{}")).Code; got != 200 || gotPath != "/v1/databases/chinook/tugql" {
 		t.Fatal(got, gotPath)
 	}
 	before := calls
-	r := httptest.NewRequest("POST", "https://"+cloudHost+"/v1/databases/chinook/dtql", strings.NewReader(strings.Repeat("x", gatewayBodyLimit+1)))
+	r := httptest.NewRequest("POST", "https://"+cloudHost+"/v1/databases/chinook/tugql", strings.NewReader(strings.Repeat("x", gatewayBodyLimit+1)))
 	r.ContentLength = -1
 	r.Header.Set(defaultOriginSecretHeader, gatewayTestSecret)
 	w := httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestGatewayCanonicalMethodsAndBodies(t *testing.T) {
 	if w.Code != 413 || calls != before {
 		t.Fatal(w.Code, calls)
 	}
-	for _, p := range []string{"/ecb/v1/databases/ecb/dtql", "/iana/v1/databases/iana-http-status/dtql", "/ecb-public"} {
+	for _, p := range []string{"/ecb/v1/databases/ecb/tugql", "/iana/v1/databases/iana-http-status/tugql", "/ecb-public"} {
 		if got := gatewayRequest(t, h, "POST", cloudHost, p, nil).Code; got != 503 {
 			t.Fatal(p, got)
 		}
@@ -117,14 +117,14 @@ func TestGatewayDemoDBMetadataAllowlistAndCORS(t *testing.T) {
 		calls++
 		w.Header().Set("OVDB-Source-SHA256", "source-pin")
 		w.Header().Set("Access-Control-Allow-Origin", "wrong")
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "chinook", "endpoints": map[string]string{"dtql": "https://" + cloudHost + "/v1/databases/chinook/dtql"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "chinook", "endpoints": map[string]string{"tugql": "https://" + cloudHost + "/v1/databases/chinook/tugql"}})
 	}), nil)
 	w := gatewayRequest(t, h, "GET", demoHost, "/v1", nil)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://"+demoHost+"/v1") || calls != 0 {
 		t.Fatal(w.Code, w.Body.String(), calls)
 	}
 	w = gatewayRequest(t, h, "GET", demoHost, "/v1/databases/chinook", nil)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://"+demoHost+"/v1/databases/chinook/dtql") || w.Header().Get("OVDB-Source-SHA256") != "source-pin" || w.Header().Get("Access-Control-Allow-Origin") != "*" {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://"+demoHost+"/v1/databases/chinook/tugql") || w.Header().Get("OVDB-Source-SHA256") != "source-pin" || w.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatal(w.Code, w.Header(), w.Body.String())
 	}
 	for _, p := range []string{"/v1/databases/not-admitted", "/oauth/token", "/api/databases", "/ovdb/dbs/chinook"} {
@@ -136,7 +136,7 @@ func TestGatewayDemoDBMetadataAllowlistAndCORS(t *testing.T) {
 		t.Fatal(got)
 	}
 	before := calls
-	w = gatewayRequest(t, h, "OPTIONS", demoHost, "/v1/databases/chinook/dtql", nil)
+	w = gatewayRequest(t, h, "OPTIONS", demoHost, "/v1/databases/chinook/tugql", nil)
 	if w.Code != 204 || calls != before {
 		t.Fatal(w.Code, calls)
 	}
@@ -285,16 +285,16 @@ func TestGatewayQueryClassIsCanonicalAndPreflightIndependent(t *testing.T) {
 	calls := 0
 	h := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }), nil)
 	for i := 0; i < 60; i++ {
-		if w := gatewayRequest(t, h, "GET", cloudHost, "/v1/databases/chinook/d%74ql", nil); w.Code != 200 {
+		if w := gatewayRequest(t, h, "GET", cloudHost, "/v1/databases/chinook/tug%71l", nil); w.Code != 200 {
 			t.Fatal(i, w.Code)
 		}
 	}
-	w := gatewayRequest(t, h, "GET", cloudHost, "/v1/databases/chinook/dtql", nil)
+	w := gatewayRequest(t, h, "GET", cloudHost, "/v1/databases/chinook/tugql", nil)
 	if w.Code != 429 || w.Header().Get("Retry-After") != "60" || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal(w.Code, w.Header())
 	}
 	before := calls
-	if w := gatewayRequest(t, h, "OPTIONS", cloudHost, "/v1/databases/chinook/dtql", nil); w.Code != 204 {
+	if w := gatewayRequest(t, h, "OPTIONS", cloudHost, "/v1/databases/chinook/tugql", nil); w.Code != 204 {
 		t.Fatal(w.Code)
 	}
 	if calls != before {
@@ -305,7 +305,7 @@ func TestGatewayQueryClassIsCanonicalAndPreflightIndependent(t *testing.T) {
 	}
 }
 func TestGatewayMetadataFailsClosedAndDoesNotBufferQueries(t *testing.T) {
-	for _, body := range []string{`{"id":"other","endpoints":{"dtql":"https://cloud.openvaultdb.com/v1/databases/chinook/dtql"}}`, `{"id":"chinook","endpoints":{"dtql":"https://attacker.example"}}`, strings.Repeat("x", gatewayBodyLimit+1)} {
+	for _, body := range []string{`{"id":"other","endpoints":{"tugql":"https://cloud.openvaultdb.com/v1/databases/chinook/tugql"}}`, `{"id":"chinook","endpoints":{"tugql":"https://attacker.example"}}`, strings.Repeat("x", gatewayBodyLimit+1)} {
 		h := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }), nil)
 		w := gatewayRequest(t, h, "GET", demoHost, "/v1/databases/chinook", nil)
 		if w.Code != 502 || strings.Contains(w.Body.String(), "attacker") {
@@ -348,7 +348,7 @@ func TestGatewayDeclaredCompanionOriginsAcrossMethods(t *testing.T) {
 					w.Header().Set("Access-Control-Allow-Credentials", "true")
 					w.WriteHeader(http.StatusOK)
 				}), nil)
-				r := httptest.NewRequest(method, "https://"+cloudHost+"/v1/databases/shipping/dtql", strings.NewReader(`{"query":"from rows"}`))
+				r := httptest.NewRequest(method, "https://"+cloudHost+"/v1/databases/shipping/tugql", strings.NewReader(`{"query":"from rows"}`))
 				r.Header.Set(defaultOriginSecretHeader, gatewayTestSecret)
 				r.Header.Set("Origin", origin)
 				r.Header.Set("Access-Control-Request-Method", "POST")

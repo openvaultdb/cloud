@@ -115,7 +115,7 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/dtql", strings.NewReader(string(body)))
+				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/tugql", strings.NewReader(string(body)))
 				request.Header.Set("Content-Type", "application/json")
 				request.Header.Set("Origin", provider.CORSOrigins[0])
 				response := httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/dtql", strings.NewReader(string(body)))
+				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/tugql", strings.NewReader(string(body)))
 				request.Header.Set("Content-Type", "application/json")
 				response := httptest.NewRecorder()
 				handler.ServeHTTP(response, request)
@@ -218,7 +218,7 @@ func TestInventoryMountAndQueryEveryProvider(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/dtql", strings.NewReader(string(body)))
+				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+url.PathEscape(provider.ID)+"/tugql", strings.NewReader(string(body)))
 				request.Header.Set("Content-Type", "application/json")
 				response := httptest.NewRecorder()
 				handler.ServeHTTP(response, request)
@@ -307,13 +307,13 @@ func recordDataMatches(queryData, fetchedData map[string]any) bool {
 func TestRecordDataMatchesNormalizesOnlyMissingNullableValues(t *testing.T) {
 	query := map[string]any{"OrderID": float64(10248), "ShipRegion": nil}
 	if !recordDataMatches(query, map[string]any{"OrderID": float64(10248)}) {
-		t.Fatal("a GET response omitting a nullable nil field should match the DTQL row")
+		t.Fatal("a GET response omitting a nullable nil field should match the TugQL row")
 	}
 	if !recordDataMatches(query, map[string]any{"OrderID": float64(10248), "ShipRegion": nil}) {
-		t.Fatal("a GET response preserving a nullable nil field should match the DTQL row")
+		t.Fatal("a GET response preserving a nullable nil field should match the TugQL row")
 	}
 	if recordDataMatches(query, map[string]any{"OrderID": float64(10248), "ShipRegion": "wrong"}) {
-		t.Fatal("a non-nil value must not match a nullable nil DTQL field")
+		t.Fatal("a non-nil value must not match a nullable nil TugQL field")
 	}
 	if recordDataMatches(query, map[string]any{"OrderID": float64(10248), "Extra": true}) {
 		t.Fatal("an unexpected response field must not be accepted")
