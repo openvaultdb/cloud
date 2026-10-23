@@ -120,7 +120,7 @@ func TestECBPublicRefusalBeforeReads(t *testing.T) {
 	}
 }
 func TestECBPublicAdmissionIsolation(t *testing.T) {
-	for _, mode := range []string{"operator simultaneous", "paid", "missing", "expired", "wrong config", "duplicate", "bad flag"} {
+	for _, mode := range []string{"operator simultaneous", "paid", "missing", "expired", "wrong config", "duplicate", "bad flag", "dtql worker path", "dtql go path"} {
 		t.Run(mode, func(t *testing.T) {
 			reads := 0
 			_, _, _ = configureSyntheticECBPublic(t, &reads)
@@ -144,6 +144,13 @@ func TestECBPublicAdmissionIsolation(t *testing.T) {
 					s = strings.Replace(s, `"hostConfigSHA256":"`, `"hostConfigSHA256":"0`, 1)
 				case "duplicate":
 					s = strings.Replace(s, `"paidAccess":false`, `"paidAccess":false,"paidAccess":false`, 1)
+				case "dtql worker path":
+					s = strings.Replace(s, `"workerPath":"`+ecbPublicPath+`"`, `"workerPath":"/ecb-public/v1/databases/ecb/dtql"`, 1)
+				case "dtql go path":
+					s = strings.Replace(s, `"goPath":"`+ecbQueryPath+`"`, `"goPath":"/v1/databases/ecb/dtql"`, 1)
+				}
+				if strings.HasPrefix(mode, "dtql") && !strings.Contains(s, "/dtql") {
+					t.Fatal("fixture missing path member")
 				}
 				_ = os.WriteFile(path, []byte(s), 0600)
 				t.Setenv("OVDB_ECB_PUBLIC_ADMISSION_SHA256", fmt.Sprintf("%x", sha256.Sum256([]byte(s))))

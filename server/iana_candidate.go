@@ -108,7 +108,7 @@ func checkedIANAAdmission(path, digest string) (ianaAdmission, error) {
 	if err != nil || dateErr != nil || approvedAt.IsZero() || strings.TrimSpace(a.ApprovedBy) == "" || strings.TrimSpace(a.ApprovedBy) != a.ApprovedBy ||
 		a.Format != "ovdb-iana-operator-admission/1" || a.Decision != "operator-free-transient-read-only" ||
 		!isSHA256(a.HostConfigSHA256) || !isSHA256(a.DefinitionSHA256) || !isSHA256(a.DecoderSHA256) || !isSHA256(a.RightsSHA256) ||
-		a.ExecutorID != "openvaultdb-cloud" || a.ResourceID != "iana-http-status-codes" || a.Method != http.MethodPost || !isIANAQueryPath(a.Path) ||
+		a.ExecutorID != "openvaultdb-cloud" || a.ResourceID != "iana-http-status-codes" || a.Method != http.MethodPost || a.Path != ianaQueryPath ||
 		a.MaxReadsPerExecution != 1 || a.MaxRows != 50 || a.PublicAccess || a.PaidAccess {
 		return ianaAdmission{}, errIANAConfig
 	}

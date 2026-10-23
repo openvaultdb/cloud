@@ -52,8 +52,6 @@ class SmokeRequestPolicyTest(unittest.TestCase):
         return HTTPError('https://cloud.test/v1/tugql', 429, 'limited', headers, io.BytesIO(b'quota exhausted'))
 
     def test_gateway_classes_and_actual_spacing(self):
-        for path in ['/v1/dtql', '/v1/databases/a/dtql']:  # legacy, removed in cutover step 9
-            self.assertTrue(smoke.query_request(path, 'POST'), path)
         for path in ['/v1/tugql', '/v1/tugql/', '/v1/databases/a/tugql?q=x',
                      '/v1/databases/a/query', '/v1/databases/a/batch/', '/v1/databases/a/read',
                      '/v1/databases/a/tug%71l']:

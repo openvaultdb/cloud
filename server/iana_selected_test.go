@@ -193,7 +193,7 @@ func TestConfiguredHandlerIANASelectedQuery(t *testing.T) {
 }
 
 func TestConfiguredHandlerIANAAdmissionDriftRefusesBeforeMount(t *testing.T) {
-	for _, name := range []string{"missing admission", "bad digest", "duplicate key", "unknown member", "trailing document", "host drift", "definition drift", "public", "paid", "reads", "rows", "executor", "binding", "rights", "transport", "decoder", "flag", "secret"} {
+	for _, name := range []string{"missing admission", "bad digest", "duplicate key", "unknown member", "trailing document", "host drift", "definition drift", "public", "paid", "reads", "rows", "executor", "binding", "rights", "transport", "decoder", "flag", "secret", "dtql path"} {
 		t.Run(name, func(t *testing.T) {
 			mounts := 0
 			path, config, a := configureSyntheticIANA(t, func(string) (*core.Database, error) { mounts++; return nil, errors.New("private-mount-marker") })
@@ -250,11 +250,13 @@ func TestConfiguredHandlerIANAAdmissionDriftRefusesBeforeMount(t *testing.T) {
 				t.Setenv("OVDB_IANA_ENABLED", "yes")
 			case "secret":
 				t.Setenv("OVDB_IANA_PROXY_SECRET", "short")
+			case "dtql path":
+				a.Path = "/v1/databases/iana-http-status/dtql"
 			}
 			if name == "binding" || name == "rights" || name == "decoder" {
 				a.HostConfigSHA256 = writeIANAJSON(t, path, config)
 			}
-			if name == "public" || name == "paid" || name == "reads" || name == "rows" || name == "executor" || name == "binding" || name == "rights" || name == "decoder" {
+			if name == "public" || name == "paid" || name == "reads" || name == "rows" || name == "executor" || name == "binding" || name == "rights" || name == "decoder" || name == "dtql path" {
 				t.Setenv("OVDB_IANA_ADMISSION_SHA256", writeIANAJSON(t, ap, a))
 			}
 			_, h, closeHandler, err := configuredHandler()

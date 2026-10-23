@@ -31,9 +31,8 @@ def observe(origin, path, method, status, headers, body):
 def query_request(path, method):
     """Match the gateway query class after canonical path decoding; OPTIONS is separate."""
     canonical = unquote(urlsplit(path).path)
-    # The legacy dtql route mirrors the gateway until TugQL cutover step 9 removes it.
-    return method != "OPTIONS" and (canonical in ("/v1/tugql", "/v1/tugql/", "/v1/dtql", "/v1/dtql/")
-        or re.fullmatch(r"/v1/databases/[^/]+/(tugql|dtql|query|batch|read)/?", canonical) is not None)
+    return method != "OPTIONS" and (canonical in ("/v1/tugql", "/v1/tugql/")
+        or re.fullmatch(r"/v1/databases/[^/]+/(tugql|query|batch|read)/?", canonical) is not None)
 
 
 class SmokeRequestPolicy:

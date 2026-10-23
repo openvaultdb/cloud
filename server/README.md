@@ -1,13 +1,10 @@
 # Read-only sample database service
 
-## Legacy `dtql` route (removed in TugQL cutover step 9)
+## Query routes
 
-Every query route is now `/tugql` (`/v1/databases/{id}/tugql`, `/v1/tugql`, and
-the discovery key `endpoints.tugql`). The gateway, and the ECB and IANA
-operator paths and admissions, still also accept the pre-rename `dtql` route
-(`legacyDTQLSegment` and the `legacy*Path` constants) because deployed browser
-clients, Workers and digest-pinned operator admissions name it. New admissions
-should name the `tugql` paths.
+Every query route is `/tugql` (`/v1/databases/{id}/tugql`, `/v1/tugql`, and the
+discovery key `endpoints.tugql`). ECB, ECB-public and IANA admission documents
+must name the `/tugql` paths in their `path`, `workerPath` and `goPath` fields.
 
 ## Operator-selected ECB original HTTP query path
 

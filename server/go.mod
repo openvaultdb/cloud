@@ -8,7 +8,7 @@ require (
 	github.com/dal-go/dalgo2http v0.4.0
 	github.com/dal-go/record v0.1.5
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/openvaultdb/openvaultdb-go v0.26.2
+	github.com/openvaultdb/openvaultdb-go v0.26.3
 	gopkg.in/yaml.v3 v3.0.1
 )
 
