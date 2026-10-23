@@ -19,10 +19,14 @@ The one exemption is the Cloud Run startup probe: an exact `GET`/`HEAD` of
 `/healthz/startup` with no query reaches the service with every client header
 and body stripped, and answers only `{"status":"starting"}` (503) or
 `{"status":"ready"}` (200). It reports ready once the native PostgreSQL editions
-have settled (mounted, or first attempt failed or refused) or 200 s after process
-start, whichever comes first, so a fresh instance takes no traffic while it
-would still answer 503 `pending`, and a slow edition cannot hold startup past
-Cloud Run's 240 s probe window. There is no liveness or readiness probe.
+have settled (mounted, or first attempt failed or refused) or once
+`OVDB_STARTUP_PROBE_BUDGET` (default 30 s, at most 50 s, read once at startup)
+has passed since process start, whichever comes first. A fast start therefore
+takes no traffic while it would still answer 503 `pending`. A slow start falls
+back to serving at once, with unsettled editions answering 503 and
+`Retry-After`, because Cloud Run answers held requests with 429 after
+max(10 s, 3.5 x average startup time). The startup-probe window is 5 s x 12 =
+60 s. There is no liveness or readiness probe.
 
 Both hosts use Google Cloud Run custom domain mappings behind proxied DNS and
 Full (strict) TLS. Google documents this mapping facility as preview and not

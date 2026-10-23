@@ -35,7 +35,9 @@ class GatewayDeploymentTest(unittest.TestCase):
                 if candidate and scenario=="wrong-image": image=image[:-1]+"d"
                 if candidate and scenario=="wrong-source": source="d"*40
                 # The rollback revision predates the HTTP probe and keeps TCP.
-                startup={"httpGet":{"path":"/healthz/startup","port":8080},"periodSeconds":10,"timeoutSeconds":1,"failureThreshold":24} if candidate else {"tcpSocket":{"port":8080}}
+                startup={"httpGet":{"path":"/healthz/startup","port":8080},"periodSeconds":5,"timeoutSeconds":1,"failureThreshold":12} if candidate else {"tcpSocket":{"port":8080}}
+                if candidate and scenario=="candidate-tcp-probe": startup={"tcpSocket":{"port":8080}}
+                if candidate and scenario=="candidate-loose-probe": startup={"httpGet":{"path":"/healthz/startup","port":8080},"periodSeconds":5,"timeoutSeconds":1,"failureThreshold":1}
                 return {"status":{"imageDigest":image},"metadata":{"labels":{"source-sha":source}},"spec":{"containers":[{"ports":[{"containerPort":8080}],"startupProbe":startup,"env":[{"name":"OVDB_ORIGIN_SECRET","valueFrom":{"secretKeyRef":{"name":"origin","key":"1"}}}]}]}}
             if args[:3]==("run","services","describe"):
                 status={"traffic":[{"revisionName":state["revision"],"percent":100}]}
@@ -51,7 +53,7 @@ class GatewayDeploymentTest(unittest.TestCase):
             if args[:2]==("run","deploy"):
                 self.assertIn("--no-traffic",args)
                 self.assertIn("--port=8080",args)
-                self.assertIn("--startup-probe=httpGet.path=/healthz/startup,httpGet.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24",args)
+                self.assertIn("--startup-probe=httpGet.path=/healthz/startup,httpGet.port=8080,periodSeconds=5,timeoutSeconds=1,failureThreshold=12",args)
                 self.assertIn("--min-instances=0",args)
                 self.assertFalse(any(a.startswith(("--liveness-probe","--readiness-probe")) for a in args))
                 self.assertIn("--image="+IMAGE,args)
@@ -92,22 +94,42 @@ class GatewayDeploymentTest(unittest.TestCase):
         fields=dict(item.split("=",1) for item in deploy.STARTUP_PROBE.split(","))
         self.assertEqual(fields["httpGet.path"],"/healthz/startup")
         self.assertEqual(fields["httpGet.port"],"8080")
-        # Cloud Run allows at most 240 s; the Go budget (200 s) plus one period fits.
-        self.assertLessEqual(int(fields["periodSeconds"])*int(fields["failureThreshold"]),240)
-        self.assertGreaterEqual(int(fields["periodSeconds"])*int(fields["failureThreshold"]),200+int(fields["periodSeconds"]))
+        window=int(fields["periodSeconds"])*int(fields["failureThreshold"])
+        # The configured window (Cloud Run allows up to 600 s) must hold the Go
+        # maximum budget (startupProbeMaxBudget, 50 s) plus one probe period.
+        self.assertEqual(window,60)
+        self.assertGreaterEqual(window,50+int(fields["periodSeconds"]))
         container=lambda probe:{"ports":[{"containerPort":8080}],"startupProbe":probe}
-        for probe in ({"tcpSocket":{"port":8080}},{"httpGet":{"path":"/healthz/startup","port":8080}},{"httpGet":{"path":"/healthz/startup"}}):
+        spec=deploy.STARTUP_PROBE_SPEC
+        http_ok=dict(spec)
+        http_no_port=dict(spec,httpGet={"path":"/healthz/startup"})
+        for probe in (http_ok,http_no_port):
+            deploy.check_probes(container(probe),True,candidate=True)
             deploy.check_probes(container(probe),True)
-        for probe in ({},{"tcpSocket":{"port":9090}},{"httpGet":{"path":"/health","port":8080}},{"httpGet":{"path":"/healthz/startup","port":9090}},
-                      {"httpGet":{"path":"/healthz/startup","port":8080,"httpHeaders":[{"name":"X-OVDB-Origin-Secret","value":"x"}]}},
-                      {"httpGet":{"path":"/healthz/startup","port":8080},"tcpSocket":{"port":8080}},{"grpc":{"port":8080}},
-                      {"grpc":{"port":8080},"tcpSocket":{"port":8080}}):
-            with self.assertRaisesRegex(RuntimeError,"startup probe"):
-                deploy.check_probes(container(probe),True)
+        deploy.check_probes(container({"tcpSocket":{"port":8080}}),True)
+        bad=[{},{"tcpSocket":{"port":9090}},dict(spec,httpGet={"path":"/health","port":8080}),dict(spec,httpGet={"path":"/healthz/startup","port":9090}),
+             dict(spec,httpGet={"path":"/healthz/startup","port":8080,"httpHeaders":[{"name":"X-OVDB-Origin-Secret","value":"x"}]}),
+             dict(spec,tcpSocket={"port":8080}),{"grpc":{"port":8080}},{"grpc":{"port":8080},"tcpSocket":{"port":8080}},
+             dict(spec,failureThreshold=1),dict(spec,periodSeconds=10),dict(spec,timeoutSeconds=5),{"httpGet":{"path":"/healthz/startup","port":8080}}]
+        for probe in bad:
+            for candidate in (False,True):
+                with self.assertRaisesRegex(RuntimeError,"startup probe"):
+                    deploy.check_probes(container(probe),True,candidate)
+        with self.assertRaisesRegex(RuntimeError,"startup probe"):
+            deploy.check_probes(container({"tcpSocket":{"port":8080}}),True,candidate=True)
         with self.assertRaisesRegex(RuntimeError,"pinned startup probe"):
             deploy.check_probes({"ports":[{"containerPort":9090}],"startupProbe":{"tcpSocket":{"port":8080}}},True)
         with self.assertRaisesRegex(RuntimeError,"liveness/readiness"):
             deploy.check_probes({"livenessProbe":{"httpGet":{"path":"/healthz/startup"}}},False)
+
+    def test_candidate_without_pinned_http_probe_is_refused_and_rolled_back(self):
+        for scenario in ("candidate-tcp-probe","candidate-loose-probe"):
+            calls,state,error,receipt,rollback=self.exercise(scenario)
+            self.assertRegex(str(error),"startup probe")
+            self.assertEqual(state["revision"],"secure-prior")
+            self.assertEqual(receipt["phase"],"rolling-back")
+            self.assertTrue(rollback["immutableTrafficRestored"])
+            self.assertFalse(any("--to-revisions=created-candidate=100" in call for call in calls))
 
     def test_wrong_serving_traffic_is_refused_and_secure_rollback_verified(self):
         calls,state,error,receipt,rollback=self.exercise("wrong-serving-traffic")
