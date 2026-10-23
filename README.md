@@ -15,7 +15,14 @@ Production startup requires `OVDB_ORIGIN_SECRET` (32–128 ASCII letters, digits
 `_` or `-`). Cloudflare must overwrite `X-OVDB-Origin-Secret` on exactly the two
 public hostnames using the matching credential. The Go constant-time validator
 rejects missing, wrong or duplicate values before routing and strips the header.
-There is no HTTP health exemption; platform startup uses TCP probing.
+The one exemption is the Cloud Run startup probe: an exact `GET`/`HEAD` of
+`/healthz/startup` with no query reaches the service with every client header
+and body stripped, and answers only `{"status":"starting"}` (503) or
+`{"status":"ready"}` (200). It reports ready once the native PostgreSQL editions
+have settled (mounted, or first attempt failed or refused) or 200 s after process
+start, whichever comes first, so a fresh instance takes no traffic while it
+would still answer 503 `pending`, and a slow edition cannot hold startup past
+Cloud Run's 240 s probe window. There is no liveness or readiness probe.
 
 Both hosts use Google Cloud Run custom domain mappings behind proxied DNS and
 Full (strict) TLS. Google documents this mapping facility as preview and not

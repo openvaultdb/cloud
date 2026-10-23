@@ -40,18 +40,38 @@ def identity(name):
     return {"revision": name, "image": digest, "sourceSha": sha}
 
 
+# The startup probe waits for the native PostgreSQL DemoDB mounts. The Go
+# gateway admits exactly this path without the edge credential and reports
+# ready once the six editions have settled, or after a 200 s budget
+# (startupProbeBudget). 10 s x 24 = 240 s, Cloud Run's startup-probe maximum.
+STARTUP_PATH = "/healthz/startup"
+STARTUP_PROBE = "httpGet.path="+STARTUP_PATH+",httpGet.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24"
+
+
+def startup_probe_ok(probe):
+    if "grpc" in probe:
+        return False
+    if "httpGet" in probe:
+        # Cloud Run may omit the port when it is the single serving port, which
+        # the caller pins to 8080.
+        get = probe["httpGet"]
+        return "tcpSocket" not in probe and get.get("path") == STARTUP_PATH and get.get("port", 8080) == 8080 and not get.get("httpHeaders")
+    # Revisions deployed before the HTTP startup probe (including the accepted
+    # secure rollback revision) carry the TCP probe.
+    return probe.get("tcpSocket") == {"port": 8080}
+
+
 def check_probes(container, require_startup):
     # Liveness/readiness HTTP or gRPC probes cannot satisfy the mandatory edge
     # credential. Do not silently remove an operator's health policy.
     if container.get("livenessProbe") or container.get("readinessProbe"):
         raise RuntimeError("unsupported inherited liveness/readiness probe; review before deployment")
     if require_startup:
-        probe = container.get("startupProbe", {})
-        if probe.get("tcpSocket") != {"port": 8080} or "httpGet" in probe or "grpc" in probe:
-            raise RuntimeError("revision requires TCP startup on serving port8080")
+        if not startup_probe_ok(container.get("startupProbe", {})):
+            raise RuntimeError("revision requires the pinned HTTP or legacy TCP startup probe on serving port 8080")
         ports = container.get("ports", [])
         if len(ports) != 1 or ports[0].get("containerPort") != 8080 or ports[0].get("name", "http1") != "http1":
-            raise RuntimeError("revision serving port differs from pinned TCP probe")
+            raise RuntimeError("revision serving port differs from pinned startup probe")
 
 
 def single_container(spec):
@@ -149,7 +169,7 @@ def main():
     require_current_main(sha)
     try:
         save("deploy-started")
-        command = ["run", "deploy", service, "--image="+image, "--labels=source-sha="+sha, "--no-traffic", "--port=8080", "--startup-probe=tcpSocket.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24", "--allow-unauthenticated", "--ingress=all", "--service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com", "--min-instances=0", "--max-instances=2", "--memory=512Mi", "--concurrency=2", "--cpu=1", "--timeout=120", "--update-secrets=OVDB_ORIGIN_SECRET="+origin_binding+",OVDB_DEVICE_AUTH_PROXY_SECRET="+proxy_binding, "--update-env-vars=SNEAT_API_ORIGIN="+sneat+",OVDB_ORIGIN_SECRET_HEADER=X-OVDB-Origin-Secret,OVDB_ECB_ENABLED=false,OVDB_IANA_ENABLED=false", "--quiet"]
+        command = ["run", "deploy", service, "--image="+image, "--labels=source-sha="+sha, "--no-traffic", "--port=8080", "--startup-probe="+STARTUP_PROBE, "--allow-unauthenticated", "--ingress=all", "--service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com", "--min-instances=0", "--max-instances=2", "--memory=512Mi", "--concurrency=2", "--cpu=1", "--timeout=120", "--update-secrets=OVDB_ORIGIN_SECRET="+origin_binding+",OVDB_DEVICE_AUTH_PROXY_SECRET="+proxy_binding, "--update-env-vars=SNEAT_API_ORIGIN="+sneat+",OVDB_ORIGIN_SECRET_HEADER=X-OVDB-Origin-Secret,OVDB_ECB_ENABLED=false,OVDB_IANA_ENABLED=false", "--quiet"]
         if args.phase == "mapped":
             command.append("--no-default-url")
         created = cloud(*command)

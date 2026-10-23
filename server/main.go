@@ -173,7 +173,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
 	}
 	if !hasNativePostgres {
-		return withVerifiedProviderPins(checked.Handler(), providers), func() error { return closeMountedDatabases(databases) }, nil
+		return newStartupProbe(nil).wrap(withVerifiedProviderPins(checked.Handler(), providers)), func() error { return closeMountedDatabases(databases) }, nil
 	}
 	timing, err := demoPostgresMountTimingFromEnv(os.Getenv)
 	if err != nil {
@@ -181,7 +181,7 @@ func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage
 	}
 	mounter := newDemoPostgresMounter(checked, nativePostgresProviders, timing)
 	mounter.start(nativePostgresProviders)
-	handler := &demoPostgresHandler{Handler: withVerifiedProviderPins(mounter.wrap(checked.Handler()), providers), mounter: mounter}
+	handler := &demoPostgresHandler{Handler: newStartupProbe(mounter.settled).wrap(withVerifiedProviderPins(mounter.wrap(checked.Handler()), providers)), mounter: mounter}
 	return handler, func() error {
 		return errors.Join(mounter.stop(), closeMountedDatabases(databases))
 	}, nil

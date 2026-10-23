@@ -34,7 +34,9 @@ class GatewayDeploymentTest(unittest.TestCase):
                 source=SHA if candidate else rollback["sourceSha"]
                 if candidate and scenario=="wrong-image": image=image[:-1]+"d"
                 if candidate and scenario=="wrong-source": source="d"*40
-                return {"status":{"imageDigest":image},"metadata":{"labels":{"source-sha":source}},"spec":{"containers":[{"ports":[{"containerPort":8080}],"startupProbe":{"tcpSocket":{"port":8080}},"env":[{"name":"OVDB_ORIGIN_SECRET","valueFrom":{"secretKeyRef":{"name":"origin","key":"1"}}}]}]}}
+                # The rollback revision predates the HTTP probe and keeps TCP.
+                startup={"httpGet":{"path":"/healthz/startup","port":8080},"periodSeconds":10,"timeoutSeconds":1,"failureThreshold":24} if candidate else {"tcpSocket":{"port":8080}}
+                return {"status":{"imageDigest":image},"metadata":{"labels":{"source-sha":source}},"spec":{"containers":[{"ports":[{"containerPort":8080}],"startupProbe":startup,"env":[{"name":"OVDB_ORIGIN_SECRET","valueFrom":{"secretKeyRef":{"name":"origin","key":"1"}}}]}]}}
             if args[:3]==("run","services","describe"):
                 status={"traffic":[{"revisionName":state["revision"],"percent":100}]}
                 if scenario not in ("no-default-url","no-default-url-live-failure"): status["url"]="https://service.run.app"
@@ -49,7 +51,9 @@ class GatewayDeploymentTest(unittest.TestCase):
             if args[:2]==("run","deploy"):
                 self.assertIn("--no-traffic",args)
                 self.assertIn("--port=8080",args)
-                self.assertIn("--startup-probe=tcpSocket.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24",args)
+                self.assertIn("--startup-probe=httpGet.path=/healthz/startup,httpGet.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24",args)
+                self.assertIn("--min-instances=0",args)
+                self.assertFalse(any(a.startswith(("--liveness-probe","--readiness-probe")) for a in args))
                 self.assertIn("--image="+IMAGE,args)
                 self.assertEqual("--no-default-url" in args,phase=="mapped")
                 if scenario=="startup-failure":
@@ -84,6 +88,27 @@ class GatewayDeploymentTest(unittest.TestCase):
             receipt=json.loads(Path("shipping-publication-deploy-receipt.json").read_text()) if Path("shipping-publication-deploy-receipt.json").exists() else None
             restored=json.loads(Path("shipping-publication-rollback-receipt.json").read_text()) if Path("shipping-publication-rollback-receipt.json").exists() else None
         return calls,state,error,receipt,restored
+    def test_startup_probe_window_and_accepted_shapes(self):
+        fields=dict(item.split("=",1) for item in deploy.STARTUP_PROBE.split(","))
+        self.assertEqual(fields["httpGet.path"],"/healthz/startup")
+        self.assertEqual(fields["httpGet.port"],"8080")
+        # Cloud Run allows at most 240 s; the Go budget (200 s) plus one period fits.
+        self.assertLessEqual(int(fields["periodSeconds"])*int(fields["failureThreshold"]),240)
+        self.assertGreaterEqual(int(fields["periodSeconds"])*int(fields["failureThreshold"]),200+int(fields["periodSeconds"]))
+        container=lambda probe:{"ports":[{"containerPort":8080}],"startupProbe":probe}
+        for probe in ({"tcpSocket":{"port":8080}},{"httpGet":{"path":"/healthz/startup","port":8080}},{"httpGet":{"path":"/healthz/startup"}}):
+            deploy.check_probes(container(probe),True)
+        for probe in ({},{"tcpSocket":{"port":9090}},{"httpGet":{"path":"/health","port":8080}},{"httpGet":{"path":"/healthz/startup","port":9090}},
+                      {"httpGet":{"path":"/healthz/startup","port":8080,"httpHeaders":[{"name":"X-OVDB-Origin-Secret","value":"x"}]}},
+                      {"httpGet":{"path":"/healthz/startup","port":8080},"tcpSocket":{"port":8080}},{"grpc":{"port":8080}},
+                      {"grpc":{"port":8080},"tcpSocket":{"port":8080}}):
+            with self.assertRaisesRegex(RuntimeError,"startup probe"):
+                deploy.check_probes(container(probe),True)
+        with self.assertRaisesRegex(RuntimeError,"pinned startup probe"):
+            deploy.check_probes({"ports":[{"containerPort":9090}],"startupProbe":{"tcpSocket":{"port":8080}}},True)
+        with self.assertRaisesRegex(RuntimeError,"liveness/readiness"):
+            deploy.check_probes({"livenessProbe":{"httpGet":{"path":"/healthz/startup"}}},False)
+
     def test_wrong_serving_traffic_is_refused_and_secure_rollback_verified(self):
         calls,state,error,receipt,rollback=self.exercise("wrong-serving-traffic")
         self.assertIsNotNone(error)
