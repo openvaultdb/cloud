@@ -31,7 +31,12 @@ const gatewayCSP = "default-src 'self'; script-src 'self' https://www.gstatic.co
 //go:embed all:gatewayassets
 var gatewayAssets embed.FS
 
-var publicQueryPath = regexp.MustCompile(`^/v1/databases/[^/]+/(dtql|query|batch|read)/?$`)
+// legacyDTQLSegment is the pre-rename query route name. Deployed browser clients
+// (DataTug apps, demodb.dev sites) still call it until they move to /tugql, and
+// openvaultdb-go keeps serving it behind its own shim. Removed in TugQL cutover step 9.
+const legacyDTQLSegment = "dtql"
+
+var publicQueryPath = regexp.MustCompile(`^/v1/databases/[^/]+/(tugql|` + legacyDTQLSegment + `|query|batch|read)/?$`)
 var demoDBPath = regexp.MustCompile(`^/v1/databases/([a-z][a-z0-9-]{0,39})(/.*)?$`)
 var demoRecordPath = regexp.MustCompile(`^/records/[^/]+(/[^/]+)+$`)
 var gatewayDatabaseID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -308,7 +313,7 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w = &gatewayCORSWriter{ResponseWriter: w, request: r, demo: host == demoHost, methods: "GET, HEAD, POST, OPTIONS"}
 		gatewayCORS(w, r, host == demoHost, "GET, HEAD, POST, OPTIONS")
 		class, limit := "read", 300
-		if canonical == "/v1/dtql" || canonical == "/v1/dtql/" || publicQueryPath.MatchString(canonical) {
+		if isCrossDatabaseQueryPath(canonical) || publicQueryPath.MatchString(canonical) {
 			class, limit = "query", 60
 		}
 		if r.Method == "OPTIONS" {
@@ -453,7 +458,7 @@ func (g *gateway) demo(w http.ResponseWriter, r *http.Request, p string) {
 		return
 	}
 	metadata := suffix == "" || suffix == "/"
-	query := suffix == "/dtql" || suffix == "/query"
+	query := suffix == "/tugql" || suffix == "/"+legacyDTQLSegment || suffix == "/query"
 	if !metadata && !query && suffix != "/read" && suffix != "/inferred-schema" && !demoRecordPath.MatchString(suffix) {
 		http.NotFound(w, r)
 		return
@@ -492,6 +497,27 @@ func (g *gateway) demo(w http.ResponseWriter, r *http.Request, p string) {
 	g.serveInner(w, r)
 }
 
+// isCrossDatabaseQueryPath reports the cross-database query route, current or legacy.
+func isCrossDatabaseQueryPath(canonical string) bool {
+	trimmed := strings.TrimSuffix(canonical, "/")
+	return trimmed == "/v1/tugql" || trimmed == "/v1/"+legacyDTQLSegment
+}
+
+// rebrandEndpoint checks that the backend advertised the endpoint at its own
+// host and points it at the demo host. An absent key is accepted only when
+// optional, as the legacy key is once the library drops it.
+func rebrandEndpoint(endpoints map[string]string, key, id string, optional bool) bool {
+	value, present := endpoints[key]
+	if !present {
+		return optional
+	}
+	if value != "https://"+cloudHost+"/v1/databases/"+id+"/"+key {
+		return false
+	}
+	endpoints[key] = "https://" + demoHost + "/v1/databases/" + id + "/" + key
+	return true
+}
+
 // Only the small descriptor is buffered/rebranded, never result streams.
 func (g *gateway) demoMetadata(w http.ResponseWriter, r *http.Request, id string) {
 	capture := &gatewayMetadataWriter{header: make(http.Header)}
@@ -519,11 +545,10 @@ func (g *gateway) demoMetadata(w http.ResponseWriter, r *http.Request, id string
 	var descriptor map[string]json.RawMessage
 	var endpoints map[string]string
 	var gotID string
-	if capture.failed || json.Unmarshal(capture.body.Bytes(), &descriptor) != nil || json.Unmarshal(descriptor["id"], &gotID) != nil || gotID != id || json.Unmarshal(descriptor["endpoints"], &endpoints) != nil || endpoints["dtql"] != "https://"+cloudHost+"/v1/databases/"+id+"/dtql" {
+	if capture.failed || json.Unmarshal(capture.body.Bytes(), &descriptor) != nil || json.Unmarshal(descriptor["id"], &gotID) != nil || gotID != id || json.Unmarshal(descriptor["endpoints"], &endpoints) != nil || !rebrandEndpoint(endpoints, "tugql", id, false) || !rebrandEndpoint(endpoints, legacyDTQLSegment, id, true) {
 		gatewayError(w, 502, "Invalid backend metadata")
 		return
 	}
-	endpoints["dtql"] = "https://" + demoHost + "/v1/databases/" + id + "/dtql"
 	descriptor["endpoints"], _ = json.Marshal(endpoints)
 	w.Header().Del("ETag")
 	w.Header().Del("Content-Length")

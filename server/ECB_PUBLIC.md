@@ -21,8 +21,8 @@ explicit cost owner and a <=30-day approval window. Operator admission and
 secrets cannot authorize this path. Module source verification establishes the
 v0.4.0 ECB decoder SHA256 equals the existing reviewed decoder digest.
 
-The new Worker route is `/ecb-public/v1/databases/ecb/dtql`. The Go route remains
-`/v1/databases/ecb/dtql` and can select only one of the two ECB compositions.
+The new Worker route is `/ecb-public/v1/databases/ecb/tugql`. The Go route remains
+`/v1/databases/ecb/tugql` and can select only one of the two ECB compositions.
 Only the Worker supplies the separate public proxy secret and admission digest.
 No request cookies, Authorization, billing, paid capabilities or caller internal
 headers authorize the zero-fee route. Exact-origin OPTIONS stays local.

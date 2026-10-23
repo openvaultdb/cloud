@@ -90,9 +90,9 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 		id := entry.(map[string]any)["id"].(string)
 		for _, value := range getJSON(t, handler, "/v1/databases/"+id)["collections"].([]any) {
 			collection := value.(string)
-			dtql := func() *http.Request {
+			tugql := func() *http.Request {
 				body := fmt.Sprintf("from: {name: '%s'}\nlimit: 1000\n", strings.ReplaceAll(collection, "'", "''"))
-				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+id+"/dtql", strings.NewReader(body))
+				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+id+"/tugql", strings.NewReader(body))
 				request.Header.Set("Content-Type", "application/yaml")
 				request.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
 				return request
@@ -103,7 +103,7 @@ func TestCloudMeasureSingleCollectionReads(t *testing.T) {
 			}{
 				{"query, no limit", wireRequest(t, id, core.Query{Collection: collection})},
 				{"query, 1000 rows", wireRequest(t, id, core.Query{Collection: collection, Limit: 1000})},
-				{"dtql, 1000 rows", dtql()},
+				{"tugql, 1000 rows", tugql()},
 			} {
 				response := httptest.NewRecorder()
 				growth := measureGrowth(func() { handler.ServeHTTP(response, form.request) })
@@ -158,7 +158,7 @@ func TestCloudMeasureExactMoneyAggregates(t *testing.T) {
 			var code int
 			var answer []byte
 			growth := measureGrowth(func() {
-				response := postAdventureWorksDTQL(t, handler, test.query)
+				response := postAdventureWorksTugQL(t, handler, test.query)
 				code = response.Code
 				answer = response.Body.Bytes()
 			})

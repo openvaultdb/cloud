@@ -82,7 +82,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 		}
 	}
 	for _, collection := range nativeCollections {
-		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 10\n")
+		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/tugql", "from: {name: "+collection+"}\nlimit: 10\n")
 		if query.Code != 200 || !strings.Contains(query.Body.String(), collection+"-e1") {
 			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())
 		}
@@ -91,7 +91,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 			t.Fatalf("native keyed %s: %d %s", collection, keyed.Code, keyed.Body.String())
 		}
 	}
-	query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: baseline}\nlimit: 10\n")
+	query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/tugql", "from: {name: baseline}\nlimit: 10\n")
 	if query.Code != 200 || !strings.Contains(query.Body.String(), "baseline-e1") {
 		t.Fatalf("native query: %d %s", query.Code, query.Body.String())
 	}
@@ -99,7 +99,7 @@ func TestNativeInGitDBRuntimeQueriesAndKeyedReads(t *testing.T) {
 	if keyed.Code != 200 || !strings.Contains(keyed.Body.String(), "observed") {
 		t.Fatalf("native keyed read: %d %s", keyed.Code, keyed.Body.String())
 	}
-	canceled := httptest.NewRequest("POST", "/v1/databases/shipping-logs/dtql", strings.NewReader(`{"query":"from: {name: baseline}"}`)).WithContext(func() context.Context { c, cancel := context.WithCancel(context.Background()); cancel(); return c }())
+	canceled := httptest.NewRequest("POST", "/v1/databases/shipping-logs/tugql", strings.NewReader(`{"query":"from: {name: baseline}"}`)).WithContext(func() context.Context { c, cancel := context.WithCancel(context.Background()); cancel(); return c }())
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, canceled)
 	if response.Code == 200 {
@@ -281,12 +281,12 @@ func TestActualNativeCollectionDiscoveryAndReads(t *testing.T) {
 	})
 	assertNativeCollectionDiscovery(t, handler)
 	for collection, key := range map[string]string{"baseline": "attempt-11062-1-e1", "recovery11045example": "attempt-11045-2-e1", "recovery11062example": "attempt-11062-2-e1", "carrierGateway": "attempt-11038-1-c1", "carrierGatewayRecovery11045example": "attempt-11045-2-c1", "carrierGatewayRecovery11062example": "attempt-11062-2-c1"} {
-		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/dtql", "from: {name: "+collection+"}\nlimit: 100\n")
+		query := selectedRequest(handler, "POST", "/v1/databases/shipping-logs/tugql", "from: {name: "+collection+"}\nlimit: 100\n")
 		if query.Code != http.StatusOK {
 			t.Fatalf("native query %s: %d %s", collection, query.Code, query.Body.String())
 		}
 		// Native mounts have no immutable-query cache policy; real ServeHTTP must refuse storage.
-		getQuery := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/dtql?q="+url.QueryEscape("from: {name: "+collection+"}\nlimit: 100\n"), "")
+		getQuery := selectedRequest(handler, "GET", "/v1/databases/shipping-logs/tugql?q="+url.QueryEscape("from: {name: "+collection+"}\nlimit: 100\n"), "")
 		if getQuery.Code != http.StatusOK || getQuery.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("native GET cache contract %s: %d %q", collection, getQuery.Code, getQuery.Header().Get("Cache-Control"))
 		}

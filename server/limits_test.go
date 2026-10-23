@@ -389,7 +389,7 @@ func postRelational(t *testing.T, handler http.Handler, document string) relatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/dtql", strings.NewReader(string(body)))
+	request := httptest.NewRequest(http.MethodPost, "/v1/tugql", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -581,8 +581,8 @@ func wireRead(t *testing.T, handler http.Handler, database, collection string) w
 // structured queries on ordinary (writable or manifest-declared) PostgreSQL
 // mounts. It does NOT mean PostgreSQL queries stay off: the native read-only
 // DemoDB mounts enabled by OVDB_DEMODB_POSTGRES_ENABLED answer core.CanQuery()
-// themselves and serve full public DTQL whatever this switch says; see
-// TestNativePostgresMountExposesFullPublicDTQL for what that exposes.
+// themselves and serve full public TugQL whatever this switch says; see
+// TestNativePostgresMountExposesFullPublicTugQL for what that exposes.
 func TestServiceNeverSetsLibraryPostgresPreviewSwitch(t *testing.T) {
 	needle := core.PreviewPostgresQueriesEnv
 	roots := []string{"*.go", "Dockerfile", filepath.Join("..", ".github", "workflows", "*")}

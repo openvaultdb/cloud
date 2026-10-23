@@ -1,5 +1,14 @@
 # Read-only sample database service
 
+## Legacy `dtql` route (removed in TugQL cutover step 9)
+
+Every query route is now `/tugql` (`/v1/databases/{id}/tugql`, `/v1/tugql`, and
+the discovery key `endpoints.tugql`). The gateway, and the ECB and IANA
+operator paths and admissions, still also accept the pre-rename `dtql` route
+(`legacyDTQLSegment` and the `legacy*Path` constants) because deployed browser
+clients, Workers and digest-pinned operator admissions name it. New admissions
+should name the `tugql` paths.
+
 ## Operator-selected ECB original HTTP query path
 
 `ecb_candidate.go` compiles the pinned host composition for the original ECB
@@ -16,7 +25,7 @@ separate from the OVDB preparatory B1 proposal. Its closed JSON format is
 JSON, `publisherManifestSHA256` equal to the pinned original publisher SHA in
 `ecb_candidate.go`, `rightsDigest` equal to its pinned rights SHA,
 `executorId: openvaultdb-cloud`, `resourceId: ecb-daily`, `method: POST`,
-`path: /v1/databases/ecb/dtql`, `maxReadsPerExecution: 1`, `maxRows: 50`,
+`path: /v1/databases/ecb/tugql`, `maxReadsPerExecution: 1`, `maxRows: 50`,
 `publicAccess: false`, and `paidAccess: false`. The gate refuses a missing,
 altered, duplicate-key, broader or unbound decision before mounting and
 rechecks the host-config digest during assembly. The named approver is an
@@ -40,7 +49,7 @@ digest and approver; never deploy this example as an approval:
   "executorId": "openvaultdb-cloud",
   "resourceId": "ecb-daily",
   "method": "POST",
-  "path": "/v1/databases/ecb/dtql",
+  "path": "/v1/databases/ecb/tugql",
   "maxReadsPerExecution": 1,
   "maxRows": 50,
   "publicAccess": false,
@@ -57,7 +66,7 @@ presentation falls under the sold-document condition, and whether its UI meets
 the before-payment and each-access notice duties, is a separate rights decision.
 This operator-only admission does not infer it.
 
-The selected Go handler admits only `POST /v1/databases/ecb/dtql`; other ECB
+The selected Go handler admits only `POST /v1/databases/ecb/tugql`; other ECB
 paths, passive reads and query strings do not reach the ECB provider. Existing
 sample routes retain their current handler.
 
@@ -144,7 +153,7 @@ temporary manifests.
 
 ### What enabling it exposes
 
-Turning `OVDB_DEMODB_POSTGRES_ENABLED` on publishes **full public DTQL** on every
+Turning `OVDB_DEMODB_POSTGRES_ENABLED` on publishes **full public TugQL** on every
 mounted edition, to anyone who can reach the service. The library's
 `OVDB_PREVIEW_POSTGRES_QUERIES` switch is not involved: a native read-only mount
 answers `core.CanQuery()` itself, and discovery (`/.well-known/openvaultdb`)
@@ -158,7 +167,7 @@ server's in-memory engine. Writes are refused, and the legacy `/query` route
 answers 501 for these mounts, and so do keyed record reads and writes
 (`GET /v1/databases/<id>/records/<collectionId>/<id>` answers
 `501 operation_unsupported`, not `500 internal`; fixed in v0.25.3).
-`TestNativePostgresMountExposesFullPublicDTQL`
+`TestNativePostgresMountExposesFullPublicTugQL`
 checks exactly this against a real database.
 
 ### Each mount is optional
@@ -395,7 +404,7 @@ database or table in service code.
 
 ## Limits and the instance memory
 
-AdventureWorks publishes 48 provider-declared exact-decimal field descriptors in its database metadata. These values remain JSON strings through record reads and snapshots. DTQL exact calculations are an explicit `money` opt-in on supported aggregate queries, use bounded 38-digit decimal arithmetic with half-even rounding, and remain subject to the existing source-row and memory limits. Default numeric behavior is unchanged; source computed columns remain snapshots rather than being recomputed.
+AdventureWorks publishes 48 provider-declared exact-decimal field descriptors in its database metadata. These values remain JSON strings through record reads and snapshots. TugQL exact calculations are an explicit `money` opt-in on supported aggregate queries, use bounded 38-digit decimal arithmetic with half-even rounding, and remain subject to the existing source-row and memory limits. Default numeric behavior is unchanged; source computed columns remain snapshots rather than being recomputed.
 
 The Cloud Run service runs with 512 MiB, one vCPU, two concurrent requests per
 instance (`--concurrency=2`) and at most two instances; the deploy workflow states
@@ -446,7 +455,7 @@ Neither the server code nor the deploy workflow sets the library's
 `TestServiceNeverSetsLibraryPostgresPreviewSwitch` fails if either does. That
 switch only governs ordinary PostgreSQL manifests; it does **not** keep
 PostgreSQL queries off. The native read-only DemoDB editions serve full public
-DTQL as soon as `OVDB_DEMODB_POSTGRES_ENABLED` is on (see
+TugQL as soon as `OVDB_DEMODB_POSTGRES_ENABLED` is on (see
 [What enabling it exposes](#what-enabling-it-exposes)).
 
 ## Add a database

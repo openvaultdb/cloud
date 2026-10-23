@@ -530,7 +530,7 @@ func TestDemoPostgresLibraryHardeningAgainstRealPostgres(t *testing.T) {
 		if state, _ := mounter.state("chinook-postgresql"); state != demoPostgresAvailable {
 			t.Fatalf("chinook-postgresql is %s: %+v", state, mounter.snapshot())
 		}
-		response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/chinook-postgresql/dtql", "from: {schema: chinook, name: ovdb_it_session}\ncolumns: [{field: statement_timeout}, {field: read_only}]\n")
+		response := postgreSQLRequest(t, handler, http.MethodPost, "/v1/databases/chinook-postgresql/tugql", "from: {schema: chinook, name: ovdb_it_session}\ncolumns: [{field: statement_timeout}, {field: read_only}]\n")
 		if response.Code != http.StatusOK {
 			t.Fatalf("%d %s", response.Code, response.Body.String())
 		}

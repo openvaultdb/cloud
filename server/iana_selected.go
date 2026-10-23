@@ -11,7 +11,14 @@ import (
 	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
 )
 
-const ianaQueryPath = "/v1/databases/iana-http-status/dtql"
+const ianaQueryPath = "/v1/databases/iana-http-status/tugql"
+
+// legacyIANAQueryPath is the pre-rename path that existing digest-pinned operator
+// admissions and the deployed Worker still name. Removed in TugQL cutover step 9.
+const legacyIANAQueryPath = "/v1/databases/iana-http-status/" + legacyDTQLSegment
+
+func isIANAQueryPath(path string) bool { return path == ianaQueryPath || path == legacyIANAQueryPath }
+
 const ianaProxySecretHeader = "X-OVDB-IANA-Proxy-Secret"
 
 // Production mounts only the fixed checked manifest. Tests inject invented CSV.
@@ -46,7 +53,7 @@ func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, ht
 		return nil, nil, nil, err
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.EscapedPath() != ianaQueryPath {
+		if !isIANAQueryPath(r.URL.EscapedPath()) {
 			existing.ServeHTTP(w, r)
 			return
 		}

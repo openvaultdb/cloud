@@ -106,7 +106,7 @@ func TestConfiguredHandlerECBSelectedQuery(t *testing.T) {
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, ecbQueryPath, nil),
 		httptest.NewRequest(http.MethodPost, ecbQueryPath+"?q=marker", nil),
-		httptest.NewRequest(http.MethodPost, "/v1/databases/%65cb/dtql", nil),
+		httptest.NewRequest(http.MethodPost, "/v1/databases/%65cb/tugql", nil),
 		httptest.NewRequest(http.MethodPost, "/v1/databases/ecb/records/daily/USD", nil),
 	} {
 		w := httptest.NewRecorder()

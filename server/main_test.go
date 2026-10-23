@@ -42,8 +42,8 @@ func TestPublicChinookJourney(t *testing.T) {
 			var descriptor struct {
 				Capabilities map[string]bool `json:"capabilities"`
 			}
-			if err := json.Unmarshal(response.Body.Bytes(), &descriptor); err != nil || !descriptor.Capabilities["dtqlStreaming"] {
-				t.Errorf("Chinook descriptor lacks streaming DTQL capability: %v", err)
+			if err := json.Unmarshal(response.Body.Bytes(), &descriptor); err != nil || !descriptor.Capabilities["tugqlStreaming"] {
+				t.Errorf("Chinook descriptor lacks streaming TugQL capability: %v", err)
 			}
 		}
 		if path == "/ovdb/dbs/chinook" && !strings.Contains(response.Body.String(), "https://cloud.openvaultdb.com/ovdb/dbs/chinook") {
@@ -69,26 +69,26 @@ func TestPublicChinookJourney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/dtql", strings.NewReader(string(body)))
+	request := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/tugql", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://chinookdb.com")
 	response := newFlushTrackingResponseWriter()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("DTQL: %d %s", response.Code, response.Body.String())
+		t.Fatalf("TugQL: %d %s", response.Code, response.Body.String())
 	}
 	var result struct {
 		Records  []json.RawMessage `json:"records"`
 		Complete bool              `json:"complete"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Records) != 5 {
-		t.Fatalf("DTQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
+		t.Fatalf("TugQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
 	}
 	if !result.Complete {
-		t.Fatal("DTQL response lacks complete:true footer")
+		t.Fatal("TugQL response lacks complete:true footer")
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("default DTQL response Content-Type = %q, want application/json", got)
+		t.Fatalf("default TugQL response Content-Type = %q, want application/json", got)
 	}
 	streamedRowBeforeCompletion := false
 	for _, flushedAt := range response.flushSizes {
@@ -98,48 +98,48 @@ func TestPublicChinookJourney(t *testing.T) {
 		}
 	}
 	if !streamedRowBeforeCompletion || len(response.flushSizes) < len(result.Records) {
-		t.Fatalf("DTQL did not flush each row before its completion footer: rows=%d flushes=%v", len(result.Records), response.flushSizes)
+		t.Fatalf("TugQL did not flush each row before its completion footer: rows=%d flushes=%v", len(result.Records), response.flushSizes)
 	}
 	if response.Header().Get("Access-Control-Allow-Origin") != "https://chinookdb.com" {
 		t.Error("ChinookDB CORS origin missing")
 	}
 	// The public handler must preserve opt-in stream protocol negotiation.
 	// Existing callers keep ordinary application/json.
-	streamRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/dtql", bytes.NewReader(body))
+	streamRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/chinook/tugql", bytes.NewReader(body))
 	streamRequest.Header.Set("Content-Type", "application/json")
 	streamRequest.Header.Set("Accept", "application/vnd.openvaultdb.query-stream+json")
 	streamResponse := httptest.NewRecorder()
 	handler.ServeHTTP(streamResponse, streamRequest)
 	if streamResponse.Code != http.StatusOK {
-		t.Fatalf("opt-in streaming DTQL: %d %s", streamResponse.Code, streamResponse.Body.String())
+		t.Fatalf("opt-in streaming TugQL: %d %s", streamResponse.Code, streamResponse.Body.String())
 	}
 	if got := streamResponse.Header().Get("Content-Type"); got != "application/vnd.openvaultdb.query-stream+json" {
-		t.Fatalf("opt-in DTQL response Content-Type = %q", got)
+		t.Fatalf("opt-in TugQL response Content-Type = %q", got)
 	}
 	if got := strings.Join(streamResponse.Header().Values("Vary"), ", "); !strings.Contains(got, "Accept") {
-		t.Fatalf("opt-in DTQL Vary does not include Accept: %q", got)
+		t.Fatalf("opt-in TugQL Vary does not include Accept: %q", got)
 	}
 	var streamed struct {
 		Records  []json.RawMessage `json:"records"`
 		Complete bool              `json:"complete"`
 	}
 	if err := json.Unmarshal(streamResponse.Body.Bytes(), &streamed); err != nil || len(streamed.Records) != 5 || !streamed.Complete {
-		t.Fatalf("opt-in DTQL stream: records=%d complete=%t err=%v body=%s", len(streamed.Records), streamed.Complete, err, streamResponse.Body.String())
+		t.Fatalf("opt-in TugQL stream: records=%d complete=%t err=%v body=%s", len(streamed.Records), streamed.Complete, err, streamResponse.Body.String())
 	}
 	get := httptest.NewRecorder()
-	getURL := "/v1/databases/chinook/dtql?" + url.Values{
+	getURL := "/v1/databases/chinook/tugql?" + url.Values{
 		"q":          {query["query"].(string)},
 		"parameters": {`{"MinArtistID":1}`},
 	}.Encode()
 	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, getURL, nil))
 	if get.Code != http.StatusOK {
-		t.Fatalf("GET DTQL: %d %s", get.Code, get.Body.String())
+		t.Fatalf("GET TugQL: %d %s", get.Code, get.Body.String())
 	}
 	if got := get.Header().Get("Cache-Control"); got != "public, max-age=86400, s-maxage=86400" {
-		t.Fatalf("GET DTQL Cache-Control: %q", got)
+		t.Fatalf("GET TugQL Cache-Control: %q", got)
 	}
 	if got := strings.Join(get.Header().Values("Vary"), ", "); !strings.Contains(got, "Origin") || !strings.Contains(got, "OVDB-Page-Size") {
-		t.Fatalf("GET DTQL Vary: %q", got)
+		t.Fatalf("GET TugQL Vary: %q", got)
 	}
 	write := httptest.NewRecorder()
 	handler.ServeHTTP(write, httptest.NewRequest(http.MethodPut, "/v1/databases/chinook/records/Album/1", strings.NewReader(`{"data":{"Title":"changed"}}`)))
@@ -222,17 +222,17 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/dtql", strings.NewReader(string(body)))
+	request := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/tugql", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", "https://northwind.demodb.dev")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("Northwind DTQL: %d %s", response.Code, response.Body.String())
+		t.Fatalf("Northwind TugQL: %d %s", response.Code, response.Body.String())
 	}
 	var result northwindQueryPage
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Records) != 2 {
-		t.Fatalf("Northwind DTQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
+		t.Fatalf("Northwind TugQL result: %d records, err=%v, body=%s", len(result.Records), err, response.Body.String())
 	}
 	assertRowsMatchAdapterID := func(rows []northwindQueryRow) []string {
 		t.Helper()
@@ -256,7 +256,7 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	pageQuery := "from: {name: 'Order Details'}\norderBy: [{field: OrderID}, {field: ProductID}]\n"
 	requestPage := func(doc, token string, closeSnapshot bool) *httptest.ResponseRecorder {
 		t.Helper()
-		pageRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/dtql", strings.NewReader(doc))
+		pageRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/tugql", strings.NewReader(doc))
 		pageRequest.Header.Set("OVDB-Page-Size", "2")
 		if token != "" {
 			pageRequest.Header.Set("OVDB-Page-Token", token)
@@ -271,7 +271,7 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	var paged northwindQueryPage
 	pagedResponse := requestPage(pageQuery, "", false)
 	if pagedResponse.Code != http.StatusOK || json.Unmarshal(pagedResponse.Body.Bytes(), &paged) != nil || len(paged.Records) != 2 {
-		t.Fatalf("Northwind paged DTQL: %d %s", pagedResponse.Code, pagedResponse.Body.String())
+		t.Fatalf("Northwind paged TugQL: %d %s", pagedResponse.Code, pagedResponse.Body.String())
 	}
 	assertRowsMatchAdapterID(paged.Records)
 	if paged.SnapshotToken == "" || paged.NextPageToken == "" {
@@ -280,7 +280,7 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	secondPageResponse := requestPage(pageQuery, paged.NextPageToken, false)
 	var secondPage northwindQueryPage
 	if secondPageResponse.Code != http.StatusOK || json.Unmarshal(secondPageResponse.Body.Bytes(), &secondPage) != nil || len(secondPage.Records) != 2 {
-		t.Fatalf("Northwind second DTQL page: %d %s", secondPageResponse.Code, secondPageResponse.Body.String())
+		t.Fatalf("Northwind second TugQL page: %d %s", secondPageResponse.Code, secondPageResponse.Body.String())
 	}
 	assertRowsMatchAdapterID(secondPage.Records)
 	if closeResponse := requestPage(pageQuery, paged.SnapshotToken, true); closeResponse.Code != http.StatusNoContent {
@@ -291,7 +291,7 @@ func TestPublicNorthwindJourney(t *testing.T) {
 	var projected northwindQueryPage
 	projectedResponse := requestPage(projectedQuery, "", false)
 	if projectedResponse.Code != http.StatusOK || json.Unmarshal(projectedResponse.Body.Bytes(), &projected) != nil || len(projected.Records) != 2 {
-		t.Fatalf("Northwind projected DTQL: %d %s", projectedResponse.Code, projectedResponse.Body.String())
+		t.Fatalf("Northwind projected TugQL: %d %s", projectedResponse.Code, projectedResponse.Body.String())
 	}
 	if projected.SnapshotToken == "" {
 		t.Fatalf("Northwind projected page lacks a snapshot token: %#v", projected)
@@ -343,7 +343,7 @@ func TestPublicNorthwindJourney(t *testing.T) {
 		}
 	}
 
-	blobRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/dtql", strings.NewReader(`{"query":"from: {name: Employees}\ncolumns: [{field: Photo}]\nlimit: 1\n"}`))
+	blobRequest := httptest.NewRequest(http.MethodPost, "/v1/databases/northwind/tugql", strings.NewReader(`{"query":"from: {name: Employees}\ncolumns: [{field: Photo}]\nlimit: 1\n"}`))
 	blobRequest.Header.Set("Content-Type", "application/json")
 	blobResponse := httptest.NewRecorder()
 	handler.ServeHTTP(blobResponse, blobRequest)

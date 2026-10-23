@@ -13,7 +13,7 @@ func TestECBPublicGatewayRefusesDisabledRoute(t *testing.T) {
 	calls := 0
 	h := testGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; t.Error("disabled route reached provider") }), nil)
 	for _, method := range []string{"GET", "POST", "OPTIONS"} {
-		w := gatewayRequest(t, h, method, cloudHost, "/ecb-public/v1/databases/ecb/dtql", strings.NewReader("private-synthetic-marker"))
+		w := gatewayRequest(t, h, method, cloudHost, "/ecb-public/v1/databases/ecb/tugql", strings.NewReader("private-synthetic-marker"))
 		if w.Code != 503 || strings.Contains(w.Body.String(), "private-synthetic-marker") {
 			t.Fatalf("disabled route=%d %s", w.Code, w.Body.String())
 		}

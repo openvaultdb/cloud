@@ -164,7 +164,7 @@ func TestConfiguredHandlerIANASelectedQuery(t *testing.T) {
 			t.Fatal("secret refusal crossed provider")
 		}
 	}
-	for _, tc := range []struct{ method, path string }{{"GET", ianaQueryPath}, {"POST", ianaQueryPath + "?"}, {"POST", ianaQueryPath + "?x=1"}, {"POST", "/v1/databases/iana-http-status/%64tql"}, {"GET", "/v1/databases/iana-http-status/records/rows/799"}} {
+	for _, tc := range []struct{ method, path string }{{"GET", ianaQueryPath}, {"POST", ianaQueryPath + "?"}, {"POST", ianaQueryPath + "?x=1"}, {"POST", "/v1/databases/iana-http-status/%74ugql"}, {"GET", "/v1/databases/iana-http-status/records/rows/799"}} {
 		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader("from: {name: rows}\nlimit: 1\n"))
 		r.Header.Set(ianaProxySecretHeader, syntheticIANASecret)
 		w := httptest.NewRecorder()

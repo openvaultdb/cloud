@@ -50,7 +50,7 @@ for db,names in {'northwind':['Customers','Orders'],'chinook':['Customer','Invoi
 	} {
 		t.Run(item.database+"/"+item.collection, func(t *testing.T) {
 			for _, accept := range []string{"application/json", "application/vnd.openvaultdb.query-stream+json"} {
-				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+item.database+"/dtql", strings.NewReader("from: {name: "+item.collection+"}\n"))
+				request := httptest.NewRequest(http.MethodPost, "/v1/databases/"+item.database+"/tugql", strings.NewReader("from: {name: "+item.collection+"}\n"))
 				request.Header.Set("Accept", accept)
 				request.Host = "untrusted-host.invalid"
 				response := httptest.NewRecorder()

@@ -72,7 +72,7 @@ def main():
         for path in ("/device/", "/devices/", "/.well-known/oauth-authorization-server"):
             require_status("https://cloud.openvaultdb.com", path)
         require_status("https://ovdb.demodb.dev", "/api/devices", expected=404)
-        for path in ("/ecb-public", "/ecb/v1/databases/ecb/dtql", "/iana/v1/databases/iana-http-status/dtql"):
+        for path in ("/ecb-public", "/ecb/v1/databases/ecb/tugql", "/iana/v1/databases/iana-http-status/tugql"):
             require_status("https://cloud.openvaultdb.com", path, expected=503)
     Path(args.receipt).write_text(json.dumps({"phase": args.phase, "originObservations": observations, "automaticRenewalObserved": False, "authenticatedDeviceJourneyPending": True}, indent=2)+"\n")
 

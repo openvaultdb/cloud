@@ -59,13 +59,13 @@ orderBy: [{field: SalesOrderID, source: h}]
 limit: 5
 `
 
-func postAdventureWorksDTQL(t *testing.T, handler http.Handler, query string) *httptest.ResponseRecorder {
+func postAdventureWorksTugQL(t *testing.T, handler http.Handler, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(map[string]string{"query": query})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/databases/adventureworks/dtql", strings.NewReader(string(body)))
+	request := httptest.NewRequest(http.MethodPost, "/v1/databases/adventureworks/tugql", strings.NewReader(string(body)))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -101,7 +101,7 @@ func TestCloudExactMoneyAdventureWorksAggregates(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			response := postAdventureWorksDTQL(t, handler, test.query)
+			response := postAdventureWorksTugQL(t, handler, test.query)
 			if response.Code != http.StatusOK {
 				t.Fatalf("Money query returned %d: %s", response.Code, response.Body.String())
 			}
@@ -124,7 +124,7 @@ func TestCloudExactMoneyAdventureWorksAggregates(t *testing.T) {
 
 func TestCloudExactMoneyKeepsTheSourceRowBudget(t *testing.T) {
 	handler := cloudTestHandler(t, "adventureworks")
-	response := postAdventureWorksDTQL(t, handler, adventureWorksSalesBudgetMoneyQuery)
+	response := postAdventureWorksTugQL(t, handler, adventureWorksSalesBudgetMoneyQuery)
 	var result relationalAnswer
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatalf("Money budget response is not JSON: %v: %s", err, response.Body.String())
@@ -136,7 +136,7 @@ func TestCloudExactMoneyKeepsTheSourceRowBudget(t *testing.T) {
 
 func TestCloudExactMoneyGroupsNearTheSourceRowBudget(t *testing.T) {
 	handler := cloudTestHandler(t, "adventureworks")
-	response := postAdventureWorksDTQL(t, handler, adventureWorksHeaderMoneyGroupingQuery)
+	response := postAdventureWorksTugQL(t, handler, adventureWorksHeaderMoneyGroupingQuery)
 	if response.Code != http.StatusOK {
 		t.Fatalf("near-budget Money grouping returned %d: %s", response.Code, response.Body.String())
 	}
@@ -175,7 +175,7 @@ func TestCloudExactMoneyGroupsNearTheSourceRowBudget(t *testing.T) {
 
 func TestCloudExactMoneyGroupingKeepsTheAggregationByteCap(t *testing.T) {
 	handler := cloudTestHandler(t, "adventureworks")
-	response := postAdventureWorksDTQL(t, handler, adventureWorksHeaderMoneyGroupingCapQuery)
+	response := postAdventureWorksTugQL(t, handler, adventureWorksHeaderMoneyGroupingCapQuery)
 	var result relationalAnswer
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatalf("over-cap Money grouping response is not JSON: %v: %s", err, response.Body.String())
@@ -192,7 +192,7 @@ where: {op: '==', left: {field: ProductID, source: p}, right: {value: 1}}
 columns: [{field: Weight, source: p}]
 limit: 1
 `
-	response := postAdventureWorksDTQL(t, handler, query)
+	response := postAdventureWorksTugQL(t, handler, query)
 	if response.Code != http.StatusOK {
 		t.Fatalf("nullable decimal query returned %d: %s", response.Code, response.Body.String())
 	}
@@ -215,7 +215,7 @@ columns:
   - {field: StandardCost, source: p}
 limit: 1
 `
-	response := postAdventureWorksDTQL(t, handler, query)
+	response := postAdventureWorksTugQL(t, handler, query)
 	if response.Code != http.StatusOK {
 		t.Fatalf("exact decimal read returned %d: %s", response.Code, response.Body.String())
 	}
@@ -238,12 +238,12 @@ money: {minorUnitScale: 4, divisionScale: 6, rounding: halfEven}
 where: {op: '>', left: {field: ListPrice, source: p}, right: {value: 0.125}}
 columns: [{aggregate: {function: sum, args: [{field: ListPrice, source: p}]}, as: total}]
 `
-	response := postAdventureWorksDTQL(t, handler, query)
+	response := postAdventureWorksTugQL(t, handler, query)
 	var result relationalAnswer
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatalf("invalid Money response is not JSON: %v: %s", err, response.Body.String())
 	}
-	if response.Code != http.StatusBadRequest || result.Error.Code != "invalid_dtql" {
-		t.Fatalf("fractional binary float in Money query returned %d with error %#v; want 400 invalid_dtql", response.Code, result.Error)
+	if response.Code != http.StatusBadRequest || result.Error.Code != "invalid_tugql" {
+		t.Fatalf("fractional binary float in Money query returned %d with error %#v; want 400 invalid_tugql", response.Code, result.Error)
 	}
 }
