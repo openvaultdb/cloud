@@ -28,8 +28,8 @@ import (
 
 const ecbPublicPath = "/ecb-public/v1/databases/ecb/tugql"
 
-// legacyECBPublicPath is the pre-rename Worker path; removed in TugQL cutover step 9.
-const legacyECBPublicPath = "/ecb-public/v1/databases/ecb/" + legacyDTQLSegment
+// legacyECBPublicPath is the pre-rename Worker path; admission field only; see legacyAdmissionSegment.
+const legacyECBPublicPath = "/ecb-public/v1/databases/ecb/" + legacyAdmissionSegment
 const ecbPublicSecretHeader = "X-OVDB-ECB-Public-Secret"
 const ecbPublicAdmissionHeader = "X-OVDB-ECB-Public-Admission"
 const ecbPublicProofHeader = "X-OVDB-ECB-Public-Completion"
@@ -105,7 +105,7 @@ func checkedECBPublicAdmission(path, digest, configPath string) (ecbPublicAdmiss
 	if e1 != nil || e2 != nil || backend.Scheme != "https" || !strings.HasSuffix(backend.Hostname(), ".run.app") || backend.Port() != "" || backend.User != nil || backend.Path != "" || backend.RawQuery != "" || backend.ForceQuery || backend.Fragment != "" || directory.Scheme != "https" || directory.User != nil || directory.Path != "" || directory.RawQuery != "" || directory.ForceQuery || directory.Fragment != "" || directory.Host == "" {
 		return fail()
 	}
-	if a.Format != "ovdb-ecb-public-free-admission/1" || a.Decision != "public-free-transient-read-only" || a.Audience != "public-free" || a.PaidAccess || a.PublisherManifestSHA256 != ecbPublisherSHA || a.DecoderModuleVersion != "v0.4.0" || a.DecoderSHA256 != ecbDecoderSHA || a.RightsDigest != ecbRightsSHA || a.RequestProfile != "ecb-public-free/1" || (a.WorkerPath != ecbPublicPath && a.WorkerPath != legacyECBPublicPath) || !isECBQueryPath(a.GoPath) || a.MaxReads != 1 || a.MaxRows != 50 || a.MaxConcurrent != 1 || a.ExecutionsPerMinute != 6 {
+	if a.Format != "ovdb-ecb-public-free-admission/1" || a.Decision != "public-free-transient-read-only" || a.Audience != "public-free" || a.PaidAccess || a.PublisherManifestSHA256 != ecbPublisherSHA || a.DecoderModuleVersion != "v0.4.0" || a.DecoderSHA256 != ecbDecoderSHA || a.RightsDigest != ecbRightsSHA || a.RequestProfile != "ecb-public-free/1" || (a.WorkerPath != ecbPublicPath && a.WorkerPath != legacyECBPublicPath) || !isECBAdmissionPath(a.GoPath) || a.MaxReads != 1 || a.MaxRows != 50 || a.MaxConcurrent != 1 || a.ExecutionsPerMinute != 6 {
 		return fail()
 	}
 	c, err := checkedECBConfigVersion(configPath, true, a.HostConfigSHA256)
@@ -143,7 +143,7 @@ func configuredHandlerWithECBPublic(startup runtimeStartup) ([]runtimeDatabase, 
 	}
 	public := newECBPublicGate(candidate, a, c, digest, secret)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isECBQueryPath(r.URL.EscapedPath()) {
+		if r.URL.EscapedPath() == ecbQueryPath {
 			public.ServeHTTP(w, r)
 		} else {
 			samples.ServeHTTP(w, r)
@@ -202,7 +202,7 @@ func (g *ecbPublicGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	actual := sha256.Sum256([]byte(supplied))
 	id := oneHeader(r.Header, "OVDB-Execution-ID")
 	origin := oneHeader(r.Header, "Origin")
-	if subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 || oneHeader(r.Header, ecbPublicAdmissionHeader) != g.digest || !ecbPublicID.MatchString(id) || origin != g.admission.DirectoryOrigin || r.Method != http.MethodPost || !isECBQueryPath(r.URL.EscapedPath()) || r.URL.RawQuery != "" || r.URL.ForceQuery || (oneHeader(r.Header, "Content-Type") != "application/yaml" && oneHeader(r.Header, "Content-Type") != "text/plain") {
+	if subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 || oneHeader(r.Header, ecbPublicAdmissionHeader) != g.digest || !ecbPublicID.MatchString(id) || origin != g.admission.DirectoryOrigin || r.Method != http.MethodPost || r.URL.EscapedPath() != ecbQueryPath || r.URL.RawQuery != "" || r.URL.ForceQuery || (oneHeader(r.Header, "Content-Type") != "application/yaml" && oneHeader(r.Header, "Content-Type") != "text/plain") {
 		publicECBError(w, 404)
 		return
 	}

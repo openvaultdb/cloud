@@ -13,11 +13,12 @@ import (
 
 const ianaQueryPath = "/v1/databases/iana-http-status/tugql"
 
-// legacyIANAQueryPath is the pre-rename path that existing digest-pinned operator
-// admissions and the deployed Worker still name. Removed in TugQL cutover step 9.
-const legacyIANAQueryPath = "/v1/databases/iana-http-status/" + legacyDTQLSegment
+// legacyIANAQueryPath is accepted in admission documents only; see legacyAdmissionSegment.
+const legacyIANAQueryPath = "/v1/databases/iana-http-status/" + legacyAdmissionSegment
 
-func isIANAQueryPath(path string) bool { return path == ianaQueryPath || path == legacyIANAQueryPath }
+func isIANAAdmissionPath(path string) bool {
+	return path == ianaQueryPath || path == legacyIANAQueryPath
+}
 
 const ianaProxySecretHeader = "X-OVDB-IANA-Proxy-Secret"
 
@@ -53,7 +54,7 @@ func configuredHandlerWithRuntime(startup runtimeStartup) ([]runtimeDatabase, ht
 		return nil, nil, nil, err
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isIANAQueryPath(r.URL.EscapedPath()) {
+		if r.URL.EscapedPath() != ianaQueryPath {
 			existing.ServeHTTP(w, r)
 			return
 		}

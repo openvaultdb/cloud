@@ -14,11 +14,16 @@ import (
 
 const ecbQueryPath = "/v1/databases/ecb/tugql"
 
-// legacyECBQueryPath is the pre-rename path that existing digest-pinned operator
-// admissions and the deployed Worker still name. Removed in TugQL cutover step 9.
-const legacyECBQueryPath = "/v1/databases/ecb/" + legacyDTQLSegment
+// legacyAdmissionSegment is the pre-rename route name that existing
+// digest-pinned operator admission documents still name in their path fields.
+// Requests are served only on the /tugql paths; only the admission document
+// fields accept this value, until operators reissue their admissions.
+// Removed when the ECB, ECB-public and IANA admissions are reissued for /tugql.
+const legacyAdmissionSegment = "dtql"
 
-func isECBQueryPath(path string) bool { return path == ecbQueryPath || path == legacyECBQueryPath }
+const legacyECBQueryPath = "/v1/databases/ecb/" + legacyAdmissionSegment
+
+func isECBAdmissionPath(path string) bool { return path == ecbQueryPath || path == legacyECBQueryPath }
 
 const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret"
 
@@ -78,7 +83,7 @@ func configuredHandlerWithECB(startup runtimeStartup) ([]runtimeDatabase, http.H
 		return startup.providers, samples, closeSamples, nil
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isECBQueryPath(r.URL.EscapedPath()) {
+		if r.URL.EscapedPath() != ecbQueryPath {
 			samples.ServeHTTP(w, r)
 			return
 		}
