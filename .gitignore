@@ -5,3 +5,6 @@ worker-configuration.d.ts
 !.dev.vars.example
 coverage/
 dist/
+server/server
+__pycache__/
+*.py[cod]

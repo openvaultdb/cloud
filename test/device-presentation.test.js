@@ -4,7 +4,7 @@ import {
   devicePresentation,
   formatDeviceDate,
   platformPresentation,
-} from "../public/device-presentation.js";
+} from "../server/gatewayassets/public/device-presentation.js";
 
 describe("device presentation", () => {
   it("makes the device name primary and keeps client details secondary", () => {

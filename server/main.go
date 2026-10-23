@@ -1,0 +1,232 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/openvaultdb/openvaultdb-go/pkg/core"
+	"github.com/openvaultdb/openvaultdb-go/pkg/mount"
+	"github.com/openvaultdb/openvaultdb-go/pkg/server"
+)
+
+func main() {
+	if len(os.Args) > 1 {
+		if err := runSourceFreeProbe(os.Args[1:], os.Stdout); err != nil {
+			log.Fatal("source-free probe failed")
+		}
+		return
+	}
+	databases, handler, closeDatabases, err := configuredHandler()
+	if err != nil {
+		log.Fatalf("mount sample databases: %v", err)
+	}
+	defer func() {
+		if err := closeDatabases(); err != nil {
+			log.Printf("close sample databases: %v", err)
+		}
+	}()
+	handler, err = newGateway(handler, os.Getenv, nil)
+	if err != nil {
+		log.Fatalf("origin secret: %v", err)
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	httpServer := &http.Server{Addr: ":" + port, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 120 * time.Second, MaxHeaderBytes: 32 << 10, ErrorLog: safeHTTPErrorLog(os.Stderr)}
+	stop, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	go func() {
+		<-stop.Done()
+		ctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+	}()
+	log.Printf("serving read-only sample databases %v on port %s", databaseIDs(databases), port)
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("serve sample databases: %v", err)
+	}
+}
+
+func newHandler(manifest string) (http.Handler, func() error, error) {
+	return newHandlerWithManifests(map[string]string{"chinook": manifest})
+}
+
+func newHandlerWithManifests(manifests map[string]string) (http.Handler, func() error, error) {
+	databases := make([]runtimeDatabase, 0, len(manifests))
+	for id, manifest := range manifests {
+		databases = append(databases, runtimeDatabase{ID: id, Manifest: manifest, CORSOrigins: legacyCORSOrigins(id)})
+	}
+	return newHandlerWithProviders(databases)
+}
+
+func newHandlerWithProviders(providers []runtimeDatabase) (http.Handler, func() error, error) {
+	return newHandlerWithStorage(providers, sealedCopy, nil)
+}
+
+func newHandlerWithStorage(providers []runtimeDatabase, strategy selectedStorage, image *protectedImage) (http.Handler, func() error, error) {
+	if strategy != sealedCopy && strategy != protectedImageStorage {
+		return nil, nil, errors.New("unsupported selected storage strategy")
+	}
+	if strategy == protectedImageStorage && image == nil {
+		return nil, nil, errors.New("protected-image startup proof is missing")
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].ID < providers[j].ID })
+	if len(providers) == 0 {
+		return nil, nil, errors.New("no sample database manifests configured")
+	}
+	databases := make(map[string]*core.Database, len(providers))
+	corsOrigins := make(map[string]struct{})
+	profiles := map[string]server.ReadProfile{}
+	var nativePostgresProviders []runtimeDatabase
+	for _, provider := range providers {
+		id, manifest := provider.ID, provider.Manifest
+		if provider.nativePostgres != nil {
+			// Native PostgreSQL mounts never block or fail startup: each is
+			// mounted in the background by demoPostgresMounter below.
+			if _, err := demoPostgresManifest(provider); err != nil {
+				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+			}
+			nativePostgresProviders = append(nativePostgresProviders, provider)
+			for _, origin := range provider.CORSOrigins {
+				corsOrigins[origin] = struct{}{}
+			}
+			continue
+		}
+		if provider.ReadProfile != "" || provider.ServingAdapter != "" || provider.PublisherManifest != nil || provider.PublicDescriptor != nil {
+			if err := validateRuntimeMode(provider, 2); err != nil {
+				return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+			}
+		}
+		if manifest == "" && provider.nativePostgres == nil {
+			return nil, nil, errors.Join(fmt.Errorf("manifest path for database %q is empty", id), closeMountedDatabases(databases))
+		}
+		if _, exists := databases[id]; exists {
+			return nil, nil, errors.Join(fmt.Errorf("database ID %q is configured more than once", id), closeMountedDatabases(databases))
+		}
+		var database *core.Database
+		var err error
+		if provider.ReadProfile != "" {
+			if strategy == protectedImageStorage {
+				database, err = mountSelectedImage(provider, image)
+			} else {
+				database, err = mountSelectedSnapshot(provider)
+			}
+			profiles[id] = server.ReadProfile{Kind: server.BoundedImmutable, AllowOrdinaryQuery: true, PublishedQuery: provider.RequirePublishedQuery != nil && *provider.RequirePublishedQuery}
+		} else {
+			database, err = mount.File(manifest)
+		}
+		if err != nil {
+			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+		}
+		if database.Manifest.Database.ID != id {
+			return nil, nil, errors.Join(
+				fmt.Errorf("manifest %q declares database ID %q, want %q", manifest, database.Manifest.Database.ID, id),
+				database.Close(),
+				closeMountedDatabases(databases),
+			)
+		}
+		if !runtimeDatabaseIDPattern.MatchString(id) {
+			return nil, nil, errors.Join(fmt.Errorf("invalid database ID %q", id), database.Close(), closeMountedDatabases(databases))
+		}
+		databases[id] = database
+		for _, origin := range provider.CORSOrigins {
+			corsOrigins[origin] = struct{}{}
+		}
+	}
+	origins := make([]string, 0, len(corsOrigins))
+	for origin := range corsOrigins {
+		origins = append(origins, origin)
+	}
+	sort.Strings(origins)
+	cors := server.ParseCORSOrigins(origins)
+	if cors != nil {
+		pins := []string{"OVDB-Provider-Revision", "OVDB-Source-SHA256", "OVDB-Serving-SHA256", "OVDB-Manifest-SHA256"}
+		var err error
+		cors, err = cors.WithHeaders(pins, pins)
+		if err != nil {
+			return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+		}
+	}
+	budget, err := startupProbeBudgetFromEnv(os.Getenv)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+	}
+	hasNativePostgres := len(nativePostgresProviders) > 0
+	options := append(cloudServerOptions(hasNativePostgres),
+		server.WithReadOnly(true),
+		server.WithDatabaseReadProfiles(profiles),
+		server.WithPublicOrigin("https://cloud.openvaultdb.com"),
+		server.WithSourceRights("https://demodb.dev/ovdb", nil),
+		server.WithCORS(cors),
+	)
+	checked, err := server.NewChecked("demodb-cloud", databases, options...)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+	}
+	if !hasNativePostgres {
+		return newStartupProbe(nil, budget).wrap(withVerifiedProviderPins(checked.Handler(), providers)), func() error { return closeMountedDatabases(databases) }, nil
+	}
+	timing, err := demoPostgresMountTimingFromEnv(os.Getenv)
+	if err != nil {
+		return nil, nil, errors.Join(err, closeMountedDatabases(databases))
+	}
+	mounter := newDemoPostgresMounter(checked, nativePostgresProviders, timing)
+	mounter.start(nativePostgresProviders)
+	handler := &demoPostgresHandler{Handler: newStartupProbe(mounter.settled, budget).wrap(withVerifiedProviderPins(mounter.wrap(checked.Handler()), providers)), mounter: mounter}
+	return handler, func() error {
+		return errors.Join(mounter.stop(), closeMountedDatabases(databases))
+	}, nil
+}
+
+// demoPostgresHandler exposes the background mounter to tests that must wait for
+// the optional native PostgreSQL mounts to settle.
+type demoPostgresHandler struct {
+	http.Handler
+	mounter *demoPostgresMounter
+}
+
+func closeMountedDatabases(databases map[string]*core.Database) error {
+	var closeErr error
+	for _, database := range databases {
+		if err := database.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+// withVerifiedProviderPins publishes only identities admitted by the inventory
+// loader. Ad-hoc mounts and background providers have no verified inventory pins.
+func withVerifiedProviderPins(next http.Handler, providers []runtimeDatabase) http.Handler {
+	pins := make(map[string]map[string]string)
+	for _, provider := range providers {
+		if provider.verifiedPins != nil {
+			pins[provider.ID] = provider.verifiedPins
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, prefix := range []string{"/v1/databases/", "/ovdb/dbs/"} {
+			if path, ok := strings.CutPrefix(r.URL.Path, prefix); ok {
+				id, _, _ := strings.Cut(path, "/")
+				for name, value := range pins[id] {
+					w.Header().Set(name, value)
+				}
+				break
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}

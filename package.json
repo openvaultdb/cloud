@@ -4,19 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "npm run types && npm run typecheck && npm test && npm run deploy:dry",
-    "deploy": "wrangler deploy",
-    "deploy:dry": "wrangler deploy --dry-run",
-    "dev": "wrangler dev --local",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "types": "wrangler types"
+    "check": "npm test && npm run test:deploy",
+    "test:deploy": "node --test scripts/jsonc.test.mjs scripts/static-routing.test.mjs",
+    "test:demodb-ovdb": "node --test scripts/demodb-ovdb.test.mjs",
+    "test": "vitest run && npm run test:registry-search && npm run test:demodb-ovdb",
+    "test:registry-search": "node --test registry-search/test/*.node.mjs",
+    "benchmark:registry-search": "node registry-search/benchmark.mjs",
+    "deploy:registry-search:dry": "wrangler deploy --dry-run --config registry-search/wrangler.jsonc",
+    "deploy:registry-search:live:dry": "wrangler deploy --dry-run --config registry-search/wrangler.live.jsonc",
+    "deploy:registry-search:live": "wrangler deploy --config registry-search/wrangler.live.jsonc"
   },
-  "dependencies": {},
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.1.2",
     "@types/node": "^26.4.0",
-    "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "wrangler": "^4.127.1"
   }

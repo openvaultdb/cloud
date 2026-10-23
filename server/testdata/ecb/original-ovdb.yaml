@@ -1,0 +1,121 @@
+{
+  "format": "ovdb-manifest/draft-1",
+  "id": "ecb",
+  "title": "ECB daily reference quotes — inactive HTTP source metadata",
+  "description": "OpenVaultDB-maintained preparatory metadata for the original ECB-hosted daily HTTP resource. ECB is the data provider, not the author or endorser of this Git metadata. Service addresses are proposed inactive addresses on the shared OVDB host; no ECB database route is currently admitted or advertised. Executor rights identity and provider binding await independent acceptance. Directory remains inactive, execution is disabled and B1–B4 remain open. No provider XML, rates, snapshots or retained responses are stored here. Linked ECB terms and notices are declarations awaiting rights admission, not an invented licence grant; CC0 applies only to authored model and meaning metadata. The transformation notice describes the prospective decoder output; no rates have been transformed by publishing this metadata.",
+  "url": "https://cloud.openvaultdb.com/ovdb/dbs/ecb",
+  "deployment": {
+    "url": "https://cloud.openvaultdb.com/ovdb/dbs/ecb",
+    "engine": "http",
+    "discovery": "https://cloud.openvaultdb.com/.well-known/openvaultdb"
+  },
+  "model": {
+    "address": "modelspec://github.com/openvaultdb/ovdb/ecb",
+    "modelspec": "publisher/source/model/ecb-daily.modelspec.json",
+    "hcl": "publisher/source/model/ecb-daily.modelspec.hcl"
+  },
+  "meaning": {
+    "file": "publisher/source/model/ecb-daily.meaning.yaml",
+    "graph": {
+      "id": "ecb-daily",
+      "address": "meaning://github.com/openvaultdb/ovdb"
+    }
+  },
+  "publisher": {
+    "name": "OpenVaultDB metadata maintainers",
+    "url": "https://github.com/openvaultdb",
+    "repository": "https://github.com/openvaultdb/ovdb"
+  },
+  "licences": {
+    "data": {
+      "name": "ECB reuse conditions",
+      "url": "https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html"
+    },
+    "model": "CC0-1.0",
+    "meaning": "CC0-1.0"
+  },
+  "recordsets": [
+    "FxReferenceQuote"
+  ],
+  "source_definition": {
+    "format": "ovdb-http-source/1",
+    "provider": {
+      "id": "ecb",
+      "name": "European Central Bank",
+      "url": "https://www.ecb.europa.eu/"
+    },
+    "resources": {
+      "daily": {
+        "url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+        "method": "GET",
+        "contentType": "text/xml",
+        "timeoutMs": 10000,
+        "maxBytes": 2097152,
+        "mode": "live",
+        "retention": "none",
+        "cache": "no-store",
+        "redirect": "error",
+        "browserAccess": "unverified"
+      }
+    },
+    "recordsets": {
+      "FxReferenceQuote": {
+        "providerSourceId": "provider:ecb/FxReferenceQuote",
+        "resource": "daily",
+        "decoder": "ecb-eurofxref/1",
+        "entity": "FxReferenceQuote",
+        "keyFields": [
+          "time",
+          "currency"
+        ],
+        "fieldMapping": {
+          "time": "time",
+          "currency": "currency",
+          "rate": "rate"
+        },
+        "context": {
+          "baseCurrency": "EUR",
+          "rateKind": "indicative-reference"
+        }
+      }
+    },
+    "rights": {
+      "declaration": {
+        "name": "ECB reuse conditions",
+        "url": "https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html"
+      },
+      "terms": [
+        {
+          "text": "ECB reuse conditions",
+          "url": "https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html"
+        }
+      ],
+      "attribution": {
+        "text": "Source: European Central Bank (ECB).",
+        "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html"
+      },
+      "freeSource": {
+        "text": "The original ECB rates are available free of charge from the ECB website.",
+        "url": "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+      },
+      "transformations": [
+        "ECB XML has been restructured into rows; EUR base context has been made explicit. Source rates and reference dates are preserved."
+      ]
+    },
+    "readEvidence": {
+      "format": "ovdb-provider-read/1",
+      "classification": "executor-observed",
+      "inputVerification": "dynamic-unpinned"
+    },
+    "admission": {
+      "status": "blocked",
+      "executionEnabled": false,
+      "gates": {
+        "runtime": "blocked",
+        "semantic": "blocked",
+        "rights": "blocked",
+        "paid": "blocked"
+      }
+    }
+  }
+}

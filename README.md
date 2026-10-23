@@ -1,81 +1,213 @@
 # OpenVaultDB Cloud
 
-This repository contains the public OpenVaultDB Cloud browser surface and API
-facade deployed at `https://cloud.openvaultdb.com`.
+The Go service in `server/` owns the public gateway for `cloud.openvaultdb.com`
+and `ovdb.demodb.dev`. The verified Linux binary embeds the browser assets and
+host-specific generated DemoDB catalog; public OVDB traffic enters the existing
+read-only handlers directly, without a self-HTTP hop.
 
-The first implemented surface is OAuth 2.0 Device Authorization Grant support
-for first-party command-line clients:
+This source change is not a deployment receipt. Domain mappings, DNS, edge
+header rules, credentials and certificate readiness still require the reviewed
+cutover gates in Backstage's `unsigned-shipping-investigation` feature.
 
-- `POST /oauth/device/code` starts a short-lived authorization;
-- `/device` authenticates the user with the shared Sneat Co. Firebase identity
-  and asks for explicit consent;
-- `POST /oauth/token` performs the polling exchange exactly once;
-- `GET /oauth/userinfo` verifies the stored bearer token and reports its grant;
-- `POST /oauth/revoke` revokes a credential immediately.
+## Public boundary
 
-Pending authorizations and revocable access-token digests live in the existing
-Sneat Co. Firestore database and are owned by `github.com/sneat-co/ovdb/backend`.
-Raw device codes and access tokens are never stored. HMAC-derived lookup IDs
-make the short user code non-enumerable without the backend pepper. Access
-tokens default to one year and every API use checks current revocation state.
-Cloudflare rate-limit bindings protect public code creation, lookup, and
-polling endpoints.
+Production startup requires `OVDB_ORIGIN_SECRET` (32–128 ASCII letters, digits,
+`_` or `-`). Cloudflare must overwrite `X-OVDB-Origin-Secret` on exactly the two
+public hostnames using the matching credential. The Go constant-time validator
+rejects missing, wrong or duplicate values before routing and strips the header.
+The one exemption is the Cloud Run startup probe: an exact `GET`/`HEAD` of
+`/healthz/startup` with no query reaches the service with every client header
+and body stripped, and answers only `{"status":"starting"}` (503) or
+`{"status":"ready"}` (200). It reports ready once the native PostgreSQL editions
+have settled (mounted, or first attempt failed or refused) or once
+`OVDB_STARTUP_PROBE_BUDGET` (default 30 s, at most 50 s, read once at startup)
+has passed since process start, whichever comes first. A fast start therefore
+takes no traffic while it would still answer 503 `pending`. A slow start falls
+back to serving at once, with unsettled editions answering 503 and
+`Retry-After`, because Cloud Run answers held requests with 429 after
+max(10 s, 3.5 x average startup time). The startup-probe window is 5 s x 12 =
+60 s. There is no liveness or readiness probe.
 
-The Worker contains no authorization business state. It serves `/device`,
-publishes the stable OAuth paths used by the CLI, and proxies them to the OVDB
-backend with a dedicated shared secret. The backend rejects direct calls that
-do not carry that secret, preventing callers from bypassing the edge limits.
+Both hosts use Google Cloud Run custom domain mappings behind proxied DNS and
+Full (strict) TLS. Google documents this mapping facility as preview and not
+production ready; the selected design accepts that limitation and potential
+certificate issuance delays up to 24 hours. The mapped phase disables the
+service's default URL only after mapping/certificate and edge readiness. Direct
+mapped-origin requests with branded SNI/Host and spoofed Cloudflare headers must
+still be rejected. Natural certificate renewal remains a future observation,
+not a claim made by source tests or initial issuance.
 
-OpenVaultDB Cloud uses the verified `sneat-eur3-1` Firebase UID directly as the
-Sneat Co. `userID`; it does not create a second OpenVaultDB account identifier.
-The issued credential is nevertheless an OpenVaultDB token bound to one
-registered client and its approved scopes. It is not a Sneat Co. API token.
+Public `/v1`, `/ovdb` and `/.well-known/openvaultdb` routes retain CORS and
+provider pin headers. DemoDB's generated database/query allowlist restricts its
+API surface and advertises its own hostname. Writes remain forbidden. ECB and
+IANA public routes remain unavailable; this port does not activate them.
 
-Sneat Co. Spaces are collaborative grant subjects independently of the product
-surface that presents them. A Space may be used through `sneat.work`,
-`sneat.app`, or an extension mini-app. Space membership and resource grants are
-evaluated by the OpenVaultDB control plane and are not embedded into the
-long-lived device token.
+Abuse limits are independent per Go process/revision: queries 60, reads 300,
+preflights 600, device-code creation 10 and device lookups 60 per minute per
+IPv4 address or IPv6 /64. The bounded 4096-key map refuses new keys at capacity.
+Two replicas have independent buckets; these are not global quotas. Canonical
+paths drive both classification and dispatch. Request bodies are bounded to
+1 MiB and upstream requests inherit cancellation/deadlines; result streams are
+not buffered.
 
-## Local development
+## Existing device and database authority
+
+Only the cloud host exposes OAuth/device/database proxy routes. The Go proxy
+uses fixed path rewrites to `SNEAT_API_ORIGIN` and a separate
+`OVDB_DEVICE_AUTH_PROXY_SECRET`; it never forwards the edge credential. Sneat's
+existing OVDB backend continues to own identity, consent, revocation, Spaces,
+grants and storage. This change creates no auth service or account store and
+does not move `auth.sneat.co`. Request/response header allowlists and no-store
+responses bound that proxy.
+
+Static device pages, scripts, styles and discovery metadata are embedded from
+`server/gatewayassets/public/`, with CSP and security headers. DemoDB shares the
+static bytes with noindex, but its OAuth/API handlers remain unavailable.
+
+## Build and rollout gates
+
+`npm run check` checks device presentation, retained registry tooling, asset
+policy and generated DemoDB drift. Refresh the catalog only from the owning
+DemoDB generated manifest:
 
 ```sh
-npm install
-npm test
-npm run check
-npm run dev
+node scripts/demodb-ovdb.mjs write ../demo-db/websites/src/data/generated/ovdb.json
+node scripts/demodb-ovdb.mjs check ../demo-db/websites/src/data/generated/ovdb.json
 ```
 
-The Firebase browser configuration is public by design. Firebase authorization
-is verified by the Sneat Co. backend. Put `OVDB_DEVICE_AUTH_PROXY_SECRET` in a
-local `.dev.vars` file for manual Worker development; never commit it.
+`Cloud Go CI` tests/builds the Linux binary and archives the complete native
+fixture tree including hidden `.ingitdb` files. The manual Go deployment workflow
+admits only an exact successful current-main artifact run. Its controller
+verifies checksums/provider bytes, creates a no-traffic immutable image revision,
+checks image/source identity, then routes exactly that revision. HTTP acceptance
+and post-acceptance identity checks are mandatory. A failed candidate stays red.
+The accepted secure rollback receipt must bind `originIdentity` (project, region,
+service and stable defaultUrl) to `OVDB_DEFAULT_ORIGIN_URL`. That retained
+non-secret identity is probed even when default-URL disabling removes status.url;
+the controller never re-enables the endpoint. TCP startup is pinned to8080;
+inherited liveness/readiness probes are refused for owner review, and both
+candidate and rollback revisions must satisfy that same health contract.
+Rollback requires an independently accepted secure revision and verifies both
+restored identity and HTTP behavior; an old unprotected revision is ineligible.
+
+The `protect-origin` stage intentionally allows outage at the old Worker while
+origin protection is introduced. The old Worker strips incoming edge credentials
+unless its own matching secret binding exists; no rule propagation is assumed.
+The `mapped` stage requires both ready Google certificates, final scoped edge
+rules/DNS/strict TLS, bypass and public acceptance, then default URL retirement.
+The scripts do not create mappings, DNS/rules or secret values automatically.
+No provider mutation is implied by a passing offline test.
+
+## Separate registry-search responsibility
+
+`registry-search/` still owns the independent `search.openvaultdb.com` Worker and
+its VM-backed registry gateway. Its sources, Wrangler configurations and root
+Wrangler development dependency remain. Retiring the two-host OVDB gateway
+Worker does not retire that separate service.
+
+See `server/README.md` for native providers, immutable fixture and storage policy.
+
+## First-bootstrap controller contract — future provider execution
+
+The reviewed draft bootstrap is separate from ordinary `accepted-rollback`
+mode. `first-bootstrap` exposes explicit `capture`, `quiesce`, `protect`,
+`open-for-mapping`, `status` and `seal-after-acceptance` actions. This describes
+source interfaces, not an executed cutover/runbook. Mapping, DNS, certificates,
+edge-rule mutations and the real authenticated journey remain root-owned.
+
+Its owned local `ovdb-bootstrap-state.json` records mode, actual UID/generation/
+resourceVersion, config/evidence digests and all observed direct/alias/tag URLs.
+Atomic0600 replacement and directory fsync precede each mutation; a local lock
+serializes the receipt. The root must durably retain this same state across jobs
+and supply it on resume. A missing state never authorizes resume by stage label;
+current provider identity/config/traffic must agree. Pending bootstrap blocks
+ordinary-mode fallback. Protection-only state never supplies `routesAccepted` or
+an accepted functional rollback receipt.
+
+Capture requires `--bootstrap-ingress-inventory`: a fresh root-owned
+`ovdb-bootstrap-ingress-inventory/1` document bound to the exact target/fence,
+`complete:true`, full coverage of project/region mappings, service direct aliases/
+tags and bounded service public ingress, with attributable complete-source result
+SHA256 provenance. Its mappingResources/otherPublicIngress must be empty and all
+actual Google origins retained. CLI listing failures/incomplete inventory cannot
+stand for absence. This is not fleet discovery or an inference that no LB exists.
+
+Bootstrap writes only the existing openvaultdb/europe-west1/chinook-ovdb service.
+It sends the captured resourceVersion unchanged in the documented regional v1
+replaceService PUT; no gcloud-replace refresh may substitute a newer version.
+The same UID/name/namespace and full unrelated spec/metadata are preserved.
+Existing Google OAuth credentials are captured only in subprocess memory and the
+fixed Google HTTPS Authorization header. They never enter argv/files/receipts or
+HTTP error bodies; origin/proxy Secret Manager values are never fetched.409 or
+UID/version drift is unresolved and never triggers blind retry/replacement by
+name. A lost write response also remains unresolved; only a durably recorded
+response generation can authorize reconciliation on resume. Root remediation is
+required when safe closure cannot be attributed. An acknowledged exact-generation
+mutation with unknown readiness retains its in-progress checkpoint while closure
+is observed; only later actual Ready reconciliation permits advancement. Actual
+failed readiness, version/config drift and missing response attribution remain
+failures.
+
+Quiescence disables default and removes all tags before any protected image
+change. Protection keeps default disabled, pins digest/source/credential references
+and TCP8080, verifies named ready revision/config, then routes that name100%.
+Only verified protection permits explicit default re-enable; real missing/wrong/
+duplicate credential probes must reject known data/auth/static paths with valid
+TLS. Active default/alias URLs must return403; removed tag URLs may return403
+or404. Network/TLS errors, unrelated404 or5xx are not closure evidence. Every later
+failure re-closes with the expected-version fence, or records an unresolved
+incident; captured naked traffic is never restored. A safely reclosed protected
+mapping-stage failure retains its candidate checkpoint. Acceptance can retry
+while default remains disabled, but must re-read current mappings/protection and
+fresh external evidence and rerun live probes; no mapping recreation or naked
+reopening is authorized.
+
+`status` stops pending external mapping-resource/DNS/certificate/real both-host
+data/auth gates. `seal-after-acceptance` additionally requires a fresh root-owned
+`ovdb-functional-mapped-acceptance/1` proof: exact service UID/candidate identity,
+public hosts, retained originIdentity, genuine origin/routes/auth acceptance and
+complete ingress inventory, with separate DNS/origin-certificate/edge-rule/
+data-pin-streaming/authenticated-device-database evidence SHA256s and provenance.
+It re-reads both mapping readiness generations, repeats current public/origin/data
+probes with all nine native providers, then disables default and verifies closure
+again. The state records only the external proof digest; it never fabricates the
+first ordinary-mode functional proof. Natural certificate renewal remains pending
+until observed, independently of this source and initial acceptance.
 
 ## Disabled Listus demo relay
 
-The Worker includes a disabled-by-default relay for the bounded Listus local
-demo. It is enabled only when `OVDB_DEMO_ENABLED=true` and all of these private
-bindings are present: KV binding `OVDB_DEMO_SESSIONS`, secrets
-`OVDB_DEMO_CONTROL_SECRET` and `OVDB_DEMO_ENCRYPTION_KEY`, and variables
+The Go gateway includes a disabled-by-default relay for the bounded Listus
+local demo. The public gateway Worker that first hosted the relay was retired;
+control, cleanup and data-plane requests now run in this process, behind the
+same origin-secret check as every other public route. Missing configuration
+fails closed.
+
+The relay is enabled only when `OVDB_DEMO_ENABLED=true` and all of these are
+set: `OVDB_DEMO_CONTROL_SECRET`, `OVDB_DEMO_ENCRYPTION_KEY`,
 `OVDB_DEMO_FIREBASE_PROJECT_ID`, `OVDB_DEMO_CORS_ORIGIN`, and
 `OVDB_DEMO_ORIGIN_HOST_SUFFIX`. The suffix restricts session origins to the
 account-owned relay domain and prevents the trusted control plane from turning
-the Worker into an arbitrary fetch proxy. Missing
-configuration fails closed. `OVDB_DEMO_CONTROL_SECRET` is only for backend to
-edge `/internal/demo/sessions/{sessionId}` calls; it is never forwarded to a
-tunnel origin. `OVDB_DEMO_ENCRYPTION_KEY` is a base64url-encoded 32-byte AES-GCM
-key used to encrypt the per-session database credential before writing KV.
+the gateway into an arbitrary fetch proxy. `OVDB_DEMO_CONTROL_SECRET` is only
+for backend-to-gateway `/internal/demo/sessions/{sessionId}` calls. It is never
+forwarded to a tunnel origin, and it cannot be selected as the edge origin-secret
+header. `OVDB_DEMO_ENCRYPTION_KEY` is a base64url-encoded 32-byte AES-GCM key.
+The per-session database credential is encrypted before it is stored.
 
-When disabling the demo, keep the KV binding and control secret until cleanup
-finishes. Authenticated internal `DELETE` calls on `cloud.openvaultdb.com`
-remain available while admission and data access are disabled; they need no
-encryption key or Firebase configuration and never contact a tunnel origin.
+Sessions live in process memory and expire with the lease. That store replaces
+the Worker KV binding, which left with the retired Worker. It is not shared
+across instances and does not survive a restart. Keep the feature disabled on
+any deployment that runs more than one instance until a shared store is reviewed.
 
-Before enabling a session's exact origin hostname, configure that hostname as
-an exact Worker route (not a wildcard) whose normal origin is the managed
-tunnel. Its only accepted form is
+When disabling the demo, keep the control secret until cleanup finishes.
+Authenticated internal `DELETE` calls on `cloud.openvaultdb.com` remain
+available while admission and data access are disabled. They need no encryption
+key or Firebase configuration and never contact a tunnel origin. Browser and
+backend callers still have to pass the gateway origin-secret check; on the
+public hostname, Cloudflare adds that header.
+
+The only accepted origin form is
 `https://ovdb-demo-{sessionId}.openvaultdb.com/`, with a DNS-safe lowercase
-session ID. Verify the account's real routing semantics with an unauthenticated
-direct-host request: it must be denied by this Worker without an origin request.
-Also test the bare tunnel target separately. Do not enable the feature until
-both checks are recorded; the local Worker test intentionally does not claim a
-production tunnel receipt.
+session ID. The gateway admits that hostname itself. Verify an unauthenticated
+direct-host request is denied without an origin fetch, and test the bare tunnel
+target separately. Do not enable the feature until both checks are recorded.
+The local Go test intentionally does not claim a production tunnel receipt.

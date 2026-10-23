@@ -1,0 +1,608 @@
+{
+  "version": 2,
+  "databases": [
+    {
+      "id": "adventureworks",
+      "repository": "demo-db/adventureworks",
+      "revision": "5028a27189b487d6fd8025fafc1307aada707fd2",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "e5304e30db963e53fef0ba7cac939928622cefb7064aedaccd5ba313cf62440c"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "5b2cb733342ac9e848f2674090e0e534082d48111056ff4e6a3b6d4ef4f693e0"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "7a79f331492ce2a17c07c4810738abbe6e888a2024b4f7a028d61302052f5c7f"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "7885259b70241a932a6200b680ed667c97acfb35bf8d30f5395fe9a9ce22ccd6"
+        },
+        "artifact": {
+          "path": "artifacts/adventureworks.sqlite",
+          "compression": "gzip",
+          "encodedPath": "artifacts/adventureworks.sqlite.gz",
+          "bytes": 35367459,
+          "sha256": "5516328f621cbbe21083a20f325bc1a6f841e6f709bb6d8bebfebbf48b81d203",
+          "decodedBytes": 126820352,
+          "decodedSha256": "6a105e1982becfe003fc7a307d7cad9d738390cedd79d166c2167fd817168109",
+          "chunks": [
+            {
+              "path": "artifacts/adventureworks.sqlite.gz.part-0001",
+              "bytes": 26214400,
+              "sha256": "60e1d23ec00f1938e39262cd2e30a85a29aada525def56a65960312e1a9c5ac6"
+            },
+            {
+              "path": "artifacts/adventureworks.sqlite.gz.part-0002",
+              "bytes": 9153059,
+              "sha256": "899a20c972a8f6fdd25b1544a29804c4872b877061dbaa1d6a85478445071e10"
+            }
+          ]
+        },
+        "license": {
+          "path": "data-source/microsoft-sql-server-samples/LICENSE.txt",
+          "sha256": "201f3705979e932c92cd3c6ddbddf4dc3c71dcc5a82089a1e4018227cfe1cf09"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "HumanResources.EmployeeDepartmentHistory",
+        "HumanResources.Employee",
+        "Production.Product",
+        "Production.ProductProductPhoto",
+        "Production.ProductPhoto",
+        "Production.TransactionHistory"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "HumanResources.EmployeeDepartmentHistory",
+          "sourceField": "BusinessEntityID",
+          "targetRecordset": "HumanResources.Employee",
+          "targetField": "BusinessEntityID"
+        }
+      ],
+      "emptyRecordsets": [
+        "dbo.DatabaseLog",
+        "dbo.ErrorLog"
+      ],
+      "corsOrigins": [
+        "https://adventureworks.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ],
+      "blobSmokeFields": {
+        "Production.ProductPhoto": [
+          "ThumbNailPhoto",
+          "LargePhoto"
+        ]
+      }
+    },
+    {
+      "id": "employees",
+      "repository": "demo-db/employees",
+      "revision": "2069e26e8fdb60bdb16507f75569a579cf3da7cf",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "010d461cd1f88dbec5eee7c447d874550c9ae6f1934cd3baf8e2999100c93700"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "83bc1f52480c1917451e726261fda83e4bdd5ea44ef81b90462f33a8a6234443"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "28275342099e169f40215dcfa951386e23fcb4a86dc9cf7fb49ec5b377252352"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "0de59594be9eca57ad91918125f29240bec6fafa956b279214efa1a9df495d7c"
+        },
+        "artifact": {
+          "path": "artifacts/employees.sqlite",
+          "sha256": "46b49dd0e141cd8db66d57680a10febfccc15e6f54dc7b8f3c2316b55e11c5f0",
+          "bytes": 876544
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "38371a2d0b398de3d7113d1ae138acc9c476345e0207bb9548f6f5dbf12f748b"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "employees",
+        "dept_emp",
+        "salaries",
+        "dept_manager"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "dept_emp",
+          "sourceField": "emp_no",
+          "targetRecordset": "employees",
+          "targetField": "emp_no"
+        }
+      ],
+      "corsOrigins": [
+        "https://employees.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "chinook",
+      "repository": "demo-db/chinook",
+      "revision": "26e852cca00101f53a84ef8ee1f1ae389067f5cf",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "4e168c0091053817d71fbda43e3b23d711a6318d941ea9a2f34efab78baf00c6"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "576b4ecb21bd3b263b7a3523b6a3c952c8388298eb0fa56a7950b42f63958272"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "bfc531be4ee1ccaeef7de11d60b174ea134189fbde83e1474150b4f7b7b314a6"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "e851d1709633a43958fbabe9eb1710ea895838d8a2fb6c225adc21b085dbf26b"
+        },
+        "artifact": {
+          "path": "artifacts/data/chinook.sqlite",
+          "sha256": "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15",
+          "bytes": 1007616
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "5064d720db431474b0a0b0cef9d2b5e362b6c6f80602b35c6443b07cbc979f77"
+        }
+      },
+      "recordKeyFormat": "legacy",
+      "smokeRecordsets": [
+        "Invoice",
+        "Customer"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "Invoice",
+          "sourceField": "CustomerId",
+          "targetRecordset": "Customer",
+          "targetField": "CustomerId"
+        }
+      ],
+      "corsOrigins": [
+        "https://chinook.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://chinookdb.com",
+        "https://www.chinookdb.com",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "northwind",
+      "repository": "demo-db/northwind",
+      "revision": "e74726515c3833620b54b7a50d1d273276dd23c1",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "91e1fab00b76461241282ac4f1f51b963b237e5c842d7d118ec6c2b39a27e300"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "88a7e21b1ed16b27c3195c8ee10dc60ebef60fba6c70df6f9325d8e4adaaea22"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "c89b2cfee811e384c9ed961dfbdf4f4ea35b65cbb38e2582f3c6c6ea768edf9f"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "a5f7ec858ecc1f98f9c03b66ad5a618ece1a2998c9e1853aeabb320e949d8756"
+        },
+        "artifact": {
+          "path": "artifacts/northwind.sqlite",
+          "sha256": "279b34136771aee75d802094b3329515a2b01da65d2a20a4a9e3b58c29b4fd20",
+          "bytes": 602112
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "c28e204be6418b87ae1c83127096aad9c9e1a218c365f8f4d630e84d8ba96c47"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "smokeRecordsets": [
+        "Order Details",
+        "Orders",
+        "Employees"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "Order Details",
+          "sourceField": "OrderID",
+          "targetRecordset": "Orders",
+          "targetField": "OrderID"
+        }
+      ],
+      "blobSmokeFields": {
+        "Employees": [
+          "Photo"
+        ]
+      },
+      "corsOrigins": [
+        "https://northwind.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "pubs",
+      "repository": "demo-db/pubs",
+      "revision": "6c06c5c7395b03ff1a02c2b1a21485add3e1b65b",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "00b830249f64ae7c6a669b4bf14e70e09068041482d771959012db868dcfdb16"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "32224efdbecd57962f32a0aad81653bbf5085788df69185be30b2c7c0910d659"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "64dc3bd74f5ad7dff22b7ca53446985421d1c06f2b7fa548eae965005b24d886"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "42a9ec5d9179b64a3d848fc661a8a1b230d691643ecf71ca42fc2fa1830533c1"
+        },
+        "artifact": {
+          "path": "artifacts/pubs.sqlite",
+          "sha256": "b45b08b7c06441cc0b138b031ea5bd32bd5866aebf874c89d2ebf7fc6abb3691",
+          "bytes": 212992
+        },
+        "license": {
+          "path": "data-source/LICENSE.txt",
+          "sha256": "201f3705979e932c92cd3c6ddbddf4dc3c71dcc5a82089a1e4018227cfe1cf09"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "smokeRecordsets": [
+        "discounts",
+        "roysched",
+        "titles"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "roysched",
+          "sourceField": "title_id",
+          "targetRecordset": "titles",
+          "targetField": "title_id"
+        }
+      ],
+      "corsOrigins": [
+        "https://pubs.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "sakila",
+      "repository": "demo-db/sakila",
+      "revision": "cb9a81a8cbedcd8831737f281f888d5d584fae85",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "bc40a385f81f7db203a23e2befdd08a1b1899c0e2f45a034fe3a6cf0eb6a3356"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "54b74e47ad29e4c1d68866e89add885ee833728f04c4d68c46c2486346882655"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "bf8deefbea0a99f98446c81d6dc9c6d843b01c7ead6071f6c17e8c8e2a3ac46b"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "a156ef4c3acf85a7cab92ba4ea1dbf38021da7aa481e5b892e29f4f573d5a411"
+        },
+        "artifact": {
+          "path": "artifacts/sakila.sqlite",
+          "sha256": "9bebeee50fecb1fee115c206a4f380f2f6d1f009e7796b18b8a8cfba7c810454",
+          "bytes": 4915200
+        },
+        "license": {
+          "path": "data-source/sakila-schema.sql",
+          "sha256": "b32170e1e2ad5828749b61a5ec896155bcd143104b076e5ee8a3a3b013f44915"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "film",
+        "film_actor",
+        "actor",
+        "rental",
+        "payment",
+        "address"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "film_actor",
+          "sourceField": "actor_id",
+          "targetRecordset": "actor",
+          "targetField": "actor_id"
+        }
+      ],
+      "blobSmokeFields": {
+        "address": [
+          "location"
+        ]
+      },
+      "corsOrigins": [
+        "https://sakila.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "shipping",
+      "repository": "demo-db/shipping",
+      "revision": "5eff414052ea417502549c5f80b92b558804305f",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "c54eb63ff2e21d74164e342a478bcfdf9fbe9e4efa7a0dd164f22ff10cee9062"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "e9899b1d70ac5d75a52183ee35bc06a0f4bddce37b9894b32897f267b5631f46"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "d67026b96a25fc9ffa463761613732e5aa3316eeaf954b0e85f9db109b3b91e8"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "6eb843ae57b133ada9f34323258050c3fccf984761c41b2d34fc421d37e1a7b7"
+        },
+        "artifact": {
+          "path": "artifacts/shipping.sqlite",
+          "sha256": "73f0d871607ee5b24de68b5398c25806f556a3126a31e1865fee79b2881977e0",
+          "bytes": 110592
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "requests",
+        "events",
+        "attempts"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "events",
+          "sourceField": "attempt_id",
+          "targetRecordset": "attempts",
+          "targetField": "attempt_id"
+        }
+      ],
+      "corsOrigins": [
+        "https://shipping.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "shipping-logs",
+      "repository": "demo-db/shipping-logs",
+      "revision": "78bc3e52fa535c68ead96eb2a8d4c25d5d072c86",
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "storageEngine": "ingitdb",
+      "smokeRecordsets": [
+        "baseline",
+        "recovery11045example",
+        "recovery11062example",
+        "carrierGateway",
+        "carrierGatewayRecovery11045example",
+        "carrierGatewayRecovery11062example"
+      ],
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "40e7382075e3aab13b9e0a1e7eb0c3563bcf07ef2c1568f769e25282f55ecf3c",
+          "bytes": 5475
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "520dc9b530f8f048de3b4f9df06c08e5872c53bd956f35ac3a248eee5e1e6c6b",
+          "bytes": 32784
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "d6e191edeaff12b8e92d1e0e8189f02586e7104dc706eafde675e52713c85399",
+          "bytes": 4167
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "b2602ed5bbd602c27b41aff0222aeec0b7c043dc99540bc90f8ca87a59c02009",
+          "bytes": 22387
+        },
+        "license": {
+          "path": "LICENSE",
+          "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+          "bytes": 7048
+        }
+      },
+      "nativeFiles": [
+        {
+          "path": "ingitdb/.ingitdb/settings.yaml",
+          "sha256": "62fcca91b55bc9903f6739e86d2c749ce4fea7fe3c12475f86390d6a5bab4535",
+          "bytes": 60
+        },
+        {
+          "path": "ingitdb/.ingitdb/root-collections.yaml",
+          "sha256": "8852637cd2893cd7167a9ad7a649bb0015bf133f45014b3a29eab078453c7ef9",
+          "bytes": 395
+        },
+        {
+          "path": "ingitdb/collections/baseline/.collection/definition.yaml",
+          "sha256": "a1959947c5e12b07895ef7f01ad513b32fb8f12a4a6b7580e8f55d863e882e79",
+          "bytes": 1079
+        },
+        {
+          "path": "ingitdb/collections/baseline/records.jsonl",
+          "sha256": "5814c09c2821dcf5fb7c313d4416fadd71f62519ab8aafe01de0ac6e6a4db65e",
+          "bytes": 6873
+        },
+        {
+          "path": "ingitdb/collections/recovery11045example/.collection/definition.yaml",
+          "sha256": "2672e56ea2f10f04c613eb36924fb27ba81f4e7fe487ca26bcb0ea2318cbbfd5",
+          "bytes": 1099
+        },
+        {
+          "path": "ingitdb/collections/recovery11045example/records.jsonl",
+          "sha256": "a03031230dfad126783e557b61631f1173dd6c5867f19e2758e971ffea716379",
+          "bytes": 704
+        },
+        {
+          "path": "ingitdb/collections/recovery11062example/.collection/definition.yaml",
+          "sha256": "e8d2b2e1165a73e81ca3de88803b2643aa2584b73aee876f8a4ef73a6fcc9466",
+          "bytes": 1099
+        },
+        {
+          "path": "ingitdb/collections/recovery11062example/records.jsonl",
+          "sha256": "ab668b7a26e034d80486f6ea1d17f89c9b226f3a98e297bb3b80186cc65936a5",
+          "bytes": 704
+        },
+        {
+          "path": "ingitdb/collections/carrierGateway/.collection/definition.yaml",
+          "sha256": "7fd140513b84b0b711d58a41e8c9130dd59c31e3f423d0495b88e1267c5d4e32",
+          "bytes": 2056
+        },
+        {
+          "path": "ingitdb/collections/carrierGateway/records.jsonl",
+          "sha256": "ed0953f3f5c195fb98a2b5425ed5e35bac5993fee19fd2b9f09242af643dd8b0",
+          "bytes": 1246
+        },
+        {
+          "path": "ingitdb/collections/carrierGatewayRecovery11045example/.collection/definition.yaml",
+          "sha256": "988b0641ed37df5deb361f1a0841f2f4608e221d84b34e0d9bbc3fdc0df52c3c",
+          "bytes": 2077
+        },
+        {
+          "path": "ingitdb/collections/carrierGatewayRecovery11045example/records.jsonl",
+          "sha256": "0429ba0df5320afd4fd9ef58ff826bfef84ab49af74cf9258038fa906a808831",
+          "bytes": 1246
+        },
+        {
+          "path": "ingitdb/collections/carrierGatewayRecovery11062example/.collection/definition.yaml",
+          "sha256": "b7ad08eae6fcf0a0d821cde7afcd1675cfdef1090fa74297d0cc00bb75b8f232",
+          "bytes": 2077
+        },
+        {
+          "path": "ingitdb/collections/carrierGatewayRecovery11062example/records.jsonl",
+          "sha256": "8c7e3650d226301b44599043af9330007716b5a93f7b461d4ce521ca6ad84dc2",
+          "bytes": 1246
+        }
+      ],
+      "metadataFiles": [
+        {
+          "path": "source-manifest.json",
+          "sha256": "0f704dfbeeca65aa5106a93782c207fb17cb7e14fb17a2579d09c05d358a2348",
+          "bytes": 18886
+        },
+        {
+          "path": "metadata/schema.json",
+          "sha256": "430b583f749e464d6e7b844b5578c17e6e60033d4005397e97266aef329e66a1",
+          "bytes": 23905
+        },
+        {
+          "path": "ovdb.yaml",
+          "sha256": "4a363c9558944b337b3bb236847b13c33af7bdeadcde59c7a8f388ecff71c90e",
+          "bytes": 1441
+        }
+      ],
+      "corsOrigins": [
+        "https://shipping-logs.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    },
+    {
+      "id": "countries",
+      "repository": "demo-db/countries",
+      "revision": "dec4fa9798bc6118328156cd8abaf3803d0cba2f",
+      "files": {
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "422283c02adff9bcd5043b80bc1e2660d440445df78818b555889d24604b7bff"
+        },
+        "contract": {
+          "path": "metadata/contract.json",
+          "sha256": "d20c52ef854b7260e0689bcce59c18d1acdb874fe5f0f757d12f1fb3a2a51729"
+        },
+        "checksums": {
+          "path": "metadata/checksums.json",
+          "sha256": "378ebd8bc8823c2c0f358c4c9b93f4f00665c2afada4d23e1457defcad1734de"
+        },
+        "databaseManifest": {
+          "path": "ovdb-database.json",
+          "sha256": "9617b09e0fdb9ef035be340867e7555d4f054ba68d66a8dcb26d19b5615d2f29"
+        },
+        "artifact": {
+          "path": "artifacts/countries.sqlite",
+          "sha256": "c0dcf133a680ed8255ab3c1960f6d3a43631cda66e030c443bc3b843ff8844db",
+          "bytes": 81920
+        },
+        "license": {
+          "path": "data-source/LICENSE.md",
+          "sha256": "dc4f2a5b65ffc64d400a884687055650323e268423ebb926e1be8dbf57485097"
+        }
+      },
+      "recordKeyFormat": "natural",
+      "requirePublishedQuery": true,
+      "smokeRecordsets": [
+        "country_aliases",
+        "countries",
+        "sources"
+      ],
+      "foreignKeySmoke": [
+        {
+          "sourceRecordset": "country_aliases",
+          "sourceField": "country_iso2",
+          "targetRecordset": "countries",
+          "targetField": "iso2"
+        }
+      ],
+      "corsOrigins": [
+        "https://countries.demodb.dev",
+        "https://demodb.dev",
+        "https://www.demodb.dev",
+        "https://datatug.app"
+      ]
+    }
+  ]
+}
