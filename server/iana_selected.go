@@ -13,13 +13,6 @@ import (
 
 const ianaQueryPath = "/v1/databases/iana-http-status/tugql"
 
-// legacyIANAQueryPath is accepted in admission documents only; see legacyAdmissionSegment.
-const legacyIANAQueryPath = "/v1/databases/iana-http-status/" + legacyAdmissionSegment
-
-func isIANAAdmissionPath(path string) bool {
-	return path == ianaQueryPath || path == legacyIANAQueryPath
-}
-
 const ianaProxySecretHeader = "X-OVDB-IANA-Proxy-Secret"
 
 // Production mounts only the fixed checked manifest. Tests inject invented CSV.

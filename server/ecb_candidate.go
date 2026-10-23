@@ -126,7 +126,7 @@ func checkedECBAdmission(path, digest, configPath string) (string, error) {
 		admission.Decision != "operator-free-transient-read-only" ||
 		admission.PublisherManifestSHA256 != ecbPublisherSHA || admission.RightsDigest != ecbRightsSHA ||
 		admission.ExecutorID != "openvaultdb-cloud" || admission.ResourceID != "ecb-daily" ||
-		admission.Method != http.MethodPost || !isECBAdmissionPath(admission.Path) ||
+		admission.Method != http.MethodPost || admission.Path != ecbQueryPath ||
 		admission.MaxReadsPerExecution != 1 || admission.MaxRows != 50 ||
 		admission.PublicAccess || admission.PaidAccess {
 		return "", errECBCandidate

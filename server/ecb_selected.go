@@ -14,17 +14,6 @@ import (
 
 const ecbQueryPath = "/v1/databases/ecb/tugql"
 
-// legacyAdmissionSegment is the pre-rename route name that existing
-// digest-pinned operator admission documents still name in their path fields.
-// Requests are served only on the /tugql paths; only the admission document
-// fields accept this value, until operators reissue their admissions.
-// Removed when the ECB, ECB-public and IANA admissions are reissued for /tugql.
-const legacyAdmissionSegment = "dtql"
-
-const legacyECBQueryPath = "/v1/databases/ecb/" + legacyAdmissionSegment
-
-func isECBAdmissionPath(path string) bool { return path == ecbQueryPath || path == legacyECBQueryPath }
-
 const ecbProxySecretHeader = "X-OVDB-ECB-Proxy-Secret"
 
 func validECBProxySecret(value string) bool {

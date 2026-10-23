@@ -28,8 +28,6 @@ import (
 
 const ecbPublicPath = "/ecb-public/v1/databases/ecb/tugql"
 
-// legacyECBPublicPath is the pre-rename Worker path; admission field only; see legacyAdmissionSegment.
-const legacyECBPublicPath = "/ecb-public/v1/databases/ecb/" + legacyAdmissionSegment
 const ecbPublicSecretHeader = "X-OVDB-ECB-Public-Secret"
 const ecbPublicAdmissionHeader = "X-OVDB-ECB-Public-Admission"
 const ecbPublicProofHeader = "X-OVDB-ECB-Public-Completion"
@@ -105,7 +103,7 @@ func checkedECBPublicAdmission(path, digest, configPath string) (ecbPublicAdmiss
 	if e1 != nil || e2 != nil || backend.Scheme != "https" || !strings.HasSuffix(backend.Hostname(), ".run.app") || backend.Port() != "" || backend.User != nil || backend.Path != "" || backend.RawQuery != "" || backend.ForceQuery || backend.Fragment != "" || directory.Scheme != "https" || directory.User != nil || directory.Path != "" || directory.RawQuery != "" || directory.ForceQuery || directory.Fragment != "" || directory.Host == "" {
 		return fail()
 	}
-	if a.Format != "ovdb-ecb-public-free-admission/1" || a.Decision != "public-free-transient-read-only" || a.Audience != "public-free" || a.PaidAccess || a.PublisherManifestSHA256 != ecbPublisherSHA || a.DecoderModuleVersion != "v0.4.0" || a.DecoderSHA256 != ecbDecoderSHA || a.RightsDigest != ecbRightsSHA || a.RequestProfile != "ecb-public-free/1" || (a.WorkerPath != ecbPublicPath && a.WorkerPath != legacyECBPublicPath) || !isECBAdmissionPath(a.GoPath) || a.MaxReads != 1 || a.MaxRows != 50 || a.MaxConcurrent != 1 || a.ExecutionsPerMinute != 6 {
+	if a.Format != "ovdb-ecb-public-free-admission/1" || a.Decision != "public-free-transient-read-only" || a.Audience != "public-free" || a.PaidAccess || a.PublisherManifestSHA256 != ecbPublisherSHA || a.DecoderModuleVersion != "v0.4.0" || a.DecoderSHA256 != ecbDecoderSHA || a.RightsDigest != ecbRightsSHA || a.RequestProfile != "ecb-public-free/1" || a.WorkerPath != ecbPublicPath || a.GoPath != ecbQueryPath || a.MaxReads != 1 || a.MaxRows != 50 || a.MaxConcurrent != 1 || a.ExecutionsPerMinute != 6 {
 		return fail()
 	}
 	c, err := checkedECBConfigVersion(configPath, true, a.HostConfigSHA256)

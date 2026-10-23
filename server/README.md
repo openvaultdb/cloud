@@ -1,38 +1,10 @@
 # Read-only sample database service
 
-## Legacy admission paths
+## Query routes
 
 Every query route is `/tugql` (`/v1/databases/{id}/tugql`, `/v1/tugql`, and the
-discovery key `endpoints.tugql`); the old route is no longer served. Existing
-digest-pinned ECB, ECB-public and IANA operator admissions that still name the
-old path in their `path`, `workerPath` or `goPath` field remain valid
-(`legacyAdmissionSegment`); requests are served on the `/tugql` paths only.
-Operators should reissue those admissions for `/tugql`; after that the legacy
-constants and `legacy_admission_test.go` can be deleted.
-
-### Operator runbook: reissue the admissions for `/tugql` (operator-only)
-
-Nothing in this repository holds the admission documents, and only the operator
-can approve and deploy them. Three files are involved, each with the route field(s)
-that name the old path:
-
-| File (env var) | Fields to change | Digest env var |
-|---|---|---|
-| ECB operator admission (`OVDB_ECB_ADMISSION_FILE`) | `path` -> `/v1/databases/ecb/tugql` | `OVDB_ECB_ADMISSION_SHA256` |
-| ECB public admission (`OVDB_ECB_PUBLIC_ADMISSION_FILE`) | `workerPath` -> `/ecb-public/v1/databases/ecb/tugql`, `goPath` -> `/v1/databases/ecb/tugql` | `OVDB_ECB_PUBLIC_ADMISSION_SHA256` |
-| IANA operator admission (`OVDB_IANA_ADMISSION_FILE`) | `path` -> `/v1/databases/iana-http-status/tugql` | `OVDB_IANA_ADMISSION_SHA256` |
-
-1. Run `python3 reissue_admissions_tugql.py --ecb <file> --ecb-public <file> --iana <file>`.
-   It writes `<name>.tugql.json` beside each input (never in place), changes only
-   those route fields, and prints the new SHA-256 and the env vars to set.
-   (By hand: edit the fields and run `sha256sum <file>`; the digest is over the exact file bytes.)
-2. Review and approve the reissued documents as the admission owner; approval
-   fields are left as they were.
-3. At deploy, point the `*_ADMISSION_FILE` variables at the new files and set
-   each `*_ADMISSION_SHA256` to the printed digest. Host-config digests do not change.
-4. The Worker that calls these routes must call the `/tugql` paths (requests on the old paths are no longer served).
-5. Afterwards delete `legacyAdmissionSegment`, the `legacy*Path` constants,
-   `isECBAdmissionPath`, `isIANAAdmissionPath` and `legacy_admission_test.go`.
+discovery key `endpoints.tugql`). ECB, ECB-public and IANA admission documents
+must name the `/tugql` paths in their `path`, `workerPath` and `goPath` fields.
 
 ## Operator-selected ECB original HTTP query path
 
