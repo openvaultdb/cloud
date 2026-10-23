@@ -173,3 +173,41 @@ probes with all nine native providers, then disables default and verifies closur
 again. The state records only the external proof digest; it never fabricates the
 first ordinary-mode functional proof. Natural certificate renewal remains pending
 until observed, independently of this source and initial acceptance.
+
+## Disabled Listus demo relay
+
+The Go gateway includes a disabled-by-default relay for the bounded Listus
+local demo. The public gateway Worker that first hosted the relay was retired;
+control, cleanup and data-plane requests now run in this process, behind the
+same origin-secret check as every other public route. Missing configuration
+fails closed.
+
+The relay is enabled only when `OVDB_DEMO_ENABLED=true` and all of these are
+set: `OVDB_DEMO_CONTROL_SECRET`, `OVDB_DEMO_ENCRYPTION_KEY`,
+`OVDB_DEMO_FIREBASE_PROJECT_ID`, `OVDB_DEMO_CORS_ORIGIN`, and
+`OVDB_DEMO_ORIGIN_HOST_SUFFIX`. The suffix restricts session origins to the
+account-owned relay domain and prevents the trusted control plane from turning
+the gateway into an arbitrary fetch proxy. `OVDB_DEMO_CONTROL_SECRET` is only
+for backend-to-gateway `/internal/demo/sessions/{sessionId}` calls. It is never
+forwarded to a tunnel origin, and it cannot be selected as the edge origin-secret
+header. `OVDB_DEMO_ENCRYPTION_KEY` is a base64url-encoded 32-byte AES-GCM key.
+The per-session database credential is encrypted before it is stored.
+
+Sessions live in process memory and expire with the lease. That store replaces
+the Worker KV binding, which left with the retired Worker. It is not shared
+across instances and does not survive a restart. Keep the feature disabled on
+any deployment that runs more than one instance until a shared store is reviewed.
+
+When disabling the demo, keep the control secret until cleanup finishes.
+Authenticated internal `DELETE` calls on `cloud.openvaultdb.com` remain
+available while admission and data access are disabled. They need no encryption
+key or Firebase configuration and never contact a tunnel origin. Browser and
+backend callers still have to pass the gateway origin-secret check; on the
+public hostname, Cloudflare adds that header.
+
+The only accepted origin form is
+`https://ovdb-demo-{sessionId}.openvaultdb.com/`, with a DNS-safe lowercase
+session ID. The gateway admits that hostname itself. Verify an unauthenticated
+direct-host request is denied without an origin fetch, and test the bare tunnel
+target separately. Do not enable the feature until both checks are recorded.
+The local Go test intentionally does not claim a production tunnel receipt.
