@@ -22,7 +22,7 @@ export function stableId(domain, kind, nativeId) {
 
 const isWrittenAsParsed = (raw, url) => raw.split('#')[0] === `${url.origin}${url.pathname}`;
 
-export function validateDocument(doc, source, routes, revisions) {
+export function validateDocument(doc, source, routes, revisions, { combined = false } = {}) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('document must be an object');
   for (const key of Object.keys(doc)) if (!allowed.has(key)) throw new Error(`unknown document field ${key}`);
   for (const key of required) if (typeof doc[key] !== 'string' || !doc[key]) throw new Error(`invalid ${key}`);
@@ -30,14 +30,19 @@ export function validateDocument(doc, source, routes, revisions) {
   for (const key of optionalArrays) if (key in doc && (!Array.isArray(doc[key]) || doc[key].some(value => typeof value !== 'string' || !value))) throw new Error(`invalid ${key}`);
   if (doc.visibility !== 'public' || !domains.includes(doc.domain) || !kinds.includes(doc.kind)) throw new Error('invalid public scope');
   if (doc.domain !== source.domain || revisions.get(doc.source_repository) !== doc.source_commit || !sha.test(doc.source_commit)) throw new Error('source provenance mismatch');
+  if (combined && !(doc.domain === 'meaninggraph' ? doc.kind.startsWith('meaning_') : doc.domain === 'modelspec' ? doc.kind === 'model' || doc.kind.startsWith('model_') : doc.kind.startsWith('ovdb_'))) throw new Error('kind domain mismatch');
   if (doc.id !== stableId(doc.domain, doc.kind, doc.native_id)) throw new Error('unstable document id');
   if (!doc.source_path || doc.source_path.startsWith('/') || doc.source_path.split('/').includes('..') || /[\x00-\x1f]/.test(doc.source_path)) throw new Error('unsafe source path');
   const url = new URL(doc.canonical_url);
   const route = routes[doc.domain];
-  const matchesRoute = doc.domain === 'meaninggraph' ? /^\/graphs\/[^/]+\/concepts\/[^/]+\/?$/.test(url.pathname) || meaninggraphRegistryPath.test(url.pathname) && isWrittenAsParsed(doc.canonical_url, url)
+  // Native catalog MODEL_ID and source SHA routes; memberFragment is SHA-256.
+  const nativeModel = combined && doc.domain === 'modelspec' && url.hostname === 'meaninggraph.io';
+  const nativeVersion = url.pathname.match(/\/versions\/([a-f0-9]{40})\/$/)?.[1];
+  const nativeRoute = /^\/registry\/models\/[a-z0-9]+(?:-[a-z0-9]+)*\/(?:versions\/[a-f0-9]{40}\/)?$/.test(url.pathname) && doc.canonical_url === `${url.origin}${url.pathname}${url.hash}` && (!nativeVersion || nativeVersion === doc.source_commit) && (!url.hash || /^#member-[a-f0-9]{64}$/.test(url.hash)) && (doc.kind === 'model' || /\/versions\/[a-f0-9]{40}\/$/.test(url.pathname) && !!url.hash);
+  const matchesRoute = nativeModel ? nativeRoute : doc.domain === 'meaninggraph' ? /^\/graphs\/[^/]+\/concepts\/[^/]+\/?$/.test(url.pathname) || meaninggraphRegistryPath.test(url.pathname) && isWrittenAsParsed(doc.canonical_url, url)
     : doc.domain === 'modelspec' ? /^\/registry\/models\/[^/]+\/?$/.test(url.pathname)
       : /^\/ovdb\/[^/]+(?:\/[^/]*)*$/.test(url.pathname) || /^\/databases\/[^/]+\/?$/.test(url.pathname) || /^\/servers\/[a-f0-9]{64}\/?$/.test(url.pathname);
-  if (!route || url.protocol !== 'https:' || url.username || url.password || url.port || url.search || !route.hosts.includes(url.hostname) || !matchesRoute || url.hash && !/^#[A-Za-z0-9._:-]+$/.test(url.hash)) throw new Error('unsafe canonical URL');
+  if (!route || url.protocol !== 'https:' || url.username || url.password || url.port || url.search || !(nativeModel || route.hosts.includes(url.hostname)) || !matchesRoute || url.hash && !/^#[A-Za-z0-9._:-]+$/.test(url.hash)) throw new Error('unsafe canonical URL');
   return doc;
 }
 

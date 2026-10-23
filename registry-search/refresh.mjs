@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalRoutes, mergeExports } from './merge.mjs';
 import { domains } from './schema.mjs';
+import { legacyProfile, combinedProfile, inputProfile, combinedManifestFormat, combinedExportFormat, combinedDomains, combinedURL, combinedRepository, directoryURL, exactDomains } from './profiles.mjs';
 import { publish, typesenseClient } from './publish.mjs';
 import { productionEngineOrigin } from './engine-policy.mjs';
 import { runUnderPublicationLock, assertPublicationLock } from './lock.mjs';
@@ -42,7 +43,9 @@ function smokeFor(domain, envelope) {
   return { domain, q: doc.qualified_name, id: doc.id };
 }
 
-export async function fetchCurrentCorpus(fetcher = fetch) {
+export async function fetchCurrentCorpus(fetcher = fetch, { profile = legacyProfile, emptyDomains = [] } = {}) {
+  inputProfile(profile);
+  if (profile === combinedProfile) return fetchCombinedCorpus(fetcher, emptyDomains);
   const sources = [];
   const exports = [];
   const revisions = new Map();
@@ -72,14 +75,47 @@ export async function fetchCurrentCorpus(fetcher = fetch) {
   return { manifest, exports };
 }
 
+async function fetchCombinedCorpus(fetcher, emptyDomains) {
+  if (!Array.isArray(emptyDomains) || new Set(emptyDomains).size !== emptyDomains.length || emptyDomains.some(domain => !domains.includes(domain))) throw new Error('invalid approved empty domains');
+  const sources = [], exports = [], revisions = new Map();
+  for (const [native, url, repository] of [[true, combinedURL, combinedRepository], [false, directoryURL, repositories.ovdb]]) {
+    let raw;
+    try {
+      const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(30_000), headers: { accept: 'application/json' } });
+      if (!response.ok || response.redirected || response.url !== url) throw new Error('invalid fetch');
+      raw = await boundedExport(response);
+    } catch { throw new Error(`public export fetch failed for ${native ? 'combined' : 'ovdb'}`); }
+    let envelope;
+    try { envelope = JSON.parse(raw.toString('utf8')); } catch { throw new Error('invalid public export'); }
+    const ownRevision = envelope?.source_revisions?.[repository];
+    if (envelope?.format !== (native ? combinedExportFormat : 'registry-search-export/v1') || envelope.fixture !== false || !Array.isArray(envelope.documents) || !envelope.source_revisions || typeof envelope.source_revisions !== 'object' || Array.isArray(envelope.source_revisions) || typeof ownRevision !== 'string' || !sha.test(ownRevision) || (native ? !exactDomains(envelope.domains) : envelope.domain !== 'ovdb')) throw new Error('invalid public export');
+    for (const [repo, revision] of Object.entries(envelope.source_revisions)) {
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) || typeof revision !== 'string' || !sha.test(revision) || revisions.has(repo) && revisions.get(repo) !== revision) throw new Error('conflicting export source pins');
+      revisions.set(repo, revision);
+    }
+    sources.push({ ...(native ? { domains: [...combinedDomains], catalog_sha256: envelope.producer?.catalog_sha256 } : { domain: 'ovdb' }), repository, revision: ownRevision, sha256: createHash('sha256').update(raw).digest('hex'), url });
+    exports.push(envelope);
+  }
+  if (exports.reduce((total, envelope) => total + envelope.documents.length, 0) > maxPilotDocuments) throw new Error('pilot document capacity exceeded');
+  const all = { documents: exports.flatMap(envelope => envelope.documents) };
+  const empty_domains = domains.filter(domain => !all.documents.some(doc => doc?.domain === domain));
+  if (JSON.stringify([...empty_domains].sort()) !== JSON.stringify([...emptyDomains].sort())) throw new Error('unapproved empty domains');
+  const manifest = { format: combinedManifestFormat, sequence: 1, sources, approved_revisions: Object.fromEntries([...revisions].filter(([repo]) => !sources.some(source => source.repository === repo)).sort()), empty_domains, smoke_queries: [] };
+  // Validate envelopes, pins, routes and empty-family claims before deriving queries.
+  // An entirely empty automatic refresh has no implicit allow_empty approval.
+  mergeExports(manifest, exports);
+  manifest.smoke_queries = domains.filter(domain => !empty_domains.includes(domain)).map(domain => smokeFor(domain, all));
+  return { manifest, exports };
+}
+
 async function readJSON(path) {
   try { return JSON.parse(await readFile(path, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-export async function refresh({ stateDir, api, fetcher = fetch }) {
+export async function refresh({ stateDir, api, fetcher = fetch, profile = legacyProfile, emptyDomains = [] }) {
   const state = await readJSON(join(stateDir, 'publication.json'));
-  const { manifest, exports } = await fetchCurrentCorpus(fetcher);
+  const { manifest, exports } = await fetchCurrentCorpus(fetcher, { profile, emptyDomains });
   const merged = mergeExports(manifest, exports);
   manifest.sequence = state?.generation === merged.generation ? state.sequence : (state?.sequence || 0) + 1;
   const result = await publish(manifest, exports, { api, stateDir, smokeQueries: manifest.smoke_queries });
@@ -107,7 +143,9 @@ async function main() {
   if (!adminKey) throw new Error('missing engine key');
   // Publication stays on the VM loopback API. The public HTTPS origin is only for search.
   if (process.env.REGISTRY_TYPESENSE_DEPLOYMENT !== 'vm-pilot') throw new Error('scheduled refresh requires VM pilot');
-  const result = await refresh({ stateDir, api: typesenseClient('http://127.0.0.1:8108/', adminKey, fetch, { allowLocalHTTP: true }) });
+  const profile = inputProfile(process.env.REGISTRY_SEARCH_INPUT_PROFILE);
+  const emptyDomains = profile === combinedProfile ? JSON.parse(process.env.REGISTRY_SEARCH_EMPTY_DOMAINS || '[]') : [];
+  const result = await refresh({ stateDir, profile, emptyDomains, api: typesenseClient('http://127.0.0.1:8108/', adminKey, fetch, { allowLocalHTTP: true }) });
   process.stdout.write(JSON.stringify({ generation: result.generation, count: result.count, unchanged: !!result.unchanged }) + '\n');
 }
 

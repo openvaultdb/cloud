@@ -100,3 +100,64 @@ These steps were **not executed for this change, and this repository holds no re
 Every field document's `parent_id`, which holds its parent document's id (a hash that includes the kind), must be regenerated with the parent's new id; `parent_label` holds the parent's title for display, is not an id and does not change with the kind, and a record type must be exported under one kind only. The merger does not check that fields follow their parent: an export that renames the parents but leaves the fields on the old ids is published without complaint, and every record type then loses `field_count` and `field_preview`. After a switch, the operator's check is that a record-type hit in the search still shows its field preview, and that `journalctl -u registry-search-refresh.service` shows a new generation.
 
 Rollback of either part to the previous version is derived from the code, not run: it is safe while the active generation holds no `model_record` document.
+
+## Inactive combined catalog input profile
+
+The default refresh remains the three fixed v1 feeds. The additive profile is
+selected only by `REGISTRY_SEARCH_INPUT_PROFILE=combined-v2` (library callers pass
+`profile: 'combined-v2'` to `fetchCurrentCorpus` or `refresh`). Unknown profiles
+fail. No service unit or deployment configuration enables this profile.
+
+Its manifest must declare `format: registry-search-manifest/v2`, exactly two
+sources, and `empty_domains` as the explicitly approved empty family set:
+
+- The combined source has `domains: ["meaninggraph", "modelspec"]`, repository
+  `meaninggraph/registry`, full `revision`, `catalog_sha256`, exact export `sha256`,
+  and URL `https://meaninggraph.io/registry-search-combined.json`.
+- Directory retains the v1 source shape (`domain: "ovdb"`) and fixed
+  `https://directory.openvaultdb.com/registry-search.json` URL.
+
+A combined export declares `format: registry-search-export/v2`, the exact domains
+array above, `fixture`, `source_revisions`, `documents`, and
+`producer: {repository, revision, catalog_sha256}`. Producer values and its source
+revision must match the manifest. All source pins must agree across both feeds
+and the approved revisions; neither acquisition nor merge repairs conflicts.
+Export checksums bind the exact bytes to the configured producer claim; they are
+not signatures. Local fixture files remain separately gated and exclude URLs.
+
+Domains, document IDs, kind spellings and the per-domain gateway stay unchanged.
+The actual ModelSpec exporter uses `model_entity`; v2 preserves those identities,
+while accepting the existing `model_record` alias. Native model documents retain
+the `modelspec` technical domain and may link to MeaningGraph's exact-version
+`/registry/models/<registry-id>/versions/<source-commit>/` routes with
+`#member-<sha256>` fragments. The route commit must equal document provenance.
+Only `model` navigation may use the native model landing route. Host/path pairs
+are checked together, without encoded paths or URL normalization. Existing
+canonical destinations remain accepted.
+
+V2 additionally checks kind/domain correspondence. A supplied model field parent
+must be an emitted model record/entity/collection in the same domain, source
+repository and commit. A semantic field parent must be an emitted semantic entity
+in the same domain; its source pin is independently approved, so exact current
+cross-repository semantic parents remain valid. The trusted producer establishes
+the semantic `of` relation from its catalog; Cloud checks emitted references, not
+the underlying relation independently. Independent semantic fields may omit a
+parent. Existing v1 parent acceptance and preview aggregation remain unchanged.
+
+For v2 refresh, `REGISTRY_SEARCH_EMPTY_DOMAINS` is an explicit JSON array (default
+`[]`; library option `emptyDomains`). Its set must exactly match observed empty
+domains. Newly empty families therefore fail until explicitly reviewed; the
+refresh never approves them automatically. Populated domains require real smoke
+targets, and empty domains must have none. Wholly empty publication additionally
+requires the existing `allow_empty` approval in an explicit manifest; automatic
+refresh supplies no such approval. Sequence, advisory lock, durable journal,
+import/count checks, alias switching and prior-generation retention are retained.
+An unchanged byte-derived generation reuses its successful publication evidence;
+it validates supplied smoke targets but does not run a fresh engine health probe.
+
+Release order: publish compatible consumer readers and all affected browser URL
+guards before separately authorizing profile activation. Current browser guards
+may refuse modelspec-domain MeaningGraph URLs. Producer acceptance also requires
+actual native-catalog export, legacy-ID comparison and exact native-build link
+resolution; the synthetic consumer tests do not establish those producer facts.
+No deployment, service operation or profile switch is performed by this change.

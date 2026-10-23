@@ -3,6 +3,7 @@ import { readFile, open, rename, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { mergeExports, validateManifest } from './merge.mjs';
 import { collectionSchema, domains } from './schema.mjs';
+import { isCombined } from './profiles.mjs';
 import { rankingForDomain, searchFieldsForQuery } from './provenance.mjs';
 
 const MAX_EXPORT = 256 * 1024 * 1024;
@@ -97,8 +98,12 @@ async function pruneInactive(api, active, previous) {
 
 export async function publish(manifest, exports, { api, stateDir, smokeQueries, allowFixtures = false }) {
   validateManifest(manifest, { allowFixtures });
-  if (!Array.isArray(smokeQueries) || domains.some(domain => !smokeQueries.some(query => query?.domain === domain))) throw new Error('one smoke query per domain required');
+  const combined = isCombined(manifest);
+  const requiredDomains = combined ? domains.filter(domain => !manifest.empty_domains.includes(domain)) : domains;
+  if (!Array.isArray(smokeQueries) || requiredDomains.some(domain => !smokeQueries.some(query => query?.domain === domain))) throw new Error('one smoke query per domain required');
   const { documents, hash, generation } = mergeExports(manifest, exports);
+  // v2 smoke evidence is validated even for an unchanged generation, before engine mutation.
+  if (combined && smokeQueries.some(query => !domains.includes(query?.domain) || manifest.empty_domains.includes(query.domain) || !documents.some(doc => doc.id === query.id && doc.domain === query.domain) || typeof query.q !== 'string' || !query.q)) throw new Error('invalid smoke query');
   const collection = `registry_metadata_${generation}`;
   const statePath = join(stateDir, 'publication.json');
   await mkdir(stateDir, { recursive: true });
