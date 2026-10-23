@@ -89,6 +89,7 @@ func TestOriginSecretRejectsWeakConfiguration(t *testing.T) {
 		{originSecretEnv: strings.Repeat("a", 40), originSecretHeaderEnv: "X-Bad Header"},
 		{originSecretHeaderEnv: "Host"},
 		{originSecretEnv: strings.Repeat("a", 40), originSecretHeaderEnv: "X-OVDB-ECB-Proxy-Secret"},
+		{originSecretEnv: strings.Repeat("a", 40), originSecretHeaderEnv: demoControlHeader},
 	} {
 		if _, err := withOriginSecret(inner, originSecretEnvMap(env)); err == nil {
 			t.Errorf("configuration %v was accepted", env)

@@ -93,6 +93,7 @@ type gateway struct {
 	metadata    map[string]json.RawMessage
 	query       map[string]bool
 	serverIndex []byte
+	listus      *demoRelay
 }
 
 // Production composition requires an origin credential. The only route
@@ -172,6 +173,7 @@ func newGateway(inner http.Handler, getenv func(string) string, transport http.R
 			gatewayError(w, http.StatusServiceUnavailable, "Authorization service unavailable")
 		}}
 	}
+	g.listus = newDemoRelay(getenv)
 	public, err := withOriginSecret(g, getenv)
 	if err != nil {
 		return nil, err
@@ -277,7 +279,10 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
 	host := r.Host
-	if host != cloudHost && host != demoHost {
+	// Session origins are not the two catalog hosts. Admit them only far enough
+	// for the disabled relay to fail closed. The origin-secret wrapper has
+	// already run. Every other unknown host is still rejected before path parsing.
+	if !potentialDemoOriginHost(host) && host != cloudHost && host != demoHost {
 		gatewayError(w, 421, "Unknown public host")
 		return
 	}
@@ -289,6 +294,13 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.Clone(r.Context())
 	r.URL.RawPath = canonical
 	r.URL.Path, _ = url.PathUnescape(canonical)
+	if g.listus != nil && g.listus.handle(w, r, canonical) {
+		return
+	}
+	if host != cloudHost && host != demoHost {
+		gatewayError(w, 421, "Unknown public host")
+		return
+	}
 	if strings.HasPrefix(canonical, "/ecb") || strings.HasPrefix(canonical, "/iana/") {
 		if host == demoHost {
 			http.NotFound(w, r)
@@ -353,6 +365,10 @@ func gatewayReadBody(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func (g *gateway) auth(w http.ResponseWriter, r *http.Request, p string) {
+	if demoAPIPath(p) {
+		g.serveDemoAPI(w, r, p)
+		return
+	}
 	routes := map[string][2]string{"/oauth/device/code": {"POST", "/v0/ovdb/device_auth/code"}, "/oauth/token": {"POST", "/v0/ovdb/device_auth/token"}, "/oauth/userinfo": {"GET", "/v0/ovdb/device_auth/userinfo"}, "/oauth/revoke": {"POST", "/v0/ovdb/device_auth/revoke"}, "/api/device-authorization": {"GET", "/v0/ovdb/device_auth/preview"}, "/api/device-authorization/decision": {"POST", "/v0/ovdb/device_auth/decision"}, "/api/devices": {"GET", "/v0/ovdb/device_auth/devices"}, "/api/devices/revoke": {"POST", "/v0/ovdb/device_auth/devices/revoke"}, "/api/databases": {"GET", "/v0/ovdb/cloud/databases"}}
 	route, ok := routes[p]
 	query := r.URL.Query()

@@ -69,7 +69,7 @@ func withOriginSecret(handler http.Handler, getenv func(string) string) (http.Ha
 // reservedOriginSecretHeader reports a header another route authenticates with;
 // stripping it here would break that route.
 func reservedOriginSecretHeader(name string) bool {
-	for _, reserved := range []string{ecbProxySecretHeader, ianaProxySecretHeader, ecbPublicSecretHeader, ecbPublicAdmissionHeader, ecbPublicProofHeader, "X-OVDB-ECB-Operator-Token", "X-OVDB-IANA-Operator-Token"} {
+	for _, reserved := range []string{ecbProxySecretHeader, ianaProxySecretHeader, ecbPublicSecretHeader, ecbPublicAdmissionHeader, ecbPublicProofHeader, "X-OVDB-ECB-Operator-Token", "X-OVDB-IANA-Operator-Token", demoControlHeader} {
 		if http.CanonicalHeaderKey(name) == http.CanonicalHeaderKey(reserved) {
 			return true
 		}
