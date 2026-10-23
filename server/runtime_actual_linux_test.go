@@ -22,9 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dal-go/dalgo/dal"
-	"github.com/dal-go/dalgo/dbschema"
-	"github.com/dal-go/dalgo2sqlite"
 	dalrecord "github.com/dal-go/record"
 	"github.com/openvaultdb/cloud/server/internal/publisherselection"
 	"github.com/openvaultdb/openvaultdb-go/pkg/manifest"
@@ -924,7 +921,6 @@ func actualSelectedReads(t *testing.T, handler http.Handler, providers []runtime
 			}
 			profile := actualRequest(handler, http.MethodGet, "/ovdb/dbs/"+provider.ID+"/collections/"+url.PathEscape(table), "", nil, context.Background())
 			if profile.Code != 200 {
-				actualDiagnoseDescribe(t, filepath.Join(protectedFixtureRoot, provider.ID+".sqlite"))
 				t.Fatalf("selected schema %s: %d", table, profile.Code)
 			}
 			record := actualRequest(handler, http.MethodGet, "/v1/databases/"+provider.ID+"/records/"+url.PathEscape(table)+"/"+url.PathEscape(key), "", nil, context.Background())
@@ -1239,27 +1235,4 @@ func TestActualCapacity(t *testing.T) {
 	}
 	receipt["fd_limit_note"] = "allows up to32 persistent connections across full eight-provider exercised pools; no private pool counter API"
 	receipt["seconds"] = time.Since(started).Seconds()
-}
-
-// TEMPORARY DIAGNOSTIC: names the schema-reader error behind a 500.
-func actualDiagnoseDescribe(t *testing.T, path string) {
-	db, err := dalgo2sqlite.NewDatabase("file:" + path + "?mode=ro&immutable=1")
-	if err != nil {
-		t.Logf("diag open: %v", err)
-		return
-	}
-	reader, ok := dal.As[dbschema.SchemaReader](db)
-	if !ok {
-		t.Log("diag: no schema reader")
-		return
-	}
-	raw, _ := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
-	rows, _ := raw.Query("SELECT name, sql FROM sqlite_master WHERE type='table'")
-	for rows.Next() {
-		var name, ddl string
-		_ = rows.Scan(&name, &ddl)
-		ref := dal.NewRootCollectionRef(name, "")
-		_, derr := reader.DescribeCollection(context.Background(), &ref)
-		t.Logf("diag %s err=%v ddl=%.300q", name, derr, ddl)
-	}
 }
