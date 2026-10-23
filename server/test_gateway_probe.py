@@ -26,7 +26,7 @@ class ProbeTest(unittest.TestCase):
             return {"host":host,"status":200}
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), patch("sys.argv",["probe","--phase","mapped","--receipt","receipt.json"]), patch.dict(probe.os.environ,{"OVDB_GOOGLE_ORIGIN_TARGET":"google-target.example"}), patch.object(probe.socket,"getaddrinfo",return_value=[(None,None,None,None,("192.0.2.9",443))]) as resolve, patch.object(probe,"direct",side_effect=direct):
             with self.assertRaisesRegex(RuntimeError,"mapped origin bypass"): probe.main()
-            resolve.assert_called_once_with("google-target.example",443,type=probe.socket.SOCK_STREAM)
+            resolve.assert_called_once_with("google-target.example",443,family=probe.socket.AF_INET,type=probe.socket.SOCK_STREAM)
             self.assertFalse(Path("receipt.json").exists())
 
 class DirectCredentialVariantTest(unittest.TestCase):

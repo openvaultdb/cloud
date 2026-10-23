@@ -44,8 +44,10 @@ def main():
     if args.phase == "mapped":
         # Resolve the returned GOOGLE mapping target, never public host DNS (which
         # would merely re-test Cloudflare). This is non-secret deployment config.
+        # IPv4 only: GitHub-hosted runners have no IPv6 route, and an AAAA record
+        # can sort first.
         target = os.environ["OVDB_GOOGLE_ORIGIN_TARGET"]
-        addresses = sorted({item[4][0] for item in socket.getaddrinfo(target, 443, type=socket.SOCK_STREAM)})
+        addresses = sorted({item[4][0] for item in socket.getaddrinfo(target, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)})
         if not addresses:
             raise RuntimeError("no Google origin address")
         for host in ("cloud.openvaultdb.com", "ovdb.demodb.dev"):
