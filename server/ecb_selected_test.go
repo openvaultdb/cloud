@@ -188,6 +188,9 @@ func TestConfiguredHandlerECBRequiresExactOperatorAdmissionBeforeMount(t *testin
 		"wrong executor": func(t *testing.T, path string) {
 			changeECBAdmission(t, path, `"executorId":"openvaultdb-cloud"`, `"executorId":"other"`)
 		},
+		"dtql path": func(t *testing.T, path string) {
+			changeECBAdmission(t, path, `"path":"`+ecbQueryPath+`"`, `"path":"/v1/databases/ecb/dtql"`)
+		},
 		"duplicate member": func(t *testing.T, path string) {
 			changeECBAdmission(t, path, `"publicAccess":false`, `"publicAccess":false,"publicAccess":false`)
 		},

@@ -76,6 +76,13 @@ func TestSelectedRuntimeMixedProfilesAndEveryKey(t *testing.T) {
 		if profile.Code != 200 {
 			t.Fatal(profile.Body.String())
 		}
+		// TugQL cutover: the library no longer serves or advertises the old route.
+		if strings.Contains(profile.Body.String(), "dtql") {
+			t.Fatalf("%s metadata still names dtql: %s", provider.ID, profile.Body.String())
+		}
+		if legacy := selectedRequest(handler, http.MethodPost, "/v1/databases/"+provider.ID+"/dtql", "from: {name: x}\n"); legacy.Code != http.StatusNotFound {
+			t.Fatalf("%s /dtql answered %d", provider.ID, legacy.Code)
+		}
 		if provider.ID == "candidate" && strings.Contains(profile.Body.String(), `"query":true`) {
 			t.Fatal("candidate advertises query")
 		}
