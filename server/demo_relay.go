@@ -476,7 +476,7 @@ func (d *demoRelay) proxy(w http.ResponseWriter, r *http.Request, session stored
 		d.fail(w, r, http.StatusServiceUnavailable, "origin_unavailable")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		d.fail(w, r, http.StatusBadGateway, "origin_rejected")
 		return
@@ -656,7 +656,7 @@ func (d *demoRelay) loadJWKS(r *http.Request, refresh bool) (demoJWKSet, error) 
 	if err != nil {
 		return demoJWKSet{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || resp.ContentLength > demoMaxJWKS {
 		return demoJWKSet{}, errors.New("keys unavailable")
 	}
