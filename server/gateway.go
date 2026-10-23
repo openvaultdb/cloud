@@ -95,8 +95,9 @@ type gateway struct {
 	serverIndex []byte
 }
 
-// Production composition requires an origin credential. Local source-free
-// process probes and Cloud Run TCP probes do not expose an HTTP bypass.
+// Production composition requires an origin credential. The only route
+// admitted without it is the Cloud Run startup probe (withStartupProbeRoute),
+// which reveals only whether the instance is ready.
 func newGateway(inner http.Handler, getenv func(string) string, transport http.RoundTripper) (http.Handler, error) {
 	if getenv(originSecretEnv) == "" {
 		return nil, errors.New("OVDB_ORIGIN_SECRET is required")
@@ -171,7 +172,11 @@ func newGateway(inner http.Handler, getenv func(string) string, transport http.R
 			gatewayError(w, http.StatusServiceUnavailable, "Authorization service unavailable")
 		}}
 	}
-	return withOriginSecret(g, getenv)
+	public, err := withOriginSecret(g, getenv)
+	if err != nil {
+		return nil, err
+	}
+	return withStartupProbeRoute(public, inner), nil
 }
 
 func gatewayError(w http.ResponseWriter, status int, message string) {

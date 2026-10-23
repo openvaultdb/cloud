@@ -40,18 +40,48 @@ def identity(name):
     return {"revision": name, "image": digest, "sourceSha": sha}
 
 
-def check_probes(container, require_startup):
+# The startup probe waits for the native PostgreSQL DemoDB mounts. The Go
+# gateway admits exactly this path without the edge credential and reports
+# ready once the six editions have settled, or after OVDB_STARTUP_PROBE_BUDGET
+# (default 30 s, at most 50 s; see server/startup_probe.go for why it is short).
+# The configured window is 5 s x 12 = 60 s: the 50 s maximum budget plus Go
+# start-up and one probe period fit inside it. Cloud Run allows up to 600 s;
+# the window is kept short on purpose, because requests held during startup
+# fail with 429 long before that.
+STARTUP_PATH = "/healthz/startup"
+STARTUP_PROBE_SPEC = {"httpGet": {"path": STARTUP_PATH, "port": 8080}, "periodSeconds": 5, "timeoutSeconds": 1, "failureThreshold": 12}
+STARTUP_PROBE = "httpGet.path={},httpGet.port={},periodSeconds={},timeoutSeconds={},failureThreshold={}".format(
+    STARTUP_PATH, 8080, STARTUP_PROBE_SPEC["periodSeconds"], STARTUP_PROBE_SPEC["timeoutSeconds"], STARTUP_PROBE_SPEC["failureThreshold"])
+# Cloud Run's defaults for probe fields a revision description may omit.
+PROBE_DEFAULTS = {"periodSeconds": 10, "timeoutSeconds": 1, "failureThreshold": 3}
+
+
+def startup_probe_ok(probe, candidate):
+    if "grpc" in probe:
+        return False
+    if "httpGet" in probe:
+        # Cloud Run may omit the port when it is the single serving port, which
+        # the caller pins to 8080.
+        get = probe["httpGet"]
+        if "tcpSocket" in probe or get.get("path") != STARTUP_PATH or get.get("port", 8080) != 8080 or get.get("httpHeaders"):
+            return False
+        return all(probe.get(key, PROBE_DEFAULTS[key]) == STARTUP_PROBE_SPEC[key] for key in PROBE_DEFAULTS)
+    # Only the accepted secure rollback revision may predate the HTTP probe and
+    # carry the TCP one; a new candidate must have the pinned HTTP probe.
+    return not candidate and probe.get("tcpSocket") == {"port": 8080}
+
+
+def check_probes(container, require_startup, candidate=False):
     # Liveness/readiness HTTP or gRPC probes cannot satisfy the mandatory edge
     # credential. Do not silently remove an operator's health policy.
     if container.get("livenessProbe") or container.get("readinessProbe"):
         raise RuntimeError("unsupported inherited liveness/readiness probe; review before deployment")
     if require_startup:
-        probe = container.get("startupProbe", {})
-        if probe.get("tcpSocket") != {"port": 8080} or "httpGet" in probe or "grpc" in probe:
-            raise RuntimeError("revision requires TCP startup on serving port8080")
+        if not startup_probe_ok(container.get("startupProbe", {}), candidate):
+            raise RuntimeError("revision requires the pinned HTTP or legacy TCP startup probe on serving port 8080")
         ports = container.get("ports", [])
         if len(ports) != 1 or ports[0].get("containerPort") != 8080 or ports[0].get("name", "http1") != "http1":
-            raise RuntimeError("revision serving port differs from pinned TCP probe")
+            raise RuntimeError("revision serving port differs from pinned startup probe")
 
 
 def single_container(spec):
@@ -79,10 +109,10 @@ def check_service_origin(service, retained):
         raise RuntimeError("service default origin differs from retained accepted identity")
 
 
-def secure_revision(name, origin_binding):
+def secure_revision(name, origin_binding, candidate=False):
     revision = cloud("run", "revisions", "describe", name)
     container = single_container(revision["spec"])
-    check_probes(container, True)
+    check_probes(container, True, candidate)
     env = {item["name"]: item for item in container.get("env", [])}
     wanted_name, wanted_version = origin_binding.split(":")
     actual = env.get("OVDB_ORIGIN_SECRET", {}).get("valueFrom", {}).get("secretKeyRef", {})
@@ -149,14 +179,14 @@ def main():
     require_current_main(sha)
     try:
         save("deploy-started")
-        command = ["run", "deploy", service, "--image="+image, "--labels=source-sha="+sha, "--no-traffic", "--port=8080", "--startup-probe=tcpSocket.port=8080,periodSeconds=10,timeoutSeconds=1,failureThreshold=24", "--allow-unauthenticated", "--ingress=all", "--service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com", "--min-instances=0", "--max-instances=2", "--memory=512Mi", "--concurrency=2", "--cpu=1", "--timeout=120", "--update-secrets=OVDB_ORIGIN_SECRET="+origin_binding+",OVDB_DEVICE_AUTH_PROXY_SECRET="+proxy_binding, "--update-env-vars=SNEAT_API_ORIGIN="+sneat+",OVDB_ORIGIN_SECRET_HEADER=X-OVDB-Origin-Secret,OVDB_ECB_ENABLED=false,OVDB_IANA_ENABLED=false", "--quiet"]
+        command = ["run", "deploy", service, "--image="+image, "--labels=source-sha="+sha, "--no-traffic", "--port=8080", "--startup-probe="+STARTUP_PROBE, "--allow-unauthenticated", "--ingress=all", "--service-account=chinook-runtime@openvaultdb.iam.gserviceaccount.com", "--min-instances=0", "--max-instances=2", "--memory=512Mi", "--concurrency=2", "--cpu=1", "--timeout=120", "--update-secrets=OVDB_ORIGIN_SECRET="+origin_binding+",OVDB_DEVICE_AUTH_PROXY_SECRET="+proxy_binding, "--update-env-vars=SNEAT_API_ORIGIN="+sneat+",OVDB_ORIGIN_SECRET_HEADER=X-OVDB-Origin-Secret,OVDB_ECB_ENABLED=false,OVDB_IANA_ENABLED=false", "--quiet"]
         if args.phase == "mapped":
             command.append("--no-default-url")
         created = cloud(*command)
         name = created.get("status", {}).get("latestCreatedRevisionName", "")
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", name):
             raise RuntimeError("missing created revision")
-        candidate = secure_revision(name, origin_binding)
+        candidate = secure_revision(name, origin_binding, candidate=True)
         if candidate["image"] != image or candidate["sourceSha"] != sha:
             raise RuntimeError("created image/source differs from captured candidate")
         require_current_main(sha)

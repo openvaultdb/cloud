@@ -423,7 +423,7 @@ class Bootstrap:
         revision_annotations = template["metadata"].get("annotations", {})
         if revision_annotations.get("autoscaling.knative.dev/maxScale") != "2" and value["metadata"].get("annotations", {}).get("run.googleapis.com/maxScale") != "2":
             raise RuntimeError("bootstrap requires existing reviewed max-instance bound")
-        container.update(image=image, ports=[{"containerPort":8080}], startupProbe={"tcpSocket":{"port":8080},"periodSeconds":10,"timeoutSeconds":1,"failureThreshold":24})
+        container.update(image=image, ports=[{"containerPort":8080}], startupProbe=copy.deepcopy(deploy.STARTUP_PROBE_SPEC))
         env = {item["name"]: item for item in container.get("env", [])}
         for key, binding in (("OVDB_ORIGIN_SECRET",origin),("OVDB_DEVICE_AUTH_PROXY_SECRET",proxy)):
             name, version = binding.split(":")
