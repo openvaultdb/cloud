@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dal-go/dalgo/dtql"
+	"github.com/dal-go/dalgo/tugql"
 	"github.com/openvaultdb/openvaultdb-go/pkg/joinexec"
 )
 
@@ -90,7 +90,7 @@ func TestNativePostgresCapacityQueriesStayWithinResultLimit(t *testing.T) {
 				t.Fatalf("duplicate workload %q", workload.name)
 			}
 			seen[workload.name] = true
-			query, err := dtql.Deserialize([]byte(workload.query))
+			query, err := tugql.Deserialize([]byte(workload.query))
 			if err != nil {
 				t.Fatalf("generated query does not parse: %v", err)
 			}
