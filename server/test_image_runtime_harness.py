@@ -12,15 +12,16 @@ import prepare_providers
 import test_image_runtime
 
 
-def exported_fixture():
+def exported_fixture(*, inaccessible_trust_directory=None):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
         for name, mode, content in [("srv", 0o755, None), ("srv/fixture", 0o555, None),
                                     ("tmp", 0o1777, None), ("srv/fixture/inventory.json", 0o444, b"{}"),
                                     ("srv/fixture/candidate.sqlite", 0o444, b"SQLite format 3\0" + b"\0\0\1\1"),
+                                    ("etc", 0o755, None), ("etc/ssl", 0o755, None), ("etc/ssl/certs", 0o755, None),
                                     ("etc/ssl/certs/ca-certificates.crt", 0o444, b"test-certificate" * 100)]:
             entry = tarfile.TarInfo(name)
-            entry.mode = mode
+            entry.mode = 0o444 if name == inaccessible_trust_directory else mode
             entry.type = tarfile.DIRTYPE if content is None else tarfile.REGTYPE
             entry.size = 0 if content is None else len(content)
             archive.addfile(entry, None if content is None else io.BytesIO(content))
@@ -30,10 +31,15 @@ def exported_fixture():
 class ImageEvidenceHarnessTest(unittest.TestCase):
     def test_final_filesystem_policy_and_hostile_entries(self):
         data = exported_fixture()
-        self.assertEqual(5, len(test_image_runtime.validate_export(data)))
+        self.assertEqual(8, len(test_image_runtime.validate_export(data)))
         for mutation in ("ancestor", "writable", "owner", "symlink", "hardlink", "fifo"):
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                 test_image_runtime.validate_export(test_image_runtime.hostile_export(data, mutation))
+
+    def test_ca_bundle_requires_searchable_parent_directories(self):
+        for directory in ("etc", "etc/ssl", "etc/ssl/certs"):
+            with self.subTest(directory=directory), self.assertRaisesRegex(RuntimeError, "inaccessible CA trust directory"):
+                test_image_runtime.validate_export(exported_fixture(inaccessible_trust_directory=directory))
 
     def test_hostile_bytes_are_concrete(self):
         for mutation in ("truncated", "wal-header", "wal-sidecar"):

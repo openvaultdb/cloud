@@ -37,9 +37,20 @@ def validate_export(data):
     """Inspect the final merged filesystem, not historical hidden layer entries."""
     entries = []
     trusted_roots = 0
+    trust_directories = {"etc", "etc/ssl", "etc/ssl/certs"}
+    observed_trust_directories = set()
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         for member in archive:
             name = member.name.lstrip("./").rstrip("/")
+            if name in trust_directories:
+                if (name in observed_trust_directories or not member.isdir()
+                        or member.uid != 0 or member.gid != 0
+                        or not (member.mode & 0o001) or member.mode & 0o022):
+                    raise RuntimeError("invalid or inaccessible CA trust directory: /" + name)
+                observed_trust_directories.add(name)
+                entries.append({"path": "/" + name, "mode": oct(member.mode),
+                                "uid": member.uid, "gid": member.gid,
+                                "type": "directory", "bytes": member.size})
             if name == "etc/ssl/certs/ca-certificates.crt":
                 if member.uid != 0 or member.gid != 0 or not member.isfile() or member.mode != 0o444 or member.size < 1000:
                     raise RuntimeError("final image CA bundle is not a usable root-owned 0444 file")
@@ -66,6 +77,8 @@ def validate_export(data):
         raise RuntimeError("final image has no fixed inventory")
     if trusted_roots != 1:
         raise RuntimeError("final image must contain exactly one system CA bundle")
+    if observed_trust_directories != trust_directories:
+        raise RuntimeError("final image is missing CA trust directories")
     return entries
 
 

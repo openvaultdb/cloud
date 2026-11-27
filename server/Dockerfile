@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1.2
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS trust
-FROM scratch
+FROM scratch AS trust-layout
+# BuildKit can use the copy mode for new parent directories. Create a
+# searchable path first, then set only the existing bundle to mode 0444.
+COPY --from=trust --chown=0:0 --chmod=0755 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=trust --chown=0:0 --chmod=0444 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+FROM scratch
+COPY --from=trust-layout --chown=0:0 /etc/ /etc/
 COPY --chown=0:0 --chmod=0555 ovdb-cloud /srv/ovdb-cloud
 # Preparation closes the native inGitDB tree to directories 0555 and files 0444;
 # Docker preserves those modes while copying the complete verified fixture tree.
