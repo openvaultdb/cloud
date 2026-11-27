@@ -710,6 +710,22 @@ func TestActualDemoPostgresCapacity(t *testing.T) {
 			t.Error("native PostgreSQL capacity handler cleanup failed")
 		}
 	}()
+	// The PostgreSQL mounts settle in the background; descriptors answer
+	// 503 until every mount is available.
+	pgHandler, ok := handler.(*demoPostgresHandler)
+	if !ok {
+		t.Fatalf("handler %T does not expose the PostgreSQL mounter", handler)
+	}
+	settleCtx, cancelSettle := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancelSettle()
+	if err := pgHandler.mounter.waitSettled(settleCtx); err != nil {
+		t.Fatal("native PostgreSQL mounts did not settle")
+	}
+	for _, status := range pgHandler.mounter.snapshot() {
+		if status.State != demoPostgresAvailable {
+			t.Fatalf("native PostgreSQL mount %s is %s", status.ID, status.State)
+		}
+	}
 	receipt["startup_seconds"] = time.Since(started).Seconds()
 	if len(providers) != 17 {
 		t.Fatalf("shipping image mounted %d providers, want ten SQLite, one native inGitDB, plus six PostgreSQL", len(providers))
